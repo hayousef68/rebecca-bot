@@ -10,11 +10,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/in
 
 نصب 
 
-git clone https://github.com/hayousef68/rebecca-bot.git /opt/rebecca-bot
-cd /opt/rebecca-bot
-python3 -m venv /opt/rebecca-bot/venv
-/opt/rebecca-bot/venv/bin/pip install --upgrade pip
-/opt/rebecca-bot/venv/bin/pip install httpx qrcode python-telegram-bot
+apt update && apt install -y python3-venv python3-full git && rm -rf /opt/rebecca-bot && git clone https://github.com/hayousef68/rebecca-bot.git /opt/rebecca-bot && cd /opt/rebecca-bot && python3 -m venv /opt/rebecca-bot/venv && /opt/rebecca-bot/venv/bin/pip install --upgrade pip && /opt/rebecca-bot/venv/bin/pip install httpx qrcode python-telegram-bot fastapi uvicorn && cp /opt/rebecca-bot/*.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable rebecca-bot rebecca-webapp && systemctl restart rebecca-bot rebecca-webapp && echo "✅ نصب و راه‌اندازی از گیت‌هاب با موفقیت انجام شد!"
 
 
 
