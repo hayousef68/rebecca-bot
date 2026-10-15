@@ -8,11 +8,11 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# مراحل گفتگو (Conversation States) فقط برای ساخت دستی و سریع
+# مراحل گفتگو (Conversation States)
 (SET_PANEL_URL, SET_SUB_URL, SET_PANEL_USER, SET_PANEL_PASS, 
  ASK_SEARCH_USER, EDIT_DATA, EDIT_DAYS_USER,
  MAN_USERNAME, MAN_START, MAN_COUNT, MAN_SERVICE,
- QUICK_BASE, QUICK_START, QUICK_SERVICE) = range(14)
+ QUICK_BASE, QUICK_START, QUICK_COUNT, QUICK_SERVICE) = range(15)
 
 def load_config() -> dict:
     default_cfg = {
@@ -221,11 +221,12 @@ async def get_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text(f"❌ خطا در اتصال:\n{e}", reply_markup=main_keyboard())
     return ConversationHandler.END
 
-# --- مدیریت تمپلت‌ها (طراحی مجدد برای جلوگیری از فریز شدن) ---
+# --- مدیریت تمپلت‌ها ---
 async def menu_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    context.user_data.pop("tmpl_state", None)
+    for key in ("tmpl_state", "new_t_name", "new_t_gb", "edit_field", "edit_t_name", "editing_tmpl"):
+        context.user_data.pop(key, None)
     cfg = load_config()
     templates = cfg.get("templates", {})
     active = cfg.get("active_template")
@@ -332,13 +333,13 @@ async def template_text_handler(update: Update, context: ContextTypes.DEFAULT_TY
             cfg["templates"][t_name] = {"gb": gb, "days": days, "mode": "on_hold"}
             cfg["active_template"] = t_name
             save_config(cfg)
-            context.user_data.clear()
+            for key in ("tmpl_state", "new_t_name", "new_t_gb", "edit_field", "edit_t_name", "editing_tmpl"):
+                context.user_data.pop(key, None)
             await update.message.reply_text(f"✅ تمپلت جدید **{t_name}** با موفقیت ساخته شد و فعال گردید!", reply_markup=main_keyboard())
         except ValueError:
             await update.message.reply_text("⚠️ لطفاً عدد صحیح وارد کنید:")
         return
 
-    # ویرایش فیلدها
     field = context.user_data.get("edit_field")
     t_name = context.user_data.get("edit_t_name")
 
@@ -363,7 +364,8 @@ async def template_text_handler(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
     save_config(cfg)
-    context.user_data.clear()
+    for key in ("tmpl_state", "new_t_name", "new_t_gb", "edit_field", "edit_t_name", "editing_tmpl"):
+        context.user_data.pop(key, None)
     await update.message.reply_text("✅ تمپلت با موفقیت ویرایش شد!", reply_markup=main_keyboard())
 
 # --- ساخت دستی و گروهی کاربر ---
@@ -409,7 +411,7 @@ async def manual_get_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data["man_count"] = int(update.message.text.strip())
     except ValueError:
-        await update.message.reply_text("⚠️ عدد صحیح بفرستید:")
+        await update.message.reply_text("⚠️ لطفاً عدد صحیح وارد کنید:")
         return MAN_COUNT
 
     srv_kb = await fetch_services_kb()
@@ -514,20 +516,22 @@ async def quick_get_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             context.user_data["quick_start"] = int(update.message.text.strip())
             await update.message.reply_text("📦 لطفاً **تعداد** کاربرانی که می‌خواهید ساخته شوند را بفرستید (مثلاً `5`):", reply_markup=cancel_kb())
-            return QUICK_START
+            return QUICK_COUNT
         except ValueError:
-            pass
-    
+            await update.message.reply_text("⚠️ لطفاً عدد صحیح وارد کنید:")
+            return QUICK_START
+
+async def quick_get_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        cnt = int(update.message.text.strip())
-        context.user_data["quick_count"] = cnt
-        srv_kb = await fetch_services_kb()
-        srv_kb.append([Btn("❌ انصراف", callback_data="back_main")])
-        await update.message.reply_text("📂 لطفاً **سرویس مورد نظر** برای ساخت را انتخاب کنید:", reply_markup=Markup(srv_kb))
-        return QUICK_SERVICE
-    except Exception:
-        await update.message.reply_text("⚠️ لطفاً عدد معتبر وارد کنید:")
-        return QUICK_START
+        context.user_data["quick_count"] = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("⚠️ لطفاً عدد صحیح وارد کنید:")
+        return QUICK_COUNT
+
+    srv_kb = await fetch_services_kb()
+    srv_kb.append([Btn("❌ انصراف", callback_data="back_main")])
+    await update.message.reply_text("📂 لطفاً **سرویس مورد نظر** برای ساخت را انتخاب کنید:", reply_markup=Markup(srv_kb))
+    return QUICK_SERVICE
 
 async def execute_quick_creation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -541,7 +545,7 @@ async def execute_quick_creation(update: Update, context: ContextTypes.DEFAULT_T
     cfg = load_config()
     base = context.user_data.get("quick_base")
     snum = context.user_data.get("quick_start")
-    count = context.user_data.get("quick_count", 10)
+    count = context.user_data.get("quick_count", 1)
     
     active_name = cfg.get("active_template")
     t_data = cfg.get("templates", {}).get(active_name, {"gb": 30, "days": 30, "mode": "on_hold"})
@@ -786,6 +790,7 @@ def main():
                 CallbackQueryHandler(quick_get_start, pattern="^quicknum_none$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, quick_get_start)
             ],
+            QUICK_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, quick_get_count)],
             QUICK_SERVICE: [CallbackQueryHandler(execute_quick_creation, pattern="^srv_id:")],
 
             ASK_SEARCH_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_search)],
@@ -799,7 +804,7 @@ def main():
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CallbackQueryHandler(start_cmd, pattern="^back_main$"))
     app.add_handler(CallbackQueryHandler(menu_template, pattern="^menu_template$"))
-    app.add_handler(CallbackQueryHandler(template_action_router, pattern="^(tmpl_sel|tmpl_del|tmpl_edit|tmpl_new):"))
+    app.add_handler(CallbackQueryHandler(template_action_router, pattern=r"^(tmpl_sel:|tmpl_del:|tmpl_edit:|tmpl_new$)"))
     app.add_handler(CallbackQueryHandler(template_field_router, pattern="^tfield:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, template_text_handler))
     app.add_handler(CallbackQueryHandler(list_users_cb, pattern="^list_users:"))
