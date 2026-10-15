@@ -1,4 +1,4 @@
-bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh)
+bash <(curl -s https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh)
 
 
 
