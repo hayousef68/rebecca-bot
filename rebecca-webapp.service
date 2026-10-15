@@ -1,0 +1,14 @@
+[Unit]
+Description=Rebecca Panel WebApp
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rebecca-bot
+ExecStart=/opt/rebecca-bot/venv/bin/uvicorn webapp:app --host 0.0.0.0 --port 7675
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
