@@ -308,7 +308,7 @@ async def execute_quick_creation(update: Update, context: ContextTypes.DEFAULT_T
 
     sem = asyncio.Semaphore(10)
     async def create_one(u):
-        # ساختار کاملاً پاک‌سازی شده و استاندارد سازگار با جدول کاربران ربکا
+        # ساختار فیلدهای کاملاً استاندارد برای نسخه Dev پنل ربکا
         p = {
             "username": u,
             "data_limit": limit,
