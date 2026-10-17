@@ -281,6 +281,38 @@ def fmt_gb(size) -> str:
     return "نامحدود" if not size or size <= 0 else f"{size / GB:.2f} GB"
 
 
+def fmt_bw(size) -> str:
+    """فرمت فشرده‌ی حجم/پهنای باند: 23M ، 1.5G ، 512K (بدون فاصله و بدون اعشار اضافه)."""
+    try:
+        n = float(size or 0)
+    except (TypeError, ValueError):
+        n = 0.0
+    for unit in ("B", "K", "M", "G", "T"):
+        if n < 1024 or unit == "T":
+            v = f"{n:.0f}" if n >= 10 or unit == "B" else f"{n:.1f}".rstrip("0").rstrip(".")
+            return f"{v}{unit}"
+        n /= 1024
+    return "0B"
+
+
+def pick_default_service(services: list[dict], group: bool) -> int | None:
+    """سرویس پیش‌فرض: ساخت تکی ← «ms» ، ساخت گروهی ← «hamkari». اگر پیدا نشد None."""
+    cfg = load_config().get("sales", {})
+    ham_ids = {int(x) for x in cfg.get("hamkari_service_ids", []) if str(x).lstrip("-").isdigit()}
+    ham_names = [str(n).lower() for n in cfg.get("hamkari_service_names", ["hamkari"]) if n] or ["hamkari"]
+
+    def is_ham(s: dict) -> bool:
+        return s["id"] in ham_ids or any(n in s["name"].lower() for n in ham_names)
+
+    if group:
+        return next((s["id"] for s in services if is_ham(s)), None)
+    cands = [s for s in services if not is_ham(s)]
+    exact = next((s["id"] for s in cands if s["name"].strip().lower() == "ms"), None)
+    if exact is not None:
+        return exact
+    return next((s["id"] for s in cands if re.search(r"(^|[^a-z0-9])ms([^a-z0-9]|$)", s["name"].lower())), None)
+
+
 def fmt_expire(exp, status, on_hold_dur=None) -> str:
     if status == "on_hold":
         return f"{int((on_hold_dur or 0) // 86400)} روز (On-Hold)"
