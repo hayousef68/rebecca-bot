@@ -129,32 +129,47 @@ def _ident(x: str) -> str:
     return f"`{x}`"
 
 
-def usernames_like(prefix: str) -> list[str]:
-    """نام‌کاربری‌هایی که با prefix شروع می‌شوند (کوئری سبک و read-only)."""
+_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def usernames_like(prefix: str) -> list[tuple]:
+    """(نام‌کاربری، زمان ساخت) کاربرانی که با prefix شروع می‌شوند؛ کوئری سبک و read-only."""
     sc = _schema()
     like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    n, c_ = _ident(sc["u_name"]), _ident(sc["u_created"])
     conn = _connect()
     try:
         with conn.cursor() as c:
-            c.execute(f"SELECT {_ident(sc['u_name'])} AS n FROM {_ident(sc['users'])} WHERE LOWER({_ident(sc['u_name'])}) LIKE LOWER(%s)", (like,))
-            return [r["n"] for r in c.fetchall()]
+            c.execute(f"SELECT {n} AS n, {c_} AS c FROM {_ident(sc['users'])} WHERE LOWER({n}) LIKE LOWER(%s)", (like,))
+            return [(r["n"], r["c"]) for r in c.fetchall()]
     finally:
         conn.close()
 
 
-def _pick_next(names: list[str], prefix: str) -> dict:
-    rx = re.compile(r"^" + re.escape(prefix) + r"(\d+)$", re.I)
-    best, last = 0, ""
-    for n in names:
-        m = rx.match(str(n))
-        if m and int(m.group(1)) >= best:
-            best, last = int(m.group(1)), str(n)
-    # بزرگی/کوچکی حروف را از آخرین کاربر می‌گیریم (مثلاً Ms_8714 → Ms_)
-    return {"prefix": last[:len(prefix)] if last else prefix, "last": last, "next": best + 1}
+def _pick_next(rows: list, prefix: str, recent: int = 5) -> dict:
+    """آخرین کاربر «ساخته‌شده» را پیدا می‌کند (نه بزرگ‌ترین عدد) و شماره‌ی بعدی را می‌دهد.
+    از بین ۵ کاربر آخر، بیشترین عدد + ۱ (برای ساخت گروهی هم‌زمان). اگر زمان ساخت نبود، بیشترین عدد."""
+    rx = re.compile(r"^" + re.escape(prefix) + r"(\d+)$", re.I | re.A)
+    items = []
+    for r in rows:
+        name, created = (r if isinstance(r, (tuple, list)) else (r, None))
+        m = rx.match(str(name or "").translate(_DIGITS))
+        if m:
+            items.append((str(created or ""), int(m.group(1)), str(name)))
+    if not items:
+        return {"prefix": prefix, "last": "", "next": 1, "max": ""}
+    top = max(items, key=lambda x: x[1])                       # بیشترین عدد کل
+    if any(i[0] for i in items):
+        pool = sorted(items, key=lambda x: (x[0], x[1]))[-recent:]
+        pick = max(pool, key=lambda x: x[1])
+    else:
+        pick = top
+    return {"prefix": pick[2][:len(prefix)], "last": pick[2], "next": pick[1] + 1,
+            "max": top[2] if top[1] > pick[1] else ""}
 
 
 async def next_number(api, prefix: str, use_db: bool = True) -> dict:
-    """آخرین نام‌کاربری با این پیشوند را پیدا می‌کند و شماره‌ی بعدی را برمی‌گرداند.
+    """آخرین نام‌کاربری ساخته‌شده با این پیشوند و شماره‌ی بعدی.
     اول از دیتابیس (سبک‌تر)، اگر نبود از جستجوی API پنل."""
     prefix = (prefix or "").strip()
     if use_db and (load_config()["sales"].get("db") or {}).get("name"):
@@ -162,15 +177,15 @@ async def next_number(api, prefix: str, use_db: bool = True) -> dict:
             return _pick_next(await asyncio.to_thread(usernames_like, prefix), prefix)
         except Exception as e:  # noqa: BLE001
             log.warning("next_number via db failed: %s", e)
-    names, off = [], 0
+    rows, off = [], 0
     while off < 50000:
         res = await api.request("GET", "/api/users", params={"offset": off, "limit": 200, "search": prefix})
         users = res.get("users", []) if isinstance(res, dict) else (res or [])
-        names += [u.get("username", "") for u in users]
+        rows += [(u.get("username", ""), u.get("created_at")) for u in users]
         if len(users) < 200:
             break
         off += 200
-    return _pick_next(names, prefix)
+    return _pick_next(rows, prefix)
 
 
 def fetch_events(day: str, partial: bool) -> list[dict]:
