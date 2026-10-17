@@ -218,7 +218,7 @@ async def ask_base(update, context):
     if sg and cfg["default_prefix"]:
         cr["auto"] = {"base": sg["prefix"], "start": sg["next"]}
         nxt = f"{sg['prefix']}{sg['next']}"
-        hint = (f"\n💡 آخرین کاربر: <code>{esc(sg['last'])}</code> ← بعدی: <code>{esc(nxt)}</code>" if sg["last"]
+        hint = (f"\n💡 آخرین کاربر: <code>{esc(sg['last'])}</code> ← بعدی: <code>{esc(nxt)}</code>" + (f"\n⚠️ بالاترین عدد موجود: <code>{esc(sg['max'])}</code>" if sg.get("max") else "") if sg["last"]
                 else f"\n💡 شروع پیشنهادی: <code>{esc(nxt)}</code>")
         rows.append([B(f"⚡ ساخت {nxt} (۱ کاربر)", callback_data="c:auto")])
     await show(update, context,
