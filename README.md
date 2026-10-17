@@ -30,6 +30,14 @@ bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/in
 rebecca-bot update
 ```
 
+ریستارت وب پنل در صورت عوض شدن پورت
+
+```bash
+systemctl restart rebecca-webapp
+```
+
+
+
 تنظیم برای وصل شدن ربات به دیتابیس پنل
 
 ```bash
