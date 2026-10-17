@@ -97,7 +97,7 @@ def main_kb() -> M:
         [B("⚙️ تمپلت‌ها", callback_data="t:menu"), B("📊 وضعیت سرور", callback_data="stats")],
         [B("🧹 پاکسازی منقضی‌ها", callback_data=f"clean:ask:{pid}"), B("📥 خروجی لینک‌ها", callback_data="export")],
         [B("📤 فروش امروز", callback_data="rp:today"), B("📈 دیروز", callback_data="rp:yday"),
-         B("📅 هفته", callback_data="rp:week"), B("🗓 ماه", callback_data="rp:month")],
+         B("📅 هفته", callback_data="rp:week"), B("🗓 ماه", callback_data="rp:month"), B("🗓 ماه قبل", callback_data="rp:lmonth")],
         [B(f"🖥 پنل‌ها (فعال: {pn['name']})", callback_data="pn:list")],
     ])
 
@@ -1226,7 +1226,7 @@ async def report_cb(update, context):
 async def report_cmd(update, context):
     """/report | /report yesterday | /report week | /report month"""
     arg = (context.args[0].lower() if context.args else "today")
-    which = {"yesterday": "yday", "yday": "yday", "week": "week", "month": "month"}.get(arg, "today")
+    which = {"yesterday": "yday", "yday": "yday", "week": "week", "month": "month", "lmonth": "lmonth", "last": "lmonth"}.get(arg, "today")
     text = await asyncio.to_thread(_report_text, which)
     await update.message.reply_html(text[:4000], reply_markup=main_kb())
 
@@ -1385,12 +1385,22 @@ async def backup_cmd(update, context):
 
 
 @admin_only
+async def autobackup_cmd(update, context):
+    arg = (context.args[0].lower() if context.args else "")
+    if arg in ("on", "off"):
+        update_config(lambda c: c["backup"].__setitem__("enabled", arg == "on"))
+    on = load_config()["backup"]["enabled"]
+    await update.message.reply_html(f"💾 بکاپ خودکار شبانه (همراه گزارش ۰۰:۰۰): <b>{'روشن ✅' if on else 'خاموش ⛔'}</b>\n"
+                                    "<code>/autobackup on</code> یا <code>/autobackup off</code>")
+
+
+@admin_only
 async def help_cmd(update, context):
     await update.message.reply_html(
         "📖 <b>راهنمای دستورها</b>\n\n"
-        "/start — منوی اصلی\n/report [yesterday|week|month] — گزارش فروش\n/events — جزئیات ساخت/تمدیدها\n"
+        "/start — منوی اصلی\n/report [yesterday|week|month|lmonth] — گزارش فروش\n/events — جزئیات ساخت/تمدیدها\n"
         "/soon — کاربران نزدیک انقضا/اتمام حجم\n/remind — هشدار روزانه انقضا\n/monitor — مانیتور سلامت پنل‌ها\n"
-        "/prices — قیمت‌ها و تنظیمات فروش\n/dbcheck — بررسی اتصال دیتابیس\n/backup — پشتیبان تنظیمات\n/cancel — لغو")
+        "/prices — قیمت‌ها و تنظیمات فروش\n/dbcheck — بررسی اتصال دیتابیس\n/backup — پشتیبان تنظیمات\n/autobackup — بکاپ خودکار شبانه\n/cancel — لغو")
 
 
 # ───────────────────────────── راه‌اندازی ─────────────────────────────
@@ -1423,7 +1433,7 @@ def build_app() -> Application:
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), CommandHandler("report", report_cmd),
-            cb(back_cb, pattern=r"^back$"), cb(report_cb, pattern=r"^rp:(today|yday|week|month)(:r)?$"),
+            cb(back_cb, pattern=r"^back$"), cb(report_cb, pattern=r"^rp:(today|yday|week|month|lmonth)(:r)?$"),
             CommandHandler("soon", soon_cb), cb(soon_cb, pattern=r"^soon$"),
             cb(bulk_start, pattern=r"^bk:start$"), cb(note_start, pattern=r"^u:note:"),
             cb(create_entry, pattern=r"^c:(quick|pick)$"),
@@ -1466,7 +1476,7 @@ def build_app() -> Application:
     )
     for name, fn in (("prices", prices_cmd), ("events", events_cmd), ("setham", setham_cmd), ("setplan", setplan_cmd), ("delplan", delplan_cmd),
                      ("setcost", setcost_cmd), ("setmult", setmult_cmd), ("setdb", setdb_cmd), ("dbcheck", dbcheck_cmd),
-                     ("remind", remind_cmd), ("monitor", monitor_cmd), ("backup", backup_cmd), ("help", help_cmd)):
+                     ("remind", remind_cmd), ("monitor", monitor_cmd), ("backup", backup_cmd), ("autobackup", autobackup_cmd), ("help", help_cmd)):
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(conv)
     app.add_error_handler(on_error)
