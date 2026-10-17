@@ -136,6 +136,24 @@ async def report(day: str = "today", date_from: str = Query("", alias="from", ma
     return {"day": d, "text": await asyncio.to_thread(sales.build_report, d, html=False, partial=(d == today))}
 
 
+@app.get("/api/report/summary", dependencies=[Depends(guard)])
+async def report_summary(kind: str = Query("today", pattern="^(today|yday|week|month|lmonth)$")):
+    return await asyncio.to_thread(sales.summary, kind)
+
+
+class OnePlanReq(BaseModel):
+    gb: int = Field(ge=1, le=100000)
+    months: int = Field(ge=1, le=24)
+    price: int = Field(ge=0, le=10**10)
+
+
+@app.post("/api/sales/plan", dependencies=[Depends(guard)])
+async def sales_plan(r: OnePlanReq):
+    """ثبت قیمت یک حجم خارج از لیست؛ از گزارش بعدی جزو فروش‌های لیست حساب می‌شود."""
+    sales.set_plan(r.gb, r.months, r.price)
+    return {"ok": True}
+
+
 @app.get("/api/report/months", dependencies=[Depends(guard)])
 async def report_months():
     return {"months": sales.jmonths(12)}
