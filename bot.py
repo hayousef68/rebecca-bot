@@ -1,820 +1,853 @@
-import io, os, json, time, asyncio, logging
-from datetime import datetime
-import httpx, qrcode
-from telegram import Update, InlineKeyboardButton as Btn, InlineKeyboardMarkup as Markup
+#!/usr/bin/env python3
+"""ربات تلگرام مدیریت پنل ربکا: ساخت گروهی + لینک + QR، تمپلت، مدیریت کاربر."""
+from __future__ import annotations
+
+import asyncio
+import functools
+import io
+import logging
+import re
+import time
+
+from telegram import BotCommand, InlineKeyboardButton as B, InlineKeyboardMarkup as M, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
+from telegram.error import BadRequest, TelegramError
+from telegram.ext import (
+    Application, CallbackQueryHandler, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters,
+)
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+import common as C
+from common import api, esc, load_config, update_config
 
-# مراحل گفتگو (Conversation States)
-(SET_PANEL_URL, SET_SUB_URL, SET_PANEL_USER, SET_PANEL_PASS, 
- ASK_SEARCH_USER, EDIT_DATA, EDIT_DAYS_USER,
- MAN_USERNAME, MAN_START, MAN_COUNT, MAN_SERVICE,
- QUICK_BASE, QUICK_START, QUICK_COUNT, QUICK_SERVICE) = range(15)
+logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+log = logging.getLogger("rebecca.bot")
 
-def load_config() -> dict:
-    default_cfg = {
-        "bot_token": "", "admin_ids": [], "panel_url": "", "sub_url": "", "username": "", "password": "",
-        "templates": {
-            "پیش‌فرض (30 گیگ - 30 روز)": {"gb": 30, "days": 30, "mode": "on_hold"},
-            "تست (5 گیگ - 3 روز)": {"gb": 5, "days": 3, "mode": "active"}
-        },
-        "active_template": "پیش‌فرض (30 گیگ - 30 روز)"
-    }
-    if not os.path.exists(CONFIG_FILE):
-        return default_cfg
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-        if "templates" not in data:
-            data["templates"] = default_cfg["templates"]
-        if "active_template" not in data:
-            data["active_template"] = list(data["templates"].keys())[0]
-        return data
+HTML = ParseMode.HTML
+END = ConversationHandler.END
+(C_TPL, C_BASE, C_START, C_COUNT, C_SERVICE, C_CONFIRM,
+ T_NAME, T_GB, T_DAYS, T_EDIT,
+ S_URL, S_SUB, S_USER, S_PASS,
+ Q_SEARCH, E_GB, E_DAYS) = range(17)
 
-def save_config(cfg: dict):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
+STATUS_ICON = {"active": "🟢", "disabled": "⚫", "expired": "🔴", "limited": "🟠", "on_hold": "⏳"}
 
-class RebeccaClient:
-    def __init__(self):
-        self.client = httpx.AsyncClient(verify=False, timeout=20.0, limits=httpx.Limits(max_keepalive_connections=20, max_connections=50))
-        self.token = None
-        self.reload_credentials()
 
-    def reload_credentials(self):
-        cfg = load_config()
-        raw_url = cfg.get("panel_url", "").rstrip("/")
-        if raw_url.endswith("/dashboard"):
-            raw_url = raw_url[:-10]
-        self.base_url = raw_url
-        self.sub_url = cfg.get("sub_url", "").rstrip("/") or self.base_url
-        self.username = cfg.get("username", "")
-        self.password = cfg.get("password", "")
-        self.token = None
-
-    def is_configured(self) -> bool:
-        return bool(self.base_url and self.username and self.password)
-
-    async def login(self) -> str:
-        endpoints = ["/api/admin/token", "/dashboard/api/admin/token", "/api/v1/admin/token"]
-        for ep in endpoints:
-            try:
-                resp = await self.client.post(
-                    f"{self.base_url}{ep}",
-                    data={"username": self.username, "password": self.password},
-                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+# ───────────────────────────── ابزارهای رابط ─────────────────────────────
+def admin_only(fn):
+    """هر هندلر فقط برای ادمین‌ها اجرا می‌شود (قبلاً فقط /start چک می‌شد)."""
+    @functools.wraps(fn)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        u = update.effective_user
+        if not u or not C.is_admin(u.id):
+            if update.callback_query:
+                await update.callback_query.answer("⛔ دسترسی ندارید", show_alert=True)
+            elif update.message:
+                await update.message.reply_html(
+                    f"⛔ شما دسترسی ندارید.\nشناسه عددی شما: <code>{u.id if u else '?'}</code>"
                 )
-                if resp.status_code == 200:
-                    self.token = resp.json()["access_token"]
-                    return self.token
-            except Exception:
-                continue
-        resp = await self.client.post(
-            f"{self.base_url}/api/admin/token",
-            data={"username": self.username, "password": self.password},
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
-        )
-        resp.raise_for_status()
-        self.token = resp.json()["access_token"]
-        return self.token
+            return END
+        return await fn(update, context)
+    return wrapper
 
-    async def req(self, method: str, endpoint: str, **kwargs):
-        if not self.token:
-            await self.login()
-        headers = kwargs.pop("headers", {})
-        headers["Authorization"] = f"Bearer {self.token}"
-        resp = await self.client.request(method, f"{self.base_url}{endpoint}", headers=headers, **kwargs)
-        if resp.status_code == 401:
-            await self.login()
-            headers["Authorization"] = f"Bearer {self.token}"
-            resp = await self.client.request(method, f"{self.base_url}{endpoint}", headers=headers, **kwargs)
-        resp.raise_for_status()
-        return resp.json() if resp.content else {}
 
-api = RebeccaClient()
+def nav(fn):
+    """هندلرهای مستقل (غیر گفتگو): هر گفتگوی نیمه‌کاره بسته می‌شود."""
+    @functools.wraps(fn)
+    async def wrapper(update, context):
+        context.user_data.clear()
+        await fn(update, context)
+        return END
+    return admin_only(wrapper)
 
-def is_admin(uid: int) -> bool:
-    return uid in load_config().get("admin_ids", [])
 
-def fmt_gb(size: int) -> str:
-    return "نامحدود" if not size or size <= 0 else f"{size / (1024 ** 3):.2f} GB"
+async def show(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, kb=None):
+    """ویرایش پیام فعلی؛ اگر ممکن نبود (مثلاً پیام عکس است) پیام جدید می‌فرستد."""
+    q = update.callback_query
+    if q:
+        try:
+            await q.edit_message_text(text, reply_markup=kb, parse_mode=HTML, disable_web_page_preview=True)
+            return
+        except BadRequest as e:
+            if "not modified" in str(e).lower():
+                return
+        except TelegramError:
+            pass
+    await context.bot.send_message(update.effective_chat.id, text, reply_markup=kb, parse_mode=HTML, disable_web_page_preview=True)
 
-def fmt_expire(exp: int, status: str, on_hold_dur: int = None) -> str:
-    if status == "on_hold":
-        return f"{int(on_hold_dur // 86400) if on_hold_dur else 0} روز (On-Hold)"
-    if not exp:
-        return "نامحدود"
-    rem = exp - int(time.time())
-    return "منقضی شده" if rem <= 0 else f"{rem // 86400} روز و {(rem % 86400) // 3600} ساعت"
 
-def full_sub(sub_path: str) -> str:
-    if not sub_path: return "نامشخص"
-    if sub_path.startswith("http"):
-        parts = sub_path.split("://")
-        if len(parts) > 1:
-            path_part = "/" + "/".join(parts[1].split("/")[1:])
-            return f"{api.sub_url}{path_part}"
-        return sub_path
-    return f"{api.sub_url}/{sub_path.lstrip('/')}"
+def cancel_kb(extra=None):
+    rows = list(extra or []) + [[B("❌ انصراف", callback_data="back")]]
+    return M(rows)
 
-def make_qr(data: str) -> io.BytesIO:
-    qr = qrcode.QRCode(version=1, box_size=9, border=2)
-    qr.add_data(data)
-    qr.make(fit=True)
-    bio = io.BytesIO()
-    bio.name = "qr.png"
-    qr.make_image(fill_color="black", back_color="white").save(bio, "PNG")
-    bio.seek(0)
-    return bio
 
-def cancel_kb():
-    return Markup([[Btn("❌ انصراف", callback_data="back_main")]])
-
-def main_keyboard() -> Markup:
-    cfg = load_config()
+def main_kb() -> M:
     if not api.is_configured():
-        return Markup([[Btn("🔌 اتصال به پنل ربکا", callback_data="setup_panel")]])
-    active_t = cfg.get("active_template", "پیش‌فرض")
-    return Markup([
-        [Btn(f"⚡ ساخت سریع (تمپلت: {active_t})", callback_data="quick_create"), Btn("➕ ساخت دستی", callback_data="manual_create")],
-        [Btn("⚙️ مدیریت و انتخاب تمپلت‌ها", callback_data="menu_template"), Btn("📋 لیست کاربران", callback_data="list_users:all:0")],
-        [Btn("🔍 جستجو و مدیریت کاربر", callback_data="menu_search"), Btn("📊 وضعیت سرور", callback_data="menu_stats")],
-        [Btn("🧹 پاکسازی منقضی‌ها", callback_data="menu_cleanup"), Btn("📥 خروجی ساب‌ها", callback_data="export_all_subs")],
-        [Btn("⚙️ تنظیمات اتصال پنل", callback_data="setup_panel")]
+        return M([[B("🔌 اتصال به پنل ربکا", callback_data="setup")]])
+    return M([
+        [B("⚡ ساخت سریع", callback_data="c:quick"), B("🎯 ساخت با انتخاب تمپلت", callback_data="c:pick")],
+        [B("🔍 جستجو و مدیریت کاربر", callback_data="search"), B("📋 لیست کاربران", callback_data="l:all:0")],
+        [B("⚙️ تمپلت‌ها", callback_data="t:menu"), B("📊 وضعیت سرور", callback_data="stats")],
+        [B("🧹 پاکسازی منقضی‌ها", callback_data="clean:ask"), B("📥 خروجی لینک‌ها", callback_data="export")],
+        [B("🔌 تنظیمات پنل", callback_data="setup")],
     ])
 
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        if update.message: await update.message.reply_text("⛔ شما دسترسی ندارید.")
-        return ConversationHandler.END
-    context.user_data.clear()
+
+def home_text() -> str:
     cfg = load_config()
+    t = cfg["templates"][cfg["active_template"]]
     st = "🟢 متصل" if api.is_configured() else "🔴 تنظیم نشده"
-    active_name = cfg.get("active_template", "نامشخص")
-    t_data = cfg.get("templates", {}).get(active_name, {"gb": 30, "days": 30, "mode": "on_hold"})
-    text = (
-        f"🚀 ربات مدیریت پنل ربکا\nوضعیت: {st}\n\n"
-        f"📌 تمپلت فعال فعلی: {active_name}\n"
-        f"💾 حجم: {t_data.get('gb')} GB | 📅 اعتبار: {t_data.get('days')} روز | ⏳ حالت: {t_data.get('mode')}\n\n"
-        f"یک گزینه را انتخاب کنید:"
-    )
-    if update.message:
-        await update.message.reply_text(text, reply_markup=main_keyboard())
-    elif update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text, reply_markup=main_keyboard())
-    return ConversationHandler.END
+    return (f"🚀 <b>ربات مدیریت پنل ربکا</b>\nوضعیت: {st}\n\n"
+            f"📌 تمپلت فعال: <b>{esc(cfg['active_template'])}</b>\n{esc(C.tpl_summary(t))}")
 
-# --- واکشی سرویس‌ها ---
-async def fetch_services_kb():
-    return [
-        [Btn("⭐ Hamkari (ID: 6)", callback_data="srv_id:6:Hamkari")],
-        [Btn("📂 ms (ID: 1)", callback_data="srv_id:1:ms")],
-        [Btn("📂 Tes (ID: 5)", callback_data="srv_id:5:Tes")]
-    ]
 
-# --- تنظیمات اتصال ---
-async def start_setup_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    await q.edit_message_text("🌐 آدرس کامل پنل را با پورت بفرستید:\nمثال: `https://pan.vip-sam-shop98.top:2096/dashboard`", reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-    return SET_PANEL_URL
+async def home(update, context, prefix: str = ""):
+    await show(update, context, prefix + home_text(), main_kb())
 
-async def get_panel_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip().rstrip("/")
-    if not url.startswith("http"):
-        await update.message.reply_text("⚠️ با http یا https شروع شود:")
-        return SET_PANEL_URL
-    context.user_data["setup_panel_url"] = url
-    kb = Markup([[Btn("⏭ مشابه پنل", callback_data="skip_sub_url")], [Btn("❌ انصراف", callback_data="back_main")]])
-    await update.message.reply_text("🔗 آدرس دامنه سابسکریپشن را بفرستید یا رد کنید:", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    return SET_SUB_URL
 
-async def get_sub_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def err_text(e: Exception) -> str:
+    return f"❌ {esc(e)}"
+
+
+# ───────────────────────────── شروع و ناوبری ─────────────────────────────
+@nav
+async def start_cmd(update, context):
     if update.callback_query:
         await update.callback_query.answer()
-        context.user_data["setup_sub_url"] = context.user_data["setup_panel_url"]
-        await update.callback_query.edit_message_text("👤 نام کاربری ادمین:", reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-    else:
-        context.user_data["setup_sub_url"] = update.message.text.strip().rstrip("/")
-        await update.message.reply_text("👤 نام کاربری ادمین:", reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-    return SET_PANEL_USER
+    await home(update, context)
 
-async def get_panel_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["setup_user"] = update.message.text.strip()
-    await update.message.reply_text("🔑 رمز عبور ادمین:", reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-    return SET_PANEL_PASS
 
-async def get_panel_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    wait_msg = await update.message.reply_text("⏳ در حال تست اتصال...")
+@nav
+async def back_cb(update, context):
+    await update.callback_query.answer()
+    await home(update, context)
+
+
+@nav
+async def cancel_cmd(update, context):
+    await home(update, context, "↩️ لغو شد.\n\n")
+
+
+# ───────────────────────────── ساخت گروهی ─────────────────────────────
+def tpl_by_idx(i: int):
+    names = list(load_config()["templates"])
+    return names[i] if 0 <= i < len(names) else None
+
+
+@admin_only
+async def create_entry(update, context):
+    q = update.callback_query
+    await q.answer()
     cfg = load_config()
-    cfg.update({"panel_url": context.user_data["setup_panel_url"], "sub_url": context.user_data["setup_sub_url"], "username": context.user_data["setup_user"], "password": update.message.text.strip()})
-    save_config(cfg)
-    api.reload_credentials()
+    context.user_data.clear()
+    if q.data == "c:pick":
+        rows = []
+        for i, (n, t) in enumerate(cfg["templates"].items()):
+            mark = "✅ " if n == cfg["active_template"] else ""
+            rows.append([B(f"{mark}{n} ({t['gb']}GB/{t['days']}d)", callback_data=f"c:t:{i}")])
+        await show(update, context, "🎯 تمپلت ساخت را انتخاب کنید:", cancel_kb(rows))
+        return C_TPL
+    context.user_data["cr"] = {"tpl": cfg["active_template"]}
+    return await ask_base(update, context)
+
+
+@admin_only
+async def create_pick_tpl(update, context):
+    q = update.callback_query
+    await q.answer()
+    name = tpl_by_idx(int(q.data.split(":")[2]))
+    if not name:
+        await q.answer("تمپلت پیدا نشد", show_alert=True)
+        return C_TPL
+    context.user_data["cr"] = {"tpl": name}
+    return await ask_base(update, context)
+
+
+async def ask_base(update, context):
+    cfg = load_config()
+    name = context.user_data["cr"]["tpl"]
+    t = cfg["templates"][name]
+    await show(update, context,
+               f"➕ <b>ساخت اکانت</b>\n📌 تمپلت: <b>{esc(name)}</b>\n{esc(C.tpl_summary(t))}\n\n"
+               "👤 <b>نام پایه</b> را بفرستید:\n"
+               "• <code>ali</code> ← یک کاربر\n"
+               "• <code>ali 1 10</code> ← ۱۰ کاربر: ali1 تا ali10",
+               cancel_kb())
+    return C_BASE
+
+
+@admin_only
+async def create_base(update, context):
+    parts = update.message.text.split()
+    cr = context.user_data["cr"]
+    if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+        cr.update(base=parts[0], start=int(parts[1]), count=int(parts[2]))
+        return await validate_and_pick_service(update, context)
+    if len(parts) != 1:
+        await update.message.reply_text("⚠️ فقط نام پایه یا الگوی «نام شروع تعداد» (مثل ali 1 10) را بفرستید:")
+        return C_BASE
+    cr["base"] = parts[0]
+    await update.message.reply_html(
+        "🔢 عدد شروع شماره‌گذاری را بفرستید، یا «تک کاربر» را بزنید:",
+        reply_markup=cancel_kb([[B("تک کاربر (بدون عدد)", callback_data="c:single")]]),
+    )
+    return C_START
+
+
+@admin_only
+async def create_start(update, context):
+    cr = context.user_data["cr"]
+    if update.callback_query:
+        await update.callback_query.answer()
+        cr.update(start=None, count=1)
+        return await validate_and_pick_service(update, context)
+    txt = update.message.text.strip()
+    if not txt.isdigit():
+        await update.message.reply_text("⚠️ یک عدد صحیح بفرستید:")
+        return C_START
+    cr["start"] = int(txt)
+    await update.message.reply_html(
+        f"📦 <b>تعداد</b> کاربران را بفرستید (حداکثر {load_config()['max_batch']}):", reply_markup=cancel_kb()
+    )
+    return C_COUNT
+
+
+@admin_only
+async def create_count(update, context):
+    txt = update.message.text.strip()
+    if not txt.isdigit():
+        await update.message.reply_text("⚠️ یک عدد صحیح بفرستید:")
+        return C_COUNT
+    context.user_data["cr"]["count"] = int(txt)
+    return await validate_and_pick_service(update, context)
+
+
+async def validate_and_pick_service(update, context):
+    cr = context.user_data["cr"]
+    try:
+        cr["names"] = C.make_names(cr["base"], cr.get("start"), cr.get("count", 1), load_config()["max_batch"])
+    except ValueError as e:
+        await context.bot.send_message(update.effective_chat.id, f"⚠️ {e}\nدوباره نام پایه را بفرستید:", reply_markup=cancel_kb())
+        return C_BASE
+    try:
+        services = await api.list_services()
+    except Exception as e:  # noqa: BLE001
+        await context.bot.send_message(update.effective_chat.id, err_text(e), reply_markup=main_kb())
+        return END
+    cr["services"] = {s["id"]: s["name"] for s in services}
+    if len(services) == 1:
+        cr["service_id"] = services[0]["id"]
+        return await confirm_step(update, context)
+    rows, row = [], []
+    for s in services:
+        row.append(B(f"📂 {s['name']}", callback_data=f"srv:{s['id']}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    await context.bot.send_message(update.effective_chat.id, "📂 <b>سرویس</b> را انتخاب کنید:", reply_markup=cancel_kb(rows), parse_mode=HTML)
+    return C_SERVICE
+
+
+@admin_only
+async def create_service(update, context):
+    q = update.callback_query
+    await q.answer()
+    context.user_data["cr"]["service_id"] = int(q.data.split(":")[1])
+    return await confirm_step(update, context)
+
+
+async def confirm_step(update, context):
+    cr = context.user_data["cr"]
+    t = load_config()["templates"][cr["tpl"]]
+    names = cr["names"]
+    rng = names[0] if len(names) == 1 else f"{names[0]} … {names[-1]}"
+    text = (f"📝 <b>تأیید نهایی</b>\n\n👥 تعداد: <b>{len(names)}</b>\n🔤 نام‌ها: <code>{esc(rng)}</code>\n"
+            f"📌 تمپلت: {esc(cr['tpl'])}\n{esc(C.tpl_summary(t))}\n"
+            f"📂 سرویس: {esc(cr['services'].get(cr['service_id'], cr['service_id']))}")
+    kb = cancel_kb([[B("✅ شروع ساخت", callback_data="c:go")]])
+    await show(update, context, text, kb)
+    return C_CONFIRM
+
+
+@admin_only
+async def create_go(update, context):
+    q = update.callback_query
+    await q.answer()
+    cr = context.user_data.get("cr")
+    if not cr or "names" not in cr:
+        await show(update, context, "⚠️ نشست منقضی شد. دوباره شروع کنید.", main_kb())
+        return END
+    cfg = load_config()
+    tpl = cfg["templates"][cr["tpl"]]
+    names, chat_id = cr["names"], update.effective_chat.id
+    msg = q.message
+    last = [0.0]
+
+    async def progress(done, total):
+        if done == total or time.monotonic() - last[0] > 1.5:
+            last[0] = time.monotonic()
+            try:
+                await msg.edit_text(f"⚡ در حال ساخت… {done}/{total}")
+            except TelegramError:
+                pass
+
+    await progress(0, len(names))
+    results, failed = await C.create_users(names, tpl, cr["service_id"], on_progress=progress)
+    context.user_data.clear()
+
+    if not results:
+        reason = failed[0][1] if failed else "نامشخص"
+        await context.bot.send_message(chat_id, f"❌ هیچ کاربری ساخته نشد.\nدلیل: {esc(reason)}", reply_markup=main_kb(), parse_mode=HTML)
+        return END
+
+    header = f"💾 {tpl['gb'] or 'نامحدود'} GB | 📅 {tpl['days'] or 'نامحدود'} روز ({tpl['mode']}) | 📂 {cr['services'].get(cr['service_id'], cr['service_id'])}"
+    try:
+        await C.send_results(context.bot, chat_id, results, header, cfg["max_qr"])
+    except Exception as e:  # noqa: BLE001
+        log.exception("send_results")
+        await context.bot.send_message(chat_id, f"⚠️ ساخت انجام شد ولی ارسال QR مشکل داشت: {esc(e)}", parse_mode=HTML)
+    summary = f"🎉 <b>{len(results)}</b> کاربر ساخته شد."
+    if failed:
+        lines = "\n".join(f"• <code>{esc(n)}</code>: {esc(r)}" for n, r in failed[:15])
+        more = f"\n… و {len(failed) - 15} مورد دیگر" if len(failed) > 15 else ""
+        summary += f"\n\n⚠️ <b>{len(failed)}</b> مورد ناموفق:\n{lines}{more}"
+    await context.bot.send_message(chat_id, summary, reply_markup=main_kb(), parse_mode=HTML)
+    return END
+
+
+# ───────────────────────────── تمپلت‌ها ─────────────────────────────
+@nav
+async def tpl_menu(update, context):
+    q = update.callback_query
+    await q.answer()
+    await render_tpl_menu(update, context)
+
+
+async def render_tpl_menu(update, context, prefix=""):
+    cfg = load_config()
+    rows = []
+    for i, (n, t) in enumerate(cfg["templates"].items()):
+        mark = "✅" if n == cfg["active_template"] else "📁"
+        rows.append([B(f"{mark} {n} ({t['gb']}GB/{t['days']}d)", callback_data=f"t:sel:{i}")])
+        rows.append([B("✏️ ویرایش", callback_data=f"t:edit:{i}"), B("🗑 حذف", callback_data=f"t:del:{i}")])
+    rows += [[B("➕ تمپلت جدید", callback_data="t:new")], [B("🔙 منوی اصلی", callback_data="back")]]
+    await show(update, context, prefix + "⚙️ <b>مدیریت تمپلت‌ها</b>\nروی نام بزنید تا فعال شود:", M(rows))
+
+
+@nav
+async def tpl_action(update, context):
+    q = update.callback_query
+    _, act, idx = q.data.split(":")
+    name = tpl_by_idx(int(idx))
+    if not name:
+        await q.answer("تمپلت پیدا نشد", show_alert=True)
+        return await render_tpl_menu(update, context)
+    if act == "sel":
+        update_config(lambda c: c.__setitem__("active_template", name))
+        await q.answer("✅ فعال شد")
+        await render_tpl_menu(update, context)
+    elif act == "del":
+        cfg = load_config()
+        if len(cfg["templates"]) <= 1:
+            await q.answer("⚠️ حداقل یک تمپلت باید بماند!", show_alert=True)
+            return await render_tpl_menu(update, context)
+
+        def rm(c):
+            c["templates"].pop(name, None)
+        update_config(rm)
+        await q.answer("🗑 حذف شد")
+        await render_tpl_menu(update, context)
+    elif act == "mode":
+        def tg(c):
+            t = c["templates"][name]
+            t["mode"] = "active" if t["mode"] == "on_hold" else "on_hold"
+        update_config(tg)
+        await q.answer("حالت تغییر کرد")
+        await tpl_edit_view(update, context, int(idx))
+    elif act == "edit":
+        await q.answer()
+        await tpl_edit_view(update, context, int(idx))
+
+
+async def tpl_edit_view(update, context, idx):
+    name = tpl_by_idx(idx)
+    t = load_config()["templates"][name]
+    kb = M([
+        [B("✏️ نام", callback_data=f"te:name:{idx}"), B("📊 حجم", callback_data=f"te:gb:{idx}"), B("📅 روز", callback_data=f"te:days:{idx}")],
+        [B(f"⏳ حالت: {t['mode']} ← تغییر", callback_data=f"t:mode:{idx}")],
+        [B("🔙 بازگشت", callback_data="t:menu")],
+    ])
+    await show(update, context, f"✏️ <b>{esc(name)}</b>\n{esc(C.tpl_summary(t))}\n\nکدام مورد ویرایش شود؟", kb)
+
+
+@admin_only
+async def tpl_new(update, context):
+    await update.callback_query.answer()
+    context.user_data.clear()
+    context.user_data["nt"] = {}
+    await show(update, context, "📝 نام تمپلت جدید را بفرستید (مثلاً: اقتصادی):", cancel_kb())
+    return T_NAME
+
+
+@admin_only
+async def tpl_new_name(update, context):
+    name = update.message.text.strip()
+    if not 1 <= len(name) <= 40 or name in load_config()["templates"]:
+        await update.message.reply_text("⚠️ نام خالی/تکراری/بیش از ۴۰ کاراکتر است. نام دیگری بفرستید:")
+        return T_NAME
+    context.user_data["nt"]["name"] = name
+    await update.message.reply_html("💾 حجم به <b>گیگابایت</b> (<code>0</code> = نامحدود):", reply_markup=cancel_kb())
+    return T_GB
+
+
+def parse_nonneg(text: str, as_int=False):
+    v = float(text.strip().replace(",", "."))
+    if v < 0 or v != v or v == float("inf"):
+        raise ValueError
+    return int(v) if as_int else (int(v) if v.is_integer() else v)
+
+
+@admin_only
+async def tpl_new_gb(update, context):
+    try:
+        context.user_data["nt"]["gb"] = parse_nonneg(update.message.text)
+    except ValueError:
+        await update.message.reply_text("⚠️ عدد معتبر (۰ یا بیشتر) بفرستید:")
+        return T_GB
+    await update.message.reply_html("📅 اعتبار به <b>روز</b> (<code>0</code> = نامحدود):", reply_markup=cancel_kb())
+    return T_DAYS
+
+
+@admin_only
+async def tpl_new_days(update, context):
+    try:
+        days = parse_nonneg(update.message.text, as_int=True)
+    except ValueError:
+        await update.message.reply_text("⚠️ عدد صحیح (۰ یا بیشتر) بفرستید:")
+        return T_DAYS
+    nt = context.user_data.pop("nt")
+
+    def add(c):
+        c["templates"][nt["name"]] = {"gb": nt["gb"], "days": days, "mode": "on_hold"}
+        c["active_template"] = nt["name"]
+    update_config(add)
+    await render_tpl_menu(update, context, f"✅ تمپلت «{esc(nt['name'])}» ساخته و فعال شد.\n\n")
+    return END
+
+
+@admin_only
+async def tpl_edit_field(update, context):
+    q = update.callback_query
+    await q.answer()
+    _, field, idx = q.data.split(":")
+    name = tpl_by_idx(int(idx))
+    if not name:
+        return END
+    context.user_data.clear()
+    context.user_data["te"] = {"name": name, "field": field}
+    prompt = {"name": "📝 نام جدید:", "gb": "💾 حجم جدید (GB، 0 = نامحدود):", "days": "📅 اعتبار جدید (روز، 0 = نامحدود):"}[field]
+    await show(update, context, prompt, cancel_kb())
+    return T_EDIT
+
+
+@admin_only
+async def tpl_edit_value(update, context):
+    te, text = context.user_data["te"], update.message.text.strip()
+    cfg = load_config()
+    if te["name"] not in cfg["templates"]:
+        return END
+    try:
+        if te["field"] == "name":
+            if not 1 <= len(text) <= 40 or (text != te["name"] and text in cfg["templates"]):
+                raise ValueError
+            def ren(c):
+                items = [(text if k == te["name"] else k, v) for k, v in c["templates"].items()]
+                c["templates"] = dict(items)
+                if c["active_template"] == te["name"]:
+                    c["active_template"] = text
+            update_config(ren)
+        else:
+            val = parse_nonneg(text, as_int=te["field"] == "days")
+            update_config(lambda c: c["templates"][te["name"]].__setitem__(te["field"], val))
+    except ValueError:
+        await update.message.reply_text("⚠️ مقدار نامعتبر است، دوباره بفرستید:")
+        return T_EDIT
+    context.user_data.clear()
+    await render_tpl_menu(update, context, "✅ ویرایش شد.\n\n")
+    return END
+
+
+# ───────────────────────────── اتصال به پنل ─────────────────────────────
+@admin_only
+async def setup_start(update, context):
+    await update.callback_query.answer()
+    context.user_data.clear()
+    context.user_data["su"] = {}
+    await show(update, context,
+               "🌐 آدرس پنل را با پورت بفرستید:\n<code>https://panel.example.com:2096</code>\n(پسوند /dashboard اشکالی ندارد)",
+               cancel_kb())
+    return S_URL
+
+
+@admin_only
+async def setup_url(update, context):
+    url = update.message.text.strip().rstrip("/")
+    if not re.match(r"^https?://\S+$", url):
+        await update.message.reply_text("⚠️ آدرس باید با http:// یا https:// شروع شود:")
+        return S_URL
+    context.user_data["su"]["panel_url"] = url
+    await update.message.reply_html(
+        "🔗 دامنه <b>سابسکریپشن</b> را بفرستید (اگر با پنل یکی است رد کنید):",
+        reply_markup=cancel_kb([[B("⏭ مشابه پنل", callback_data="s:skip")]]),
+    )
+    return S_SUB
+
+
+@admin_only
+async def setup_sub(update, context):
+    su = context.user_data["su"]
+    if update.callback_query:
+        await update.callback_query.answer()
+        su["sub_url"] = ""
+        await show(update, context, "👤 نام کاربری ادمین پنل:", cancel_kb())
+    else:
+        su["sub_url"] = update.message.text.strip().rstrip("/")
+        await update.message.reply_html("👤 نام کاربری ادمین پنل:", reply_markup=cancel_kb())
+    return S_USER
+
+
+@admin_only
+async def setup_user(update, context):
+    context.user_data["su"]["username"] = update.message.text.strip()
+    await update.message.reply_html("🔑 رمز عبور ادمین (پیام شما بعد از دریافت حذف می‌شود):", reply_markup=cancel_kb())
+    return S_PASS
+
+
+@admin_only
+async def setup_pass(update, context):
+    su = context.user_data.pop("su")
+    pw = update.message.text.strip()
+    try:
+        await update.message.delete()
+    except TelegramError:
+        pass
+    old = load_config()
+    update_config(lambda c: c.update(panel_url=su["panel_url"], sub_url=su["sub_url"], username=su["username"], password=pw))
+    wait = await context.bot.send_message(update.effective_chat.id, "⏳ در حال تست اتصال…")
     try:
         await api.login()
-        st = await api.req("GET", "/api/system")
-        await wait_msg.edit_text(f"✅ اتصال برقرار شد!\n👥 کل کاربران: {st.get('total_user', 0)}", reply_markup=main_keyboard())
-    except Exception as e:
-        await wait_msg.edit_text(f"❌ خطا در اتصال:\n{e}", reply_markup=main_keyboard())
-    return ConversationHandler.END
+        st = await api.request("GET", "/api/system")
+        svc = await api.list_services(force=True)
+        await wait.edit_text(f"✅ اتصال برقرار شد.\n👥 کاربران: {st.get('total_user', 0)} | 📂 سرویس‌ها: {len(svc)}", reply_markup=main_kb())
+    except Exception as e:  # noqa: BLE001
+        update_config(lambda c: c.update(panel_url=old["panel_url"], sub_url=old["sub_url"], username=old["username"], password=old["password"]))
+        await wait.edit_text(f"❌ اتصال ناموفق؛ تنظیمات قبلی حفظ شد.\n{esc(e)}", reply_markup=main_kb(), parse_mode=HTML)
+    return END
 
-# --- مدیریت تمپلت‌ها ---
-async def menu_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    for key in ("tmpl_state", "new_t_name", "new_t_gb", "edit_field", "edit_t_name", "editing_tmpl"):
-        context.user_data.pop(key, None)
-    cfg = load_config()
-    templates = cfg.get("templates", {})
-    active = cfg.get("active_template")
 
-    rows = []
-    for t_name, data in templates.items():
-        prefix = "✅ " if t_name == active else "📁 "
-        rows.append([
-            Btn(f"{prefix}{t_name} ({data['gb']}GB - {data['days']}d)", callback_data=f"tmpl_sel:{t_name}"),
-            Btn("✏️ ویرایش", callback_data=f"tmpl_edit:{t_name}"),
-            Btn("🗑 حذف", callback_data=f"tmpl_del:{t_name}")
-        ])
-    rows.append([Btn("➕ ساخت تمپلت جدید", callback_data="tmpl_new")])
-    rows.append([Btn("🔙 منوی اصلی", callback_data="back_main")])
-
-    await q.edit_message_text("⚙️ **مدیریت تمپلت‌ها**\nروی هر تمپلت کلیک کنید تا فعال شود، آن را ویرایش کنید یا تمپلت جدید بسازید:", reply_markup=Markup(rows), parse_mode=ParseMode.MARKDOWN)
-
-async def template_action_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-    cfg = load_config()
-
-    if data == "tmpl_new":
-        context.user_data["tmpl_state"] = "waiting_new_name"
-        await q.edit_message_text("📝 نام تمپلت جدید را بفرستید (مثلاً: `اقتصادی`):", reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-        return
-    
-    act, t_name = data.split(":", 1)
-    if act == "tmpl_sel":
-        cfg["active_template"] = t_name
-        save_config(cfg)
-        await q.answer(f"تمپلت فعال روی '{t_name}' تنظیم شد.", show_alert=True)
-        await menu_template(update, context)
-    elif act == "tmpl_del":
-        if len(cfg["templates"]) <= 1:
-            await q.answer("⚠️ حداقل یک تمپلت باید باقی بماند!", show_alert=True)
-            await menu_template(update, context)
-            return
-        del cfg["templates"][t_name]
-        if cfg["active_template"] == t_name:
-            cfg["active_template"] = list(cfg["templates"].keys())[0]
-        save_config(cfg)
-        await menu_template(update, context)
-    elif act == "tmpl_edit":
-        context.user_data["editing_tmpl"] = t_name
-        kb = Markup([
-            [Btn("💾 تغییر نام", callback_data=f"tfield:name:{t_name}"), Btn("📊 تغییر حجم", callback_data=f"tfield:gb:{t_name}")],
-            [Btn("📅 تغییر روز", callback_data=f"tfield:days:{t_name}"), Btn("⏳ تغییر حالت", callback_data=f"tfield:mode:{t_name}")],
-            [Btn("🔙 بازگشت", callback_data="menu_template")]
-        ])
-        t_data = cfg["templates"][t_name]
-        await q.edit_message_text(f"✏️ ویرایش تمپلت: **{t_name}**\nحجم: {t_data['gb']}GB | روز: {t_data['days']} | حالت: {t_data['mode']}\n\nکدام ویژگی ویرایش شود؟", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-
-async def template_field_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    _, field, t_name = q.data.split(":")
-    context.user_data["edit_field"] = field
-    context.user_data["edit_t_name"] = t_name
-
-    if field == "mode":
-        cfg = load_config()
-        curr = cfg["templates"][t_name]["mode"]
-        cfg["templates"][t_name]["mode"] = "active" if curr == "on_hold" else "on_hold"
-        save_config(cfg)
-        await q.edit_message_text(f"✅ حالت تمپلت `{t_name}` تغییر کرد به: `{cfg['templates'][t_name]['mode']}`", reply_markup=main_keyboard(), parse_mode=ParseMode.MARKDOWN)
-        return
-    
-    context.user_data["tmpl_state"] = f"waiting_edit_{field}"
-    prompts = {
-        "name": "📝 نام جدید تمپلت را بفرستید:",
-        "gb": "💾 حجم جدید به گیگابایت (`0` نامحدود):",
-        "days": "📅 تعداد روز اعتبار جدید (`0` نامحدود):"
-    }
-    await q.edit_message_text(prompts.get(field, "مقدار جدید را بفرستید:"), reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-
-async def template_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    state = context.user_data.get("tmpl_state")
-    if not state:
-        return
-
-    text = update.message.text.strip()
-    cfg = load_config()
-
-    if state == "waiting_new_name":
-        context.user_data["new_t_name"] = text
-        context.user_data["tmpl_state"] = "waiting_new_gb"
-        await update.message.reply_text("💾 حجم تمپلت را به **گیگابایت** بفرستید (`0` برای نامحدود):", reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-        return
-    elif state == "waiting_new_gb":
-        try:
-            context.user_data["new_t_gb"] = float(text)
-            context.user_data["tmpl_state"] = "waiting_new_days"
-            await update.message.reply_text("📅 تعداد روزهای اعتبار تمپلت را بفرستید (`0` برای نامحدود):", reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-        except ValueError:
-            await update.message.reply_text("⚠️ لطفاً یک عدد معتبر وارد کنید:")
-        return
-    elif state == "waiting_new_days":
-        try:
-            days = int(text)
-            t_name = context.user_data.get("new_t_name")
-            gb = context.user_data.get("new_t_gb")
-            cfg["templates"][t_name] = {"gb": gb, "days": days, "mode": "on_hold"}
-            cfg["active_template"] = t_name
-            save_config(cfg)
-            for key in ("tmpl_state", "new_t_name", "new_t_gb", "edit_field", "edit_t_name", "editing_tmpl"):
-                context.user_data.pop(key, None)
-            await update.message.reply_text(f"✅ تمپلت جدید **{t_name}** با موفقیت ساخته شد و فعال گردید!", reply_markup=main_keyboard())
-        except ValueError:
-            await update.message.reply_text("⚠️ لطفاً عدد صحیح وارد کنید:")
-        return
-
-    field = context.user_data.get("edit_field")
-    t_name = context.user_data.get("edit_t_name")
-
-    if field == "name":
-        if text in cfg["templates"]:
-            await update.message.reply_text("⚠️ این نام قبلاً وجود دارد. نام دیگری بفرستید:")
-            return
-        cfg["templates"][text] = cfg["templates"].pop(t_name)
-        if cfg["active_template"] == t_name:
-            cfg["active_template"] = text
-    elif field == "gb":
-        try:
-            cfg["templates"][t_name]["gb"] = float(text)
-        except ValueError:
-            await update.message.reply_text("⚠️ عدد معتبر بفرستید:")
-            return
-    elif field == "days":
-        try:
-            cfg["templates"][t_name]["days"] = int(text)
-        except ValueError:
-            await update.message.reply_text("⚠️ عدد صحیح بفرستید:")
-            return
-
-    save_config(cfg)
-    for key in ("tmpl_state", "new_t_name", "new_t_gb", "edit_field", "edit_t_name", "editing_tmpl"):
-        context.user_data.pop(key, None)
-    await update.message.reply_text("✅ تمپلت با موفقیت ویرایش شد!", reply_markup=main_keyboard())
-
-# --- ساخت دستی و گروهی کاربر ---
-async def manual_create_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    cfg = load_config()
-    active_name = cfg.get("active_template", "پیش‌فرض")
-    t_data = cfg.get("templates", {}).get(active_name, {"gb": 30, "days": 30, "mode": "on_hold"})
-    
-    await q.edit_message_text(
-        f"➕ **ساخت دستی / گروهی کاربر**\n\n"
-        f"📌 تمپلت فعال: {active_name} (حجم: {t_data['gb']}GB | اعتبار: {t_data['days']}روز)\n\n"
-        f"👤 لطفاً **نام پایه** کاربران را بفرستید (مثلاً `ali`):",
-        reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN
-    )
-    return MAN_USERNAME
-
-async def manual_get_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["man_base"] = update.message.text.strip()
-    kb = Markup([[Btn("تک کاربر (بدون شماره‌گذاری)", callback_data="mannum_none")], [Btn("❌ انصراف", callback_data="back_main")]])
-    await update.message.reply_text("🔢 عدد شروع شماره‌گذاری را بفرستید (یا گزینه تک کاربر را بزنید):", reply_markup=kb)
-    return MAN_START
-
-async def manual_get_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        await update.callback_query.answer()
-        context.user_data.update({"man_start": None, "man_count": 1})
-        srv_kb = await fetch_services_kb()
-        srv_kb.append([Btn("❌ انصراف", callback_data="back_main")])
-        await update.callback_query.edit_message_text("📂 لطفاً **سرویس مورد نظر** را انتخاب کنید:", reply_markup=Markup(srv_kb))
-        return MAN_SERVICE
-    else:
-        try:
-            context.user_data["man_start"] = int(update.message.text.strip())
-            await update.message.reply_text("📦 لطفاً **تعداد** کاربرانی که می‌خواهید ساخته شوند را بفرستید (مثلاً `5`):", reply_markup=cancel_kb())
-            return MAN_COUNT
-        except ValueError:
-            await update.message.reply_text("⚠️ عدد معتبر بفرستید:")
-            return MAN_START
-
-async def manual_get_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        context.user_data["man_count"] = int(update.message.text.strip())
-    except ValueError:
-        await update.message.reply_text("⚠️ لطفاً عدد صحیح وارد کنید:")
-        return MAN_COUNT
-
-    srv_kb = await fetch_services_kb()
-    srv_kb.append([Btn("❌ انصراف", callback_data="back_main")])
-    await update.message.reply_text("📂 لطفاً **سرویس مورد نظر** را انتخاب کنید:", reply_markup=Markup(srv_kb))
-    return MAN_SERVICE
-
-async def manual_finalize(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    parts = q.data.split(":")
-    service_id = int(parts[1])
-    service_name = parts[2]
-    
-    base = context.user_data.get("man_base")
-    snum = context.user_data.get("man_start")
-    count = context.user_data.get("man_count", 1)
-    
-    cfg = load_config()
-    active_name = cfg.get("active_template")
-    t_data = cfg.get("templates", {}).get(active_name, {"gb": 30, "days": 30, "mode": "on_hold"})
-    
-    limit = int(t_data["gb"] * (1024 ** 3)) if t_data["gb"] > 0 else 0
-    days = t_data["days"]
-    mode = t_data["mode"]
-
-    usernames = [base] if snum is None else [f"{base}{snum + i}" for i in range(count)]
-
-    await q.edit_message_text("⚡ در حال ساخت ترتیبی و پشت سر هم اکانت‌ها...")
-
-    ok = []
-    chat_id = update.effective_chat.id
-
-    for u in usernames:
-        p = {
-            "username": u,
-            "data_limit": limit,
-            "service_id": service_id,
-            "status": mode
-        }
-        if mode == "on_hold":
-            p["on_hold_expire_duration"] = int(days * 86400) if days > 0 else 2592000
-        else:
-            p["expire"] = int(time.time()) + (days * 86400) if days > 0 else 0
-
-        try:
-            r = await api.req("POST", "/api/user", json=p)
-            sub_url = full_sub(r.get("subscription_url", ""))
-            ok.append((u, sub_url))
-        except Exception as e:
-            logging.error(f"Failed to create user {u}: {e}")
-            pass
-        await asyncio.sleep(0.15)
-
-    if not ok:
-        await context.bot.send_message(chat_id=chat_id, text="❌ خطا در ساخت کاربران.", reply_markup=main_keyboard())
-        return ConversationHandler.END
-
-    for u, s in ok[:20]:
-        cap = f"✅ کاربر: {u}\n💾 حجم: {t_data['gb']} GB | اعتبار: {days} روز ({mode})\n📂 سرویس: {service_name}\n\n🔗 لینک ساب (کلیک جهت کپی):\n`{s}`"
-        await context.bot.send_photo(chat_id=chat_id, photo=make_qr(s), caption=cap, parse_mode=ParseMode.MARKDOWN)
-
-    if len(ok) > 1:
-        txt = "=== لیست کاربران و سابسکریپشن‌ها ===\n" + "\n".join(f"{u} | {s}" for u, s in ok)
-        bio = io.BytesIO(txt.encode("utf-8"))
-        bio.name = f"{usernames[0]}_to_{usernames[-1]}.txt"
-        await context.bot.send_document(chat_id=chat_id, document=bio, caption=f"📂 لیست کامل ({len(ok)} کاربر)")
-
-    await context.bot.send_message(chat_id=chat_id, text=f"🎉 تعداد {len(ok)} کاربر به صورت کاملاً ترتیبی ساخته شد.", reply_markup=main_keyboard())
-    return ConversationHandler.END
-
-# --- ساخت سریع با تمپلت ---
-async def quick_create_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    cfg = load_config()
-    active_name = cfg.get("active_template")
-    t_data = cfg.get("templates", {}).get(active_name, {"gb": 30, "days": 30, "mode": "on_hold"})
-    
-    await q.edit_message_text(
-        f"⚡ **ساخت سریع (تمپلت: {active_name})**\nحجم: {t_data['gb']} GB | اعتبار: {t_data['days']} روز\n\n"
-        f"👤 لطفاً **اسم پایه** کاربران را بفرستید (مثلاً `ali`):",
-        reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN
-    )
-    return QUICK_BASE
-
-async def quick_get_base_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["quick_base"] = update.message.text.strip()
-    kb = Markup([[Btn("تک کاربر (بدون عدد)", callback_data="quicknum_none")], [Btn("❌ انصراف", callback_data="back_main")]])
-    await update.message.reply_text("🔢 عدد شروع شماره‌گذاری را بفرستید (یا تک کاربر را انتخاب کنید):", reply_markup=kb)
-    return QUICK_START
-
-async def quick_get_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        await update.callback_query.answer()
-        context.user_data.update({"quick_start": None, "quick_count": 1})
-        srv_kb = await fetch_services_kb()
-        srv_kb.append([Btn("❌ انصراف", callback_data="back_main")])
-        await update.callback_query.edit_message_text("📂 لطفاً **سرویس مورد نظر** برای ساخت را انتخاب کنید:", reply_markup=Markup(srv_kb))
-        return QUICK_SERVICE
-    else:
-        try:
-            context.user_data["quick_start"] = int(update.message.text.strip())
-            await update.message.reply_text("📦 لطفاً **تعداد** کاربرانی که می‌خواهید ساخته شوند را بفرستید (مثلاً `5`):", reply_markup=cancel_kb())
-            return QUICK_COUNT
-        except ValueError:
-            await update.message.reply_text("⚠️ لطفاً عدد صحیح وارد کنید:")
-            return QUICK_START
-
-async def quick_get_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        context.user_data["quick_count"] = int(update.message.text.strip())
-    except ValueError:
-        await update.message.reply_text("⚠️ لطفاً عدد صحیح وارد کنید:")
-        return QUICK_COUNT
-
-    srv_kb = await fetch_services_kb()
-    srv_kb.append([Btn("❌ انصراف", callback_data="back_main")])
-    await update.message.reply_text("📂 لطفاً **سرویس مورد نظر** برای ساخت را انتخاب کنید:", reply_markup=Markup(srv_kb))
-    return QUICK_SERVICE
-
-async def execute_quick_creation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    parts = q.data.split(":")
-    service_id = int(parts[1])
-    service_name = parts[2]
-
-    await q.edit_message_text("⚡ در حال ساخت ترتیبی و پشت سر هم اکانت‌ها...")
-
-    cfg = load_config()
-    base = context.user_data.get("quick_base")
-    snum = context.user_data.get("quick_start")
-    count = context.user_data.get("quick_count", 1)
-    
-    active_name = cfg.get("active_template")
-    t_data = cfg.get("templates", {}).get(active_name, {"gb": 30, "days": 30, "mode": "on_hold"})
-    
-    limit = int(t_data["gb"] * (1024 ** 3)) if t_data["gb"] > 0 else 0
-    days = t_data["days"]
-    mode = t_data["mode"]
-
-    usernames = [base] if snum is None else [f"{base}{snum + i}" for i in range(count)]
-
-    ok = []
-    chat_id = update.effective_chat.id
-
-    for u in usernames:
-        p = {
-            "username": u,
-            "data_limit": limit,
-            "service_id": service_id,
-            "status": mode
-        }
-        if mode == "on_hold":
-            p["on_hold_expire_duration"] = int(days * 86400) if days > 0 else 2592000
-        else:
-            p["expire"] = int(time.time()) + (days * 86400) if days > 0 else 0
-
-        try:
-            r = await api.req("POST", "/api/user", json=p)
-            sub_url = full_sub(r.get("subscription_url", ""))
-            ok.append((u, sub_url))
-        except Exception as e:
-            logging.error(f"Failed to create user {u}: {e}")
-            pass
-        await asyncio.sleep(0.15)
-
-    if not ok:
-        await context.bot.send_message(chat_id=chat_id, text="❌ خطا در ساخت کاربران.", reply_markup=main_keyboard())
-        return ConversationHandler.END
-
-    for u, s in ok[:20]:
-        cap = f"✅ کاربر: {u}\n💾 حجم: {t_data['gb']} GB | اعتبار: {days} روز ({mode})\n📂 سرویس: {service_name}\n\n🔗 لینک ساب (کلیک جهت کپی):\n`{s}`"
-        await context.bot.send_photo(chat_id=chat_id, photo=make_qr(s), caption=cap, parse_mode=ParseMode.MARKDOWN)
-
-    if len(ok) > 1:
-        txt = "=== لیست کاربران و سابسکریپشن‌ها ===\n" + "\n".join(f"{u} | {s}" for u, s in ok)
-        bio = io.BytesIO(txt.encode("utf-8"))
-        bio.name = f"{usernames[0]}_to_{usernames[-1]}.txt"
-        await context.bot.send_document(chat_id=chat_id, document=bio, caption=f"📂 لیست کامل ({len(ok)} کاربر)")
-
-    await context.bot.send_message(chat_id=chat_id, text=f"🎉 تعداد {len(ok)} کاربر به صورت کاملاً ترتیبی ساخته شد.", reply_markup=main_keyboard())
-    return ConversationHandler.END
-
-# --- جستجو و مدیریت کاربر ---
-async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    await q.edit_message_text("🔍 **نام کاربری** را جهت جستجو بفرستید:", reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-    return ASK_SEARCH_USER
-
+# ───────────────────────────── جستجو و مدیریت کاربر ─────────────────────────────
 def render_user(u: dict):
-    uname, st = u["username"], u.get("status", "unknown")
-    sub = full_sub(u.get("subscription_url", ""))
-    txt = (f"👤 کاربر: {uname}\n📡 وضعیت: {st}\n📊 مصرف: {fmt_gb(u.get('used_traffic', 0))} / {fmt_gb(u.get('data_limit', 0))}\n"
-           f"⏳ اعتبار: {fmt_expire(u.get('expire', 0), st, u.get('on_hold_expire_duration', 0))}\n\n🔗 لینک ساب (کلیک جهت کپی):\n`{sub}`")
-    t_lbl = "🔴 غیرفعال" if st != "disabled" else "🟢 فعال"
-    kb = Markup([
-        [Btn("🖼 QR Code", callback_data=f"uact:qr:{uname}")],
-        [Btn("🔄 صفر کردن مصرف", callback_data=f"uact:reset:{uname}"), Btn("✏️ ویرایش", callback_data=f"uact:edit:{uname}")],
-        [Btn("🔗 تغییر ساب", callback_data=f"uact:revoke:{uname}"), Btn(t_lbl, callback_data=f"uact:toggle:{uname}:{st}")],
-        [Btn("🗑 حذف کاربر", callback_data=f"uact:del:{uname}")], [Btn("🔙 منوی اصلی", callback_data="back_main")]
+    name, st = u["username"], u.get("status", "unknown")
+    used, lim = u.get("used_traffic", 0) or 0, u.get("data_limit") or 0
+    pct = f" ({used * 100 / lim:.0f}%)" if lim else ""
+    sub = api.full_sub(u.get("subscription_url", "")) or "نامشخص"
+    text = (f"👤 <b>{esc(name)}</b>\n{STATUS_ICON.get(st, '❔')} وضعیت: {esc(st)}\n"
+            f"📊 مصرف: {C.fmt_gb(used)} / {C.fmt_gb(lim)}{pct}\n"
+            f"⏳ اعتبار: {C.fmt_expire(u.get('expire'), st, u.get('on_hold_expire_duration'))}\n\n🔗 <code>{esc(sub)}</code>")
+    tg = "✅ فعال‌سازی" if st == "disabled" else "⛔ غیرفعال‌سازی"
+    kb = M([
+        [B("🖼 QR", callback_data=f"u:qr:{name}"), B("✏️ ویرایش", callback_data=f"u:edit:{name}")],
+        [B("🔄 صفر کردن مصرف", callback_data=f"u:rst:{name}"), B("🔗 لینک جدید", callback_data=f"u:rev:{name}")],
+        [B(tg, callback_data=f"u:tg:{name}"), B("🗑 حذف", callback_data=f"u:del:{name}")],
+        [B("🔙 منوی اصلی", callback_data="back")],
     ])
-    return txt, kb
+    return text, kb
 
-async def process_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uname = update.message.text.strip()
-    try:
-        u = await api.req("GET", f"/api/user/{uname}")
-        txt, kb = render_user(u)
-        await update.message.reply_text(txt, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    except Exception:
-        res = await api.req("GET", "/api/users", params={"search": uname, "limit": 10})
-        users = res.get("users", [])
-        if not users:
-            await update.message.reply_text("❌ کاربری یافت نشد. مجدداً بفرستید:")
-            return ASK_SEARCH_USER
-        rows = [[Btn(f"👤 {x['username']} ({x['status']})", callback_data=f"uact:view:{x['username']}")] for x in users] + [[Btn("🔙 منوی اصلی", callback_data="back_main")]]
-        await update.message.reply_text("🔍 نتایج مشابه:", reply_markup=Markup(rows))
-    return ConversationHandler.END
 
-async def handle_user_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":")
-    act, uname = parts[1], parts[2]
-    try:
-        if act == "view":
-            await q.answer()
-            txt, kb = render_user(await api.req("GET", f"/api/user/{uname}"))
-            await q.edit_message_text(txt, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-        elif act == "qr":
-            await q.answer("ساخت QR...")
-            u = await api.req("GET", f"/api/user/{uname}")
-            s = full_sub(u.get("subscription_url", ""))
-            await context.bot.send_photo(chat_id=update.effective_chat.id, photo=make_qr(s), caption=f"👤 {uname}\n🔗 `{s}`", parse_mode=ParseMode.MARKDOWN)
-        elif act == "reset":
-            await api.req("POST", f"/api/user/{uname}/reset")
-            await q.answer("✅ مصرف صفر شد.", show_alert=True)
-            txt, kb = render_user(await api.req("GET", f"/api/user/{uname}"))
-            await q.edit_message_text(txt, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-        elif act == "revoke":
-            u = await api.req("POST", f"/api/user/{uname}/revoke_sub")
-            await q.answer("✅ لینک ساب جدید ساخته شد!", show_alert=True)
-            txt, kb = render_user(u)
-            await q.edit_message_text(txt, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-        elif act == "toggle":
-            nst = "disabled" if parts[3] != "disabled" else "active"
-            u = await api.req("PUT", f"/api/user/{uname}", json={"status": nst})
-            await q.answer(f"وضعیت: {nst}")
-            txt, kb = render_user(u)
-            await q.edit_message_text(txt, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-        elif act == "del":
-            await api.req("DELETE", f"/api/user/{uname}")
-            await q.answer("🗑 حذف شد.", show_alert=True)
-            await q.edit_message_text(f"✅ کاربر {uname} حذف شد.", reply_markup=main_keyboard())
-    except Exception as e:
-        await q.answer(f"❌ خطا: {e}", show_alert=True)
-
-async def start_edit_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@admin_only
+async def search_start(update, context):
     await update.callback_query.answer()
-    context.user_data["edit_uname"] = update.callback_query.data.split(":")[2]
-    await update.callback_query.edit_message_text(f"✏️ حجم جدید `{context.user_data['edit_uname']}` را به گیگابایت بفرستید (`0` نامحدود):", reply_markup=cancel_kb(), parse_mode=ParseMode.MARKDOWN)
-    return EDIT_DATA
+    context.user_data.clear()
+    await show(update, context, "🔍 نام کاربری (یا بخشی از آن) را بفرستید:", cancel_kb())
+    return Q_SEARCH
 
-async def edit_get_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try: context.user_data["edit_limit"] = int(float(update.message.text.strip()) * (1024 ** 3))
-    except ValueError:
-        await update.message.reply_text("⚠️ عدد معتبر بفرستید:")
-        return EDIT_DATA
-    await update.message.reply_text("📅 تعداد روز اعتبار جدید را بفرستید (`0` نامحدود):")
-    return EDIT_DAYS_USER
 
-async def edit_get_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try: days = int(update.message.text.strip())
-    except ValueError:
-        await update.message.reply_text("⚠️ عدد صحیح بفرستید:")
-        return EDIT_DAYS_USER
-    uname, limit = context.user_data["edit_uname"], context.user_data["edit_limit"]
-    exp = int(time.time()) + (days * 86400) if days > 0 else 0
+@admin_only
+async def search_do(update, context):
+    q = update.message.text.strip()
     try:
-        await api.req("POST", f"/api/user/{uname}/reset")
-        u = await api.req("PUT", f"/api/user/{uname}", json={"data_limit": limit, "expire": exp, "status": "active"})
-        txt, kb = render_user(u)
-        await update.message.reply_text(f"✅ تمدید شد!\n\n{txt}", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {e}", reply_markup=main_keyboard())
-    return ConversationHandler.END
-
-async def list_users_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    _, st_f, off_s = q.data.split(":")
-    off = int(off_s)
-    params = {"offset": off, "limit": 10}
-    if st_f != "all": params["status"] = st_f
-    res = await api.req("GET", "/api/users", params=params)
-    users, total = res.get("users", []), res.get("total", 0)
-    rows = [[Btn("همه", callback_data="list_users:all:0"), Btn("🟢 فعال", callback_data="list_users:active:0"), Btn("⏳ On-Hold", callback_data="list_users:on_hold:0"), Btn("⚫ منقضی", callback_data="list_users:expired:0")]]
-    for u in users:
-        rows.append([Btn(f"👤 {u['username']} | {fmt_gb(u.get('used_traffic', 0))}/{fmt_gb(u.get('data_limit', 0))}", callback_data=f"uact:view:{u['username']}")])
-    nav = []
-    if off >= 10: nav.append(Btn("⬅️ قبلی", callback_data=f"list_users:{st_f}:{off - 10}"))
-    if off + 10 < total: nav.append(Btn("بعدی ➡️", callback_data=f"list_users:{st_f}:{off + 10}"))
-    if nav: rows.append(nav)
-    rows.append([Btn("🔙 منوی اصلی", callback_data="back_main")])
-    await q.edit_message_text(f"📋 کاربران ({st_f}) — کل: {total}", reply_markup=Markup(rows))
-
-async def stats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    st = await api.req("GET", "/api/system")
-    txt = (f"📊 وضعیت سرور و پنل\n👥 کل: {st.get('total_user', 0)} | 🟢 فعال: {st.get('users_active', 0)} | ⏳ On-Hold: {st.get('users_on_hold', 0)}\n"
-           f"🖥 CPU: {st.get('cpu_usage', 0)}% | 🧠 RAM: {fmt_gb(st.get('mem_used', 0))}/{fmt_gb(st.get('mem_total', 0))}\n"
-           f"📥 دانلود: {fmt_gb(st.get('incoming_bandwidth', 0))} | 📤 آپلود: {fmt_gb(st.get('outgoing_bandwidth', 0))}")
-    kb = Markup([[Btn("🔄 ریستارت هسته Xray", callback_data="restart_core")], [Btn("🔙 منوی اصلی", callback_data="back_main")]])
-    await q.edit_message_text(txt, reply_markup=kb)
-
-async def restart_core_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await api.req("POST", "/api/core/restart")
-    await update.callback_query.answer("✅ هسته Xray ریستارت شد!", show_alert=True)
-
-async def cleanup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer("در حال حذف منقضی‌ها...")
-    r1, r2 = await api.req("GET", "/api/users", params={"status": "expired"}), await api.req("GET", "/api/users", params={"status": "limited"})
-    targets = [u["username"] for u in r1.get("users", []) + r2.get("users", [])]
-    if not targets:
-        await q.edit_message_text("✅ کاربر منقضی وجود ندارد.", reply_markup=main_keyboard())
-        return
-    sem = asyncio.Semaphore(10)
-    async def d(u):
-        async with sem: await api.req("DELETE", f"/api/user/{u}")
-    await asyncio.gather(*(d(u) for u in targets), return_exceptions=True)
-    await q.edit_message_text(f"🧹 تعداد {len(targets)} کاربر منقضی حذف شدند.", reply_markup=main_keyboard())
-
-async def export_all_subs_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("آماده‌سازی فایل...")
-    res = await api.req("GET", "/api/users")
+        try:
+            u = await api.request("GET", api.upath(q), retries=0)
+            text, kb = render_user(u)
+            await update.message.reply_html(text, reply_markup=kb)
+            return END
+        except C.RebeccaError as e:
+            if e.status not in (404, 422, 400):
+                raise
+        res = await api.request("GET", "/api/users", params={"search": q, "limit": 10})
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_html(err_text(e), reply_markup=main_kb())
+        return END
     users = res.get("users", [])
-    bio = io.BytesIO("\n".join(f"{u['username']} | {u['status']} | {full_sub(u.get('subscription_url', ''))}" for u in users).encode("utf-8"))
-    bio.name = f"all_subs_{datetime.now().strftime('%Y%m%d')}.txt"
-    await context.bot.send_document(chat_id=update.effective_chat.id, document=bio, caption=f"📥 کل کاربران ({len(users)})")
+    if not users:
+        await update.message.reply_text("❌ کاربری پیدا نشد. دوباره بفرستید:")
+        return Q_SEARCH
+    rows = [[B(f"{STATUS_ICON.get(x['status'], '❔')} {x['username']}", callback_data=f"u:view:{x['username']}")] for x in users]
+    rows.append([B("🔙 منوی اصلی", callback_data="back")])
+    await update.message.reply_text("🔍 نتایج:", reply_markup=M(rows))
+    return END
 
-def main():
+
+@nav
+async def user_action(update, context):
+    q = update.callback_query
+    _, act, uname = q.data.split(":", 2)
+    p = api.upath(uname)
+    try:
+        if act == "qr":
+            await q.answer("ساخت QR…")
+            u = await api.request("GET", p)
+            sub = api.full_sub(u.get("subscription_url", ""))
+            png = await asyncio.to_thread(C.make_qr_png, sub)
+            await context.bot.send_photo(update.effective_chat.id, png, caption=f"👤 <b>{esc(uname)}</b>\n🔗 <code>{esc(sub)}</code>", parse_mode=HTML)
+            return
+        if act == "del":
+            await q.answer()
+            kb = M([[B("✅ بله، حذف شود", callback_data=f"u:delok:{uname}"), B("↩️ خیر", callback_data=f"u:view:{uname}")]])
+            return await show(update, context, f"⚠️ کاربر <b>{esc(uname)}</b> برای همیشه حذف شود؟", kb)
+        if act == "delok":
+            await api.request("DELETE", p)
+            await q.answer("🗑 حذف شد", show_alert=True)
+            return await home(update, context, f"✅ کاربر {esc(uname)} حذف شد.\n\n")
+        if act == "rst":
+            await api.request("POST", p + "/reset")
+            await q.answer("✅ مصرف صفر شد", show_alert=True)
+        elif act == "rev":
+            await api.request("POST", p + "/revoke_sub")
+            await q.answer("✅ لینک جدید ساخته شد", show_alert=True)
+        elif act == "tg":
+            cur = await api.request("GET", p)
+            new = "active" if cur.get("status") == "disabled" else "disabled"
+            await api.request("PUT", p, json={"status": new})
+            await q.answer(f"وضعیت: {new}")
+        else:
+            await q.answer()
+        text, kb = render_user(await api.request("GET", p))
+        await show(update, context, text, kb)
+    except Exception as e:  # noqa: BLE001
+        await q.answer(f"❌ {str(e)[:180]}", show_alert=True)
+
+
+@admin_only
+async def edit_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    uname = q.data.split(":", 2)[2]
+    context.user_data.clear()
+    context.user_data["eu"] = {"u": uname}
+    await show(update, context, f"✏️ <b>{esc(uname)}</b>\n\n💾 حجم جدید (GB)\n<code>0</code> = نامحدود | <code>-</code> = بدون تغییر",
+               cancel_kb([[B("بدون تغییر", callback_data="e:keep")]]))
+    return E_GB
+
+
+@admin_only
+async def edit_gb(update, context):
+    eu = context.user_data["eu"]
+    if update.callback_query:
+        await update.callback_query.answer()
+        eu["gb"] = None
+    else:
+        t = update.message.text.strip()
+        try:
+            eu["gb"] = None if t == "-" else parse_nonneg(t)
+        except ValueError:
+            await update.message.reply_text("⚠️ عدد معتبر یا - بفرستید:")
+            return E_GB
+    await context.bot.send_message(update.effective_chat.id,
+                                   "📅 اعتبار جدید (روز)\n<code>0</code> = نامحدود | <code>-</code> = بدون تغییر",
+                                   reply_markup=cancel_kb([[B("بدون تغییر", callback_data="e:keep")]]), parse_mode=HTML)
+    return E_DAYS
+
+
+@admin_only
+async def edit_days(update, context):
+    eu = context.user_data["eu"]
+    if update.callback_query:
+        await update.callback_query.answer()
+        days = None
+    else:
+        t = update.message.text.strip()
+        try:
+            days = None if t == "-" else parse_nonneg(t, as_int=True)
+        except ValueError:
+            await update.message.reply_text("⚠️ عدد صحیح یا - بفرستید:")
+            return E_DAYS
+    try:
+        u = await C.apply_user_edit(eu["u"], eu.get("gb"), days)
+        text, kb = render_user(u)
+        await context.bot.send_message(update.effective_chat.id, "✅ ذخیره شد.\n\n" + text, reply_markup=kb, parse_mode=HTML)
+    except Exception as e:  # noqa: BLE001
+        await context.bot.send_message(update.effective_chat.id, err_text(e), reply_markup=main_kb(), parse_mode=HTML)
+    context.user_data.clear()
+    return END
+
+
+# ───────────────────────────── لیست، آمار، پاکسازی، خروجی ─────────────────────────────
+@nav
+async def list_users(update, context):
+    q = update.callback_query
+    await q.answer()
+    _, st, off_s = q.data.split(":")
+    off = int(off_s)
+    try:
+        params = {"offset": off, "limit": 10}
+        if st != "all":
+            params["status"] = st
+        res = await api.request("GET", "/api/users", params=params)
+    except Exception as e:  # noqa: BLE001
+        return await show(update, context, err_text(e), main_kb())
+    users, total = res.get("users", []), res.get("total", 0)
+    flt = [("همه", "all"), ("🟢", "active"), ("⏳", "on_hold"), ("🔴", "expired"), ("⚫", "disabled")]
+    rows = [[B(("• " if k == st else "") + n, callback_data=f"l:{k}:0") for n, k in flt]]
+    for u in users:
+        rows.append([B(f"{STATUS_ICON.get(u['status'], '❔')} {u['username']} | {C.fmt_gb(u.get('used_traffic', 0))}/{C.fmt_gb(u.get('data_limit', 0))}",
+                       callback_data=f"u:view:{u['username']}")])
+    n = []
+    if off >= 10:
+        n.append(B("⬅️ قبلی", callback_data=f"l:{st}:{off - 10}"))
+    if off + 10 < total:
+        n.append(B("بعدی ➡️", callback_data=f"l:{st}:{off + 10}"))
+    if n:
+        rows.append(n)
+    rows.append([B("🔙 منوی اصلی", callback_data="back")])
+    await show(update, context, f"📋 کاربران ({st}) — کل: <b>{total}</b>", M(rows))
+
+
+@nav
+async def stats(update, context):
+    await update.callback_query.answer()
+    try:
+        s = await api.request("GET", "/api/system")
+    except Exception as e:  # noqa: BLE001
+        return await show(update, context, err_text(e), main_kb())
+    text = (f"📊 <b>وضعیت سرور و پنل</b>\n👥 کل: {s.get('total_user', 0)} | 🟢 فعال: {s.get('users_active', 0)} | ⏳ On-Hold: {s.get('users_on_hold', 0)}\n"
+            f"🖥 CPU: {s.get('cpu_usage', 0)}% | 🧠 RAM: {C.fmt_gb(s.get('mem_used', 0))}/{C.fmt_gb(s.get('mem_total', 0))}\n"
+            f"📥 {C.fmt_gb(s.get('incoming_bandwidth', 0))} | 📤 {C.fmt_gb(s.get('outgoing_bandwidth', 0))}")
+    await show(update, context, text, M([[B("🔄 ریستارت هسته Xray", callback_data="core:ask")], [B("🔙 منوی اصلی", callback_data="back")]]))
+
+
+@nav
+async def core_cb(update, context):
+    q = update.callback_query
+    if q.data == "core:ask":
+        await q.answer()
+        return await show(update, context, "⚠️ هسته Xray ریستارت شود؟ اتصال کاربران چند ثانیه قطع می‌شود.",
+                          M([[B("✅ بله", callback_data="core:go"), B("↩️ خیر", callback_data="stats")]]))
+    try:
+        await api.request("POST", "/api/core/restart")
+        await q.answer("✅ ریستارت شد", show_alert=True)
+    except Exception as e:  # noqa: BLE001
+        await q.answer(f"❌ {str(e)[:180]}", show_alert=True)
+
+
+@nav
+async def clean_cb(update, context):
+    q = update.callback_query
+    await q.answer()
+    try:
+        users = await api.iter_users("expired") + await api.iter_users("limited")
+    except Exception as e:  # noqa: BLE001
+        return await show(update, context, err_text(e), main_kb())
+    if q.data == "clean:ask":
+        if not users:
+            return await show(update, context, "✅ کاربر منقضی/محدودشده‌ای وجود ندارد.", main_kb())
+        return await show(update, context, f"⚠️ <b>{len(users)}</b> کاربر منقضی/محدودشده برای همیشه حذف شوند؟",
+                          M([[B("✅ حذف شوند", callback_data="clean:go"), B("↩️ انصراف", callback_data="back")]]))
+    await show(update, context, f"⏳ در حال حذف {len(users)} کاربر…")
+    n = await C.delete_users([u["username"] for u in users])
+    await show(update, context, f"🧹 {n} از {len(users)} کاربر حذف شد.", main_kb())
+
+
+@nav
+async def export_cb(update, context):
+    await update.callback_query.answer("آماده‌سازی فایل…")
+    try:
+        users = await api.iter_users()
+    except Exception as e:  # noqa: BLE001
+        return await show(update, context, err_text(e), main_kb())
+    txt = "\n".join(f"{u['username']} | {u['status']} | {api.full_sub(u.get('subscription_url', ''))}" for u in users)
+    bio = io.BytesIO(txt.encode("utf-8"))
+    bio.name = f"all_subs_{time.strftime('%Y%m%d')}.txt"
+    await context.bot.send_document(update.effective_chat.id, bio, caption=f"📥 کل کاربران ({len(users)})")
+
+
+# ───────────────────────────── راه‌اندازی ─────────────────────────────
+async def on_error(update, context):
+    log.error("خطا در پردازش آپدیت", exc_info=context.error)
+    try:
+        if isinstance(update, Update) and update.callback_query:
+            await update.callback_query.answer("❌ خطای داخلی؛ دوباره تلاش کنید.", show_alert=True)
+    except TelegramError:
+        pass
+
+
+async def post_init(app: Application):
+    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("cancel", "لغو عملیات جاری")])
+
+
+def build_app() -> Application:
     cfg = load_config()
-    app = Application.builder().token(cfg["bot_token"]).build()
+    if not cfg["bot_token"]:
+        raise SystemExit("bot_token در config.json خالی است. نصب را دوباره اجرا کنید یا وب‌پنل > تنظیمات را پر کنید.")
+    app = Application.builder().token(cfg["bot_token"]).concurrent_updates(True).post_init(post_init).build()
+
+    txt = filters.TEXT & ~filters.COMMAND
+    cb = CallbackQueryHandler
     conv = ConversationHandler(
         entry_points=[
-            CommandHandler("start", start_cmd), 
-            CallbackQueryHandler(start_setup_panel, pattern="^setup_panel$"),
-            CallbackQueryHandler(quick_create_start, pattern="^quick_create$"),
-            CallbackQueryHandler(manual_create_start, pattern="^manual_create$"),
-            CallbackQueryHandler(menu_template, pattern="^menu_template$"),
-            CallbackQueryHandler(start_search, pattern="^menu_search$"),
-            CallbackQueryHandler(start_edit_user, pattern="^uact:edit:")
+            CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd),
+            cb(back_cb, pattern=r"^back$"),
+            cb(create_entry, pattern=r"^c:(quick|pick)$"),
+            cb(tpl_new, pattern=r"^t:new$"), cb(tpl_edit_field, pattern=r"^te:(name|gb|days):\d+$"),
+            cb(setup_start, pattern=r"^setup$"), cb(search_start, pattern=r"^search$"),
+            cb(edit_start, pattern=r"^u:edit:"),
+            # مستقل‌ها: هرکدام گفتگوی باز را می‌بندند
+            cb(tpl_menu, pattern=r"^t:menu$"), cb(tpl_action, pattern=r"^t:(sel|del|mode|edit):\d+$"),
+            cb(list_users, pattern=r"^l:"), cb(stats, pattern=r"^stats$"), cb(core_cb, pattern=r"^core:(ask|go)$"),
+            cb(clean_cb, pattern=r"^clean:(ask|go)$"), cb(export_cb, pattern=r"^export$"),
+            cb(user_action, pattern=r"^u:(view|qr|rst|rev|tg|del|delok):"),
         ],
         states={
-            SET_PANEL_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_panel_url)],
-            SET_SUB_URL: [CallbackQueryHandler(get_sub_url, pattern="^skip_sub_url$"), MessageHandler(filters.TEXT & ~filters.COMMAND, get_sub_url)],
-            SET_PANEL_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_panel_user)],
-            SET_PANEL_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_panel_pass)],
-            
-            # حالات ساخت دستی و گروهی
-            MAN_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_get_username)],
-            MAN_START: [
-                CallbackQueryHandler(manual_get_start, pattern="^mannum_none$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, manual_get_start)
-            ],
-            MAN_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_get_count)],
-            MAN_SERVICE: [CallbackQueryHandler(manual_finalize, pattern="^srv_id:")],
-
-            # حالات ساخت سریع تمپلت
-            QUICK_BASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, quick_get_base_name)],
-            QUICK_START: [
-                CallbackQueryHandler(quick_get_start, pattern="^quicknum_none$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, quick_get_start)
-            ],
-            QUICK_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, quick_get_count)],
-            QUICK_SERVICE: [CallbackQueryHandler(execute_quick_creation, pattern="^srv_id:")],
-
-            ASK_SEARCH_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_search)],
-            EDIT_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_get_data)],
-            EDIT_DAYS_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_get_days)],
+            C_TPL: [cb(create_pick_tpl, pattern=r"^c:t:\d+$")],
+            C_BASE: [MessageHandler(txt, create_base)],
+            C_START: [cb(create_start, pattern=r"^c:single$"), MessageHandler(txt, create_start)],
+            C_COUNT: [MessageHandler(txt, create_count)],
+            C_SERVICE: [cb(create_service, pattern=r"^srv:\d+$")],
+            C_CONFIRM: [cb(create_go, pattern=r"^c:go$")],
+            T_NAME: [MessageHandler(txt, tpl_new_name)], T_GB: [MessageHandler(txt, tpl_new_gb)],
+            T_DAYS: [MessageHandler(txt, tpl_new_days)], T_EDIT: [MessageHandler(txt, tpl_edit_value)],
+            S_URL: [MessageHandler(txt, setup_url)],
+            S_SUB: [cb(setup_sub, pattern=r"^s:skip$"), MessageHandler(txt, setup_sub)],
+            S_USER: [MessageHandler(txt, setup_user)], S_PASS: [MessageHandler(txt, setup_pass)],
+            Q_SEARCH: [MessageHandler(txt, search_do)],
+            E_GB: [cb(edit_gb, pattern=r"^e:keep$"), MessageHandler(txt, edit_gb)],
+            E_DAYS: [cb(edit_days, pattern=r"^e:keep$"), MessageHandler(txt, edit_days)],
         },
-        fallbacks=[CommandHandler("start", start_cmd), CallbackQueryHandler(start_cmd, pattern="^back_main$")],
+        fallbacks=[CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), cb(back_cb, pattern=r"^back$")],
         allow_reentry=True,
     )
     app.add_handler(conv)
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CallbackQueryHandler(start_cmd, pattern="^back_main$"))
-    app.add_handler(CallbackQueryHandler(menu_template, pattern="^menu_template$"))
-    app.add_handler(CallbackQueryHandler(template_action_router, pattern=r"^(tmpl_sel:|tmpl_del:|tmpl_edit:|tmpl_new$)"))
-    app.add_handler(CallbackQueryHandler(template_field_router, pattern="^tfield:"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, template_text_handler))
-    app.add_handler(CallbackQueryHandler(list_users_cb, pattern="^list_users:"))
-    app.add_handler(CallbackQueryHandler(stats_cb, pattern="^menu_stats$"))
-    app.add_handler(CallbackQueryHandler(restart_core_cb, pattern="^restart_core$"))
-    app.add_handler(CallbackQueryHandler(cleanup_cb, pattern="^menu_cleanup$"))
-    app.add_handler(CallbackQueryHandler(export_all_subs_cb, pattern="^export_all_subs$"))
-    app.add_handler(CallbackQueryHandler(handle_user_action, pattern="^uact:(view|qr|reset|revoke|toggle|del):"))
-    print("✅ Rebecca Telegram Bot Started Successfully!")
-    app.run_polling(drop_pending_updates=True)
+    app.add_error_handler(on_error)
+    return app
+
+
+def main():
+    app = build_app()
+    log.info("✅ Rebecca bot started")
+    app.run_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query"])
+
 
 if __name__ == "__main__":
     main()
