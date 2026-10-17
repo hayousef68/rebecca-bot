@@ -1,62 +1,49 @@
-bash <(curl -s https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh)
-
-
-
-
-
 # rebecca-bot
 
+ربات تلگرام + وب‌پنل برای ساخت **گروهی** اکانت در پنل ربکا، همراه با لینک ساب و QR Code.
 
+## نصب (تک‌خطی)
 
-نصب 
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh)
+```
 
-apt update && apt install -y python3-venv python3-full git && rm -rf /opt/rebecca-bot && git clone https://github.com/hayousef68/rebecca-bot.git /opt/rebecca-bot && cd /opt/rebecca-bot && python3 -m venv /opt/rebecca-bot/venv && /opt/rebecca-bot/venv/bin/pip install --upgrade pip && /opt/rebecca-bot/venv/bin/pip install httpx qrcode python-telegram-bot fastapi uvicorn && cp /opt/rebecca-bot/*.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable rebecca-bot rebecca-webapp && systemctl restart rebecca-bot rebecca-webapp && echo "✅ نصب و راه‌اندازی از گیت‌هاب با موفقیت انجام شد!"
+نصب بدون سؤال:
 
+```bash
+BOT_TOKEN=123456:ABC... ADMIN_ID=111111,222222 WEB_PORT=8686 bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh)
+```
 
+در پایان آدرس وب‌پنل، نام کاربری و رمز تصادفی نمایش داده می‌شود. سپس در تلگرام `/start` بزنید و «اتصال به پنل ربکا» را انجام دهید (یا از وب‌پنل > تنظیمات).
 
-. راه‌اندازی و فعال‌سازی سرویس Systemd
+## حذف (تک‌خطی)
 
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh) uninstall -y
+```
 
-cat <<EOF > /etc/systemd/system/rebecca-bot.service
-[Unit]
-Description=Rebecca Panel Telegram Bot
-After=network.target
+(برای نگه‌داشتن نسخه پشتیبان تنظیمات: `uninstall -y --keep-config`)
 
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/rebecca-bot
-ExecStart=/opt/rebecca-bot/venv/bin/python3 /opt/rebecca-bot/bot.py
-Restart=always
-RestartSec=3
+## مدیریت
 
-[Install]
-WantedBy=multi-user.target
-EOF
+بعد از نصب دستور `rebecca-bot` ساخته می‌شود:
 
-systemctl daemon-reload
-systemctl enable rebecca-bot
-systemctl start rebecca-bot
+| دستور | کار |
+|---|---|
+| `rebecca-bot update` | به‌روزرسانی (config حفظ می‌شود) |
+| `rebecca-bot restart` | ریستارت سرویس‌ها |
+| `rebecca-bot status` / `logs` | وضعیت / لاگ زنده |
+| `rebecca-bot passwd` | رمز جدید وب‌پنل |
+| `rebecca-bot info` | آدرس و پورت وب‌پنل |
+| `rebecca-bot uninstall` | حذف کامل |
 
+## ساخت گروهی
 
+در ربات یا وب‌پنل: نام پایه + عدد شروع + تعداد. مثال: `ali 1 10` یعنی `ali1` تا `ali10`.
+QRها در آلبوم‌های ۱۰تایی به تلگرام فرستاده می‌شوند و یک فایل txt از همه لینک‌ها هم ارسال می‌شود.
 
+## امنیت
 
-ریستارت کردن ربات
-
-systemctl restart rebecca-bot
-
-
-
-مشاهده لاگ
-
-journalctl -u rebecca-bot -f
-
-
-
-حذف کامل ربات و سرویس
-
-systemctl stop rebecca-bot
-systemctl disable rebecca-bot
-rm -f /etc/systemd/system/rebecca-bot.service
-systemctl daemon-reload
-rm -rf /opt/rebecca-bot
+- رمز وب‌پنل هش‌شده (PBKDF2) در `config.json` با دسترسی 600 ذخیره می‌شود، نه داخل کد.
+- وب‌پنل را پشت HTTPS (Nginx/Caddy) بگذارید یا پورت را فقط برای IP خودتان باز کنید.
+- هیچ توکن/رمزی را داخل ریپوی عمومی نگذارید.
