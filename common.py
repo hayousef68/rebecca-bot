@@ -40,6 +40,7 @@ DEFAULT_CFG = {
     "active_panel": "",
     "templates": DEFAULT_TEMPLATES,
     "active_template": "",
+    "default_prefix": "MS_",
     "max_batch": 200,
     "max_qr": 100,
     "web_port": 8686,
@@ -55,6 +56,8 @@ DEFAULT_CFG = {
         "schema": {},
         "hamkari_service_ids": [],
         "hamkari_service_names": ["hamkari"],
+        "ignore_service_names": ["tes", "test"],
+        "fallback_plan_gb": 30,
         "single_prices": [
             {"gb": 30, "months": 1, "price": 150000},
             {"gb": 60, "months": 1, "price": 250000},
@@ -148,7 +151,7 @@ def _normalize(data: dict) -> dict:
     sales = copy.deepcopy(DEFAULT_CFG["sales"])
     if isinstance(cfg.get("sales"), dict):
         sales.update(cfg["sales"])
-    for k in ("hamkari_service_ids", "hamkari_service_names", "single_prices"):
+    for k in ("hamkari_service_ids", "hamkari_service_names", "ignore_service_names", "single_prices"):
         if not isinstance(sales.get(k), list):
             sales[k] = copy.deepcopy(DEFAULT_CFG["sales"][k])
     sales["single_prices"] = [p for p in sales["single_prices"] if isinstance(p, dict) and {"gb", "months", "price"} <= p.keys()]
@@ -158,6 +161,8 @@ def _normalize(data: dict) -> dict:
         except (TypeError, ValueError):
             sales[k] = DEFAULT_CFG["sales"][k]
     cfg["sales"] = sales
+    pre = str(cfg.get("default_prefix") or "")
+    cfg["default_prefix"] = pre if re.fullmatch(r"[A-Za-z0-9_]{0,28}", pre) else DEFAULT_CFG["default_prefix"]
     for key in ("monitor", "reminders"):
         sec = copy.deepcopy(DEFAULT_CFG[key])
         if isinstance(cfg.get(key), dict):
