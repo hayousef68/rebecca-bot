@@ -196,19 +196,70 @@ async def create_pick_panel(update, context):
     return await ask_base(update, context)
 
 
+async def _suggest(cr: dict, prefix: str | None = None):
+    """آخرین نام‌کاربری با پیشوند و شماره‌ی بعدی؛ در صورت خطا None."""
+    cfg = load_config()
+    try:
+        return await asyncio.wait_for(
+            sales.next_number(get_api(cr["pid"]), prefix or cfg["default_prefix"], len(cfg["panels"]) <= 1), 20)
+    except Exception as e:  # noqa: BLE001
+        log.warning("suggest next name: %s", e)
+        return None
+
+
 async def ask_base(update, context):
     cfg = load_config()
     cr = context.user_data["cr"]
     name = cr["tpl"]
     t = cfg["templates"][name]
     pn = get_panel(cfg, cr["pid"])
+    sg = await _suggest(cr)
+    rows, hint = [], ""
+    if sg and cfg["default_prefix"]:
+        cr["auto"] = {"base": sg["prefix"], "start": sg["next"]}
+        nxt = f"{sg['prefix']}{sg['next']}"
+        hint = (f"\n💡 آخرین کاربر: <code>{esc(sg['last'])}</code> ← بعدی: <code>{esc(nxt)}</code>" if sg["last"]
+                else f"\n💡 شروع پیشنهادی: <code>{esc(nxt)}</code>")
+        rows.append([B(f"⚡ ساخت {nxt} (۱ کاربر)", callback_data="c:auto")])
     await show(update, context,
-               f"➕ <b>ساخت اکانت</b>\n🖥 پنل: <b>{esc(pn['name'])}</b>\n📌 تمپلت: <b>{esc(name)}</b>\n{esc(C.tpl_summary(t))}\n\n"
+               f"➕ <b>ساخت اکانت</b>\n🖥 پنل: <b>{esc(pn['name'])}</b>\n📌 تمپلت: <b>{esc(name)}</b>\n{esc(C.tpl_summary(t))}{hint}\n\n"
                "👤 <b>نام پایه</b> را بفرستید:\n"
                "• <code>ali</code> ← یک کاربر\n"
-               "• <code>ali 1 10</code> ← ۱۰ کاربر: ali1 تا ali10",
-               cancel_kb())
+               "• <code>MS_ 150 10</code> ← ۱۰ کاربر: MS_150 تا MS_159",
+               cancel_kb(rows))
     return C_BASE
+
+
+@admin_only
+async def create_auto(update, context):
+    q = update.callback_query
+    await q.answer()
+    cr = context.user_data.get("cr") or {}
+    a = cr.get("auto")
+    if not a:
+        await q.answer("پیشنهادی موجود نیست؛ نام را بفرستید", show_alert=True)
+        return C_BASE
+    cr.update(base=a["base"], start=a["start"], count=1)
+    return await validate_and_pick_service(update, context)
+
+
+@admin_only
+async def create_one(update, context):
+    q = update.callback_query
+    await q.answer()
+    context.user_data["cr"]["count"] = 1
+    return await validate_and_pick_service(update, context)
+
+
+@admin_only
+async def create_next(update, context):
+    q = update.callback_query
+    await q.answer()
+    cr = context.user_data["cr"]
+    cr["start"] = (cr.get("auto2") or {}).get("start", 1)
+    await show(update, context, f"📦 <b>تعداد</b> کاربران را بفرستید (حداکثر {load_config()['max_batch']}):",
+               cancel_kb([[B("۱ کاربر", callback_data="c:one")]]))
+    return C_COUNT
 
 
 @admin_only
@@ -222,10 +273,15 @@ async def create_base(update, context):
         await update.message.reply_text("⚠️ فقط نام پایه یا الگوی «نام شروع تعداد» (مثل ali 1 10) را بفرستید:")
         return C_BASE
     cr["base"] = parts[0]
-    await update.message.reply_html(
-        "🔢 عدد شروع شماره‌گذاری را بفرستید، یا «تک کاربر» را بزنید:",
-        reply_markup=cancel_kb([[B("تک کاربر (بدون عدد)", callback_data="c:single")]]),
-    )
+    rows = [[B("تک کاربر (بدون عدد)", callback_data="c:single")]]
+    sg = await _suggest(cr, parts[0])
+    if sg:
+        cr["auto2"] = {"start": sg["next"]}
+        rows.insert(0, [B(f"شروع از {sg['next']} (پیشنهاد)", callback_data="c:next")])
+        note = f"\n💡 آخرین: <code>{esc(sg['last'])}</code>" if sg["last"] else ""
+    else:
+        note = ""
+    await update.message.reply_html(f"🔢 عدد شروع شماره‌گذاری را بفرستید، یا «تک کاربر» را بزنید:{note}", reply_markup=cancel_kb(rows))
     return C_START
 
 
@@ -242,7 +298,8 @@ async def create_start(update, context):
         return C_START
     cr["start"] = int(txt)
     await update.message.reply_html(
-        f"📦 <b>تعداد</b> کاربران را بفرستید (حداکثر {load_config()['max_batch']}):", reply_markup=cancel_kb()
+        f"📦 <b>تعداد</b> کاربران را بفرستید (حداکثر {load_config()['max_batch']}):",
+        reply_markup=cancel_kb([[B("۱ کاربر", callback_data="c:one")]]),
     )
     return C_COUNT
 
@@ -1385,9 +1442,9 @@ def build_app() -> Application:
             C_TPL: [cb(create_pick_tpl, pattern=r"^c:t:\d+$")],
             C_PANEL: [cb(create_pick_panel, pattern=r"^c:p:\w+$")],
             S_NAME: [MessageHandler(txt, setup_name)],
-            C_BASE: [MessageHandler(txt, create_base)],
-            C_START: [cb(create_start, pattern=r"^c:single$"), MessageHandler(txt, create_start)],
-            C_COUNT: [MessageHandler(txt, create_count)],
+            C_BASE: [cb(create_auto, pattern=r"^c:auto$"), MessageHandler(txt, create_base)],
+            C_START: [cb(create_next, pattern=r"^c:next$"), cb(create_start, pattern=r"^c:single$"), MessageHandler(txt, create_start)],
+            C_COUNT: [cb(create_one, pattern=r"^c:one$"), MessageHandler(txt, create_count)],
             C_SERVICE: [cb(create_service, pattern=r"^srv:\d+$")],
             C_CONFIRM: [cb(create_go, pattern=r"^c:go$")],
             T_NAME: [MessageHandler(txt, tpl_new_name)], T_GB: [MessageHandler(txt, tpl_new_gb)],
