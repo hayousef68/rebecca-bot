@@ -264,11 +264,13 @@ async function vHome() {
   } catch (e) { box.replaceChildren(h('p', { class: 'err' }, e.message)); }
   const rep = h('pre', { style: 'white-space:pre-wrap;font:inherit;line-height:1.9;margin:8px 0 0' }, 'در حال بارگذاری…');
   const loadRep = async d => { try { rep.textContent = (await api('/report?day=' + d)).text; } catch (e) { rep.textContent = e.message; } };
+  const detBtn = h('button', { class: 'btn' }, '🔎 جزئیات امروز');
+  detBtn.onclick = () => run(detBtn, async () => { rep.textContent = (await api('/report/events?day=today')).text; });
   const sendBtn = h('button', { class: 'btn pri' }, '📤 ارسال گزارش امروز به ربات');
   sendBtn.onclick = () => run(sendBtn, async () => { await api('/report/send?day=today', 'POST'); toast('✅ گزارش به تلگرام ارسال شد'); });
   const repCard = h('div', { class: 'card' }, h('h2', {}, '📈 گزارش فروش'),
     h('div', { class: 'chips', style: 'padding-bottom:4px' }, h('button', { class: 'chip on', onclick: () => loadRep('today') }, 'امروز'), h('button', { class: 'chip', onclick: () => loadRep('yesterday') }, 'دیروز')),
-    rep, h('div', { class: 'btns' }, sendBtn), h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
+    rep, h('div', { class: 'btns' }, sendBtn, detBtn), h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
   loadRep('today'); mount(box, h('div', { style: 'height:12px' }), repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const clean = h('button', { class: 'btn' }, '🧹 پاکسازی منقضی‌ها'); const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   clean.onclick = () => run(clean, async () => {
@@ -338,7 +340,34 @@ async function vSet() {
   saveB.onclick = () => run(saveB, async () => { const r = await api('/settings', 'POST', { bot_token: tok.value, admin_ids: adm.value }); toast(r.bot_restarted ? 'ذخیره شد و ربات ریستارت شد' : 'ذخیره شد'); await refreshState(); });
   const saveW = h('button', { class: 'btn' }, 'تغییر رمز وب‌پنل');
   saveW.onclick = () => run(saveW, async () => { await api('/settings', 'POST', { web_password: wp.value }); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
+  // قیمت‌ها و لیست فروش
+  let sc = {}; try { sc = await api('/sales/settings'); } catch (e) { sc = null; }
+  let priceCard = h('div', { class: 'card' }, h('h2', {}, '💰 قیمت‌ها'), h('p', { class: 'err' }, 'خطا در دریافت تنظیمات فروش'));
+  if (sc) {
+    const ham = i(sc.hamkari_per_gb, '3000', 'number'), buy = i(sc.buy_per_tb, '750000', 'number'), mul = i(sc.hamkari_usage_multiplier, '1.5', 'number'), svc = i(sc.hamkari_service_names, 'hamkari');
+    const rows = h('div', {});
+    const addRow = p => {
+      const g = i(p.gb, 'گیگ', 'number'), m = i(p.months, 'ماه', 'number'), pr = i(p.price, 'قیمت', 'number');
+      const del = h('button', { class: 'btn sm bad', type: 'button' }, '🗑');
+      const row = h('div', { class: 'btns', style: 'align-items:center;margin-bottom:6px' }, g, m, pr, del); row._f = { g, m, pr };
+      del.onclick = () => row.remove(); rows.append(row);
+    };
+    sc.single_prices.forEach(addRow);
+    const addB = h('button', { class: 'btn sm', type: 'button' }, '➕ پلن جدید'); addB.onclick = () => addRow({ gb: '', months: 1, price: '' });
+    const saveS = h('button', { class: 'btn pri' }, 'ذخیره قیمت‌ها');
+    saveS.onclick = () => run(saveS, async () => {
+      const single_prices = [...rows.children].map(r => ({ gb: +r._f.g.value, months: +r._f.m.value, price: +r._f.pr.value }));
+      await api('/sales/settings', 'POST', { hamkari_per_gb: +ham.value, buy_per_tb: +buy.value, hamkari_usage_multiplier: +mul.value, hamkari_service_names: svc.value, single_prices });
+      toast('✅ قیمت‌ها ذخیره شد (از گزارش بعدی اعمال می‌شود)');
+    });
+    priceCard = h('div', { class: 'card' }, h('h2', {}, '💰 قیمت‌ها و لیست فروش'),
+      field('قیمت هر گیگ همکاری (تومان)', ham), field('نام سرویس همکاری (با کاما)', svc),
+      field('قیمت خرید هر ترابایت (تومان)', buy), field('ضریب مصرف همکاری', mul),
+      h('h2', { style: 'font-size:13px;margin:10px 0 6px' }, 'لیست قیمت فروش تکی (گیگ | ماه | قیمت)'), rows,
+      h('div', { class: 'btns' }, addB, saveS));
+  }
   mount(
+    priceCard,
     h('h2', { style: 'font-size:13px;margin:0 2px 8px' }, `پنل‌های ربکا (${c.panels.length})`), ...list,
     h('div', { class: 'card' }, ptitle, field('نام پنل', nm), field('آدرس پنل', url), field('دامنه سابسکریپشن', sub), field('نام کاربری ادمین', user), field('رمز عبور', pass),
       h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
