@@ -124,6 +124,58 @@ async def report(day: str = "today"):
     return {"day": d, "text": await asyncio.to_thread(sales.build_report, d, html=False, partial=(d == today))}
 
 
+@app.get("/api/report/events", dependencies=[Depends(guard)])
+async def report_events(day: str = "today"):
+    today = sales.tehran_day()
+    d = {"today": today, "yesterday": sales.shift_day(today, -1)}.get(day, day)
+    try:
+        sales.shift_day(d, 0)
+    except ValueError:
+        raise HTTPException(400, "تاریخ نامعتبر")
+    return {"day": d, "text": await asyncio.to_thread(sales.build_events, d, False, d == today, 300)}
+
+
+class PlanReq(BaseModel):
+    gb: int = Field(ge=1, le=100000)
+    months: int = Field(ge=1, le=24)
+    price: int = Field(ge=0, le=10**10)
+
+
+class SalesReq(BaseModel):
+    hamkari_per_gb: int = Field(ge=0, le=10**8)
+    buy_per_tb: int = Field(ge=0, le=10**10)
+    hamkari_usage_multiplier: float = Field(ge=0.1, le=100)
+    hamkari_service_names: str = Field(default="hamkari", max_length=200)
+    single_prices: list[PlanReq] = Field(max_length=50)
+
+
+@app.get("/api/sales/settings", dependencies=[Depends(guard)])
+async def sales_settings_get():
+    sc = load_config()["sales"]
+    return {"hamkari_per_gb": sc["hamkari_per_gb"], "buy_per_tb": sc.get("buy_per_tb", 750000),
+            "hamkari_usage_multiplier": sc.get("hamkari_usage_multiplier", 1.5),
+            "hamkari_service_names": ", ".join(sc.get("hamkari_service_names", [])),
+            "single_prices": sorted(sc["single_prices"], key=lambda x: (x["months"], x["gb"]))}
+
+
+@app.post("/api/sales/settings", dependencies=[Depends(guard)])
+async def sales_settings_save(r: SalesReq):
+    names = [n.strip() for n in r.hamkari_service_names.split(",") if n.strip()]
+    plans, seen = [], set()
+    for p in r.single_prices:
+        if (p.gb, p.months) in seen:
+            raise HTTPException(400, f"پلن تکراری: {p.gb} گیگ {p.months} ماهه")
+        seen.add((p.gb, p.months))
+        plans.append({"gb": p.gb, "months": p.months, "price": p.price})
+
+    def mut(c):
+        c["sales"].update(hamkari_per_gb=r.hamkari_per_gb, buy_per_tb=r.buy_per_tb,
+                          hamkari_usage_multiplier=r.hamkari_usage_multiplier,
+                          hamkari_service_names=names or ["hamkari"], single_prices=plans)
+    update_config(mut)
+    return {"ok": True}
+
+
 @app.post("/api/report/send", dependencies=[Depends(guard)])
 async def report_send(day: str = "today"):
     """گزارش را همین الان به ادمین‌ها در تلگرام می‌فرستد (فقط یک کوئری read-only)."""
