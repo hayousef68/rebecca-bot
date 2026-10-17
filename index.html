@@ -264,9 +264,11 @@ async function vHome() {
   } catch (e) { box.replaceChildren(h('p', { class: 'err' }, e.message)); }
   const rep = h('pre', { style: 'white-space:pre-wrap;font:inherit;line-height:1.9;margin:8px 0 0' }, 'در حال بارگذاری…');
   const loadRep = async d => { try { rep.textContent = (await api('/report?day=' + d)).text; } catch (e) { rep.textContent = e.message; } };
+  const sendBtn = h('button', { class: 'btn pri' }, '📤 ارسال گزارش امروز به ربات');
+  sendBtn.onclick = () => run(sendBtn, async () => { await api('/report/send?day=today', 'POST'); toast('✅ گزارش به تلگرام ارسال شد'); });
   const repCard = h('div', { class: 'card' }, h('h2', {}, '📈 گزارش فروش'),
     h('div', { class: 'chips', style: 'padding-bottom:4px' }, h('button', { class: 'chip on', onclick: () => loadRep('today') }, 'امروز'), h('button', { class: 'chip', onclick: () => loadRep('yesterday') }, 'دیروز')),
-    rep, h('p', { class: 'hint' }, 'ساخت و تمدیدهایی که روی پنل می‌زنید هر چند دقیقه شناسایی می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ در تلگرام می‌آید.'));
+    rep, h('div', { class: 'btns' }, sendBtn), h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
   loadRep('today'); mount(box, h('div', { style: 'height:12px' }), repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const clean = h('button', { class: 'btn' }, '🧹 پاکسازی منقضی‌ها'); const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   clean.onclick = () => run(clean, async () => {
