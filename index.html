@@ -153,31 +153,56 @@ async function vCreate() {
   const psel = h('select', {}, st.panels.map(p => h('option', { value: p.id, selected: p.id === S.panel }, p.name + (p.ok ? '' : ' (ناقص)'))));
   psel.onchange = () => setPanel(psel.value);
   const tpl = h('select', {}, Object.entries(st.templates).map(([n, t]) => h('option', { value: n, selected: n === st.active }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
-  const base = h('input', { placeholder: 'ali', autocapitalize: 'none', autocomplete: 'off', dir: 'ltr', maxlength: 32 });
-  const start = h('input', { type: 'number', inputmode: 'numeric', min: 0, placeholder: 'خالی = تک کاربر', dir: 'ltr' });
-  const count = h('input', { type: 'number', inputmode: 'numeric', min: 1, max: st.max_batch, value: 10, dir: 'ltr' });
+  const ltr = { autocapitalize: 'none', autocomplete: 'off', dir: 'ltr', maxlength: 32 };
+  const base = h('input', { ...ltr, value: st.default_prefix, placeholder: 'MS_' });
+  const start = h('input', { type: 'number', inputmode: 'numeric', min: 0, dir: 'ltr', placeholder: '…' });
+  const count = h('input', { type: 'number', inputmode: 'numeric', min: 1, max: st.max_batch, value: 1, dir: 'ltr' });
+  const one = h('input', { ...ltr, placeholder: 'MS_150' });             // حالت تکی: نام کامل
   const svc = h('select', {}, services.map(s => h('option', { value: s.id }, s.name)));
   const tg = h('input', { type: 'checkbox', id: 'tg', checked: st.bot });
-  const prev = h('p', { class: 'hint' });
+  const prev = h('p', { class: 'hint' }), last = h('p', { class: 'hint' });
   const out = h('div');
+  let mode = S.cmode || 'group';
+  const chipS = h('button', { class: 'chip', type: 'button' }, '👤 تکی'), chipG = h('button', { class: 'chip', type: 'button' }, '👥 گروهی');
+  const grpBox = h('div', {}, field('پیشوند نام کاربری', base), h('div', { class: 'row' }, field('عدد شروع (خودکار)', start), field('تعداد', count)));
+  const oneBox = h('div', {}, field('نام کاربری', one));
   const upd = () => {
-    const b = base.value.trim(), s = start.value.trim();
-    prev.textContent = !b ? '' : (s === '' ? `ساخته می‌شود: ${b}` : `ساخته می‌شود: ${b}${s} … ${b}${+s + Math.max(1, +count.value || 1) - 1}  (${Math.max(1, +count.value || 1)} کاربر)`);
-    count.disabled = s === '';
+    chipS.className = 'chip' + (mode === 'single' ? ' on' : ''); chipG.className = 'chip' + (mode === 'group' ? ' on' : '');
+    grpBox.hidden = mode === 'single'; oneBox.hidden = mode !== 'single';
+    const n = Math.max(1, +count.value || 1), b = base.value.trim(), s = start.value.trim();
+    prev.textContent = mode === 'single' ? (one.value.trim() ? `ساخته می‌شود: ${one.value.trim()}` : '')
+      : (!b || s === '' ? '' : (n === 1 ? `ساخته می‌شود: ${b}${s}` : `ساخته می‌شود: ${b}${s} … ${b}${+s + n - 1}  (${n} کاربر)`));
   };
-  [base, start, count].forEach(i => i.addEventListener('input', upd)); upd();
-  const go_ = h('button', { class: 'btn pri' }, '⚡ ساخت اکانت‌ها');
+  // تشخیص خودکار آخرین نام‌کاربری و شماره‌ی بعدی
+  let seq = 0;
+  const detect = async (prefix, fillOne) => {
+    const my = ++seq; last.textContent = 'در حال بررسی آخرین کاربر…';
+    try {
+      const r = await api('/next-name?prefix=' + encodeURIComponent(prefix));
+      if (my !== seq) return;
+      start.value = r.next; if (fillOne || !one.value) one.value = r.prefix + r.next;
+      last.textContent = r.last ? `آخرین کاربر: ${r.last} ← شماره‌ی بعدی: ${r.next}` : `هنوز کاربری با «${r.prefix}» نیست ← شروع از ${r.next}`;
+    } catch (e) { if (my === seq) last.textContent = 'تشخیص خودکار ممکن نشد: ' + e.message; }
+    upd();
+  };
+  chipS.onclick = () => { mode = S.cmode = 'single'; upd(); }; chipG.onclick = () => { mode = S.cmode = 'group'; upd(); };
+  base.addEventListener('input', debounce(() => { upd(); if (/^[A-Za-z0-9_]{1,28}$/.test(base.value.trim())) detect(base.value.trim(), true); }, 450));
+  [start, count, one].forEach(i => i.addEventListener('input', upd)); upd(); detect(st.default_prefix, true);
+  const go_ = h('button', { class: 'btn pri' }, '⚡ ساخت اکانت');
   go_.onclick = () => run(go_, async () => {
-    if (!base.value.trim()) throw new Error('نام پایه را وارد کنید.');
     if (!svc.value) throw new Error('سرویسی برای این پنل پیدا نشد؛ اتصال پنل را در تنظیمات بررسی کنید.');
+    let body;
+    if (mode === 'single') { if (!one.value.trim()) throw new Error('نام کاربری را وارد کنید.'); body = { base: one.value.trim(), start: null, count: 1 }; }
+    else { if (!base.value.trim() || start.value === '') throw new Error('پیشوند و عدد شروع را وارد کنید.'); body = { base: base.value.trim(), start: +start.value, count: Math.max(1, +count.value || 1) }; }
     go_.textContent = 'در حال ساخت…';
-    const r = await api('/create', 'POST', { base: base.value.trim(), start: start.value === '' ? null : +start.value, count: start.value === '' ? 1 : +count.value, service_id: +svc.value, template: tpl.value, telegram: tg.checked });
+    const r = await api('/create', 'POST', { ...body, service_id: +svc.value, template: tpl.value, telegram: tg.checked });
     r.panelName = (st.panels.find(p => p.id === S.panel) || {}).name; S.last = r; showResults(out, r);
     if (r.telegram === 'queued') toast('QRها به تلگرام ادمین ارسال می‌شوند'); else if (r.telegram === 'no_bot') toast('ربات/ادمین تنظیم نشده؛ ارسال تلگرام انجام نشد', true);
+    detect(mode === 'single' ? st.default_prefix : base.value.trim(), mode === 'single');   // شماره‌ی بعدی برای ساخت بعدی
   });
-  mount(h('div', { class: 'card' }, h('h2', {}, 'ساخت اکانت (تکی یا گروهی)'),
-    st.panels.length > 1 ? field('ساخت روی پنل', psel) : null, field('تمپلت', tpl), field('نام پایه (انگلیسی)', base),
-    h('div', { class: 'row' }, field('عدد شروع', start), field('تعداد', count)), prev,
+  mount(h('div', { class: 'card' }, h('h2', {}, 'ساخت اکانت'),
+    h('div', { class: 'chips', style: 'padding-bottom:6px' }, chipS, chipG),
+    st.panels.length > 1 ? field('ساخت روی پنل', psel) : null, field('تمپلت', tpl), grpBox, oneBox, last, prev,
     field('سرویس', svc),
     st.bot ? h('label', { class: 'chk', for: 'tg' }, tg, 'ارسال QR و لینک‌ها به تلگرام ادمین') : null,
     h('div', { class: 'btns' }, go_)), out);
@@ -187,6 +212,7 @@ function showResults(box, r) {
   const links = r.ok.map(u => `${u.username} | ${u.sub}`).join('\n');
   box.replaceChildren(
     h('div', { class: 'card' }, h('h2', {}, `✅ ${r.ok.length} اکانت ساخته شد` + (r.panelName && S.st.panels.length > 1 ? ` روی «${r.panelName}»` : '') + (r.failed.length ? ` — ⚠️ ${r.failed.length} ناموفق` : '')),
+      r.value ? h('p', { class: 'hint' }, `💰 ارزش فروش این ساخت: ${r.value.toLocaleString('fa-IR')} تومان`) : null,
       r.failed.slice(0, 20).map(f => h('p', { class: 'err' }, `${f.username}: ${f.reason}`)),
       r.ok.length ? h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: () => copy(r.ok.map(u => u.sub).join('\n')) }, '📋 کپی همه لینک‌ها'),
@@ -323,25 +349,29 @@ async function vHome() {
 
 /* ───────── تمپلت ───────── */
 function vTpl() {
-  const st = S.st; let editing = null;
-  const name = h('input', { placeholder: 'مثلاً اقتصادی', maxlength: 40 }), g = h('input', { type: 'number', min: 0, step: 'any', value: 30, dir: 'ltr' }), d = h('input', { type: 'number', min: 0, value: 30, dir: 'ltr' });
-  const mode = h('select', {}, h('option', { value: 'on_hold' }, 'On-Hold (از اولین اتصال شروع شود)'), h('option', { value: 'active' }, 'Active (از همین حالا شروع شود)'));
-  const title = h('h2', {}, 'تمپلت جدید'); const save = h('button', { class: 'btn pri' }, 'ذخیره');
-  const form = h('div', { class: 'card' }, title, field('نام', name), h('div', { class: 'row' }, field('حجم (GB)', g), field('اعتبار (روز)', d)), field('حالت شروع', mode), h('p', { class: 'hint' }, '۰ یعنی نامحدود.'), h('div', { class: 'btns' }, save));
-  save.onclick = () => run(save, async () => {
-    await api('/templates', 'POST', { name: name.value.trim(), old_name: editing, gb: +g.value, days: +d.value, mode: mode.value });
-    toast('ذخیره شد'); await refreshState(); vTpl();
-  });
+  const st = S.st;
+  const mk = (label, fn, cls = '') => { const b = h('button', { class: 'btn sm ' + cls, type: 'button' }, label); b.onclick = () => run(b, fn); return b; };
+  const num = (v, p, step) => h('input', { type: 'number', min: 0, step: step || 1, value: v, placeholder: p, dir: 'ltr' });
+  const modeSel = v => h('select', {}, h('option', { value: 'on_hold', selected: v === 'on_hold' }, 'On-Hold'), h('option', { value: 'active', selected: v === 'active' }, 'Active'));
+  const reload = async () => { await refreshState(); vTpl(); };
+  // هر تمپلت یک ردیف قابل ویرایش درجا
   const items = Object.entries(st.templates).map(([n, t]) => {
     const on = n === st.active;
-    const mk = (label, fn, cls = '') => { const b = h('button', { class: 'btn sm ' + cls }, label); b.onclick = () => run(b, fn); return b; };
-    return h('div', { class: 'item', style: on ? 'border-color:var(--ac)' : '' }, h('div', { class: 'head' }, h('span', { class: 'nm' }, (on ? '✅ ' : '') + n), h('span', { class: 'sub' }, `${t.gb || '∞'}GB · ${t.days || '∞'}d · ${t.mode}`)),
-      h('div', { class: 'body' }, h('div', { class: 'btns' },
-        on ? null : mk('انتخاب به‌عنوان فعال', async () => { await api('/templates/active', 'POST', { name: n }); await refreshState(); vTpl(); }),
-        mk('✏️ ویرایش', async () => { editing = n; title.textContent = 'ویرایش: ' + n; name.value = n; g.value = t.gb; d.value = t.days; mode.value = t.mode; form.scrollIntoView({ behavior: 'smooth' }); }),
-        mk('🗑 حذف', async () => { if (!confirm('حذف شود؟')) return; await api('/templates/delete', 'POST', { name: n }); await refreshState(); vTpl(); }, 'bad'))));
+    const nm = h('input', { value: n, maxlength: 40 }), g = num(t.gb, 'GB', 'any'), d = num(t.days, 'روز'), m = modeSel(t.mode);
+    return h('details', { class: 'item', style: on ? 'border-color:var(--ac)' : '' },
+      h('summary', {}, h('span', { class: 'nm' }, (on ? '✅ ' : '') + n), h('span', { class: 'sub' }, `${t.gb || '∞'}GB · ${t.days || '∞'}d · ${t.mode === 'active' ? 'Active' : 'On-Hold'}`)),
+      h('div', { class: 'body', style: 'padding-top:12px' }, field('نام', nm), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m),
+        h('div', { class: 'btns' },
+          mk('💾 ذخیره', async () => { await api('/templates', 'POST', { name: nm.value.trim(), old_name: n, gb: +g.value, days: +d.value, mode: m.value }); toast('ذخیره شد'); await reload(); }, 'pri'),
+          on ? null : mk('✅ فعال', async () => { await api('/templates/active', 'POST', { name: n }); await reload(); }),
+          mk('📄 کپی', async () => { await api('/templates', 'POST', { name: (n + ' کپی').slice(0, 40), old_name: null, gb: +g.value, days: +d.value, mode: m.value }); await reload(); }),
+          mk('🗑', async () => { if (!confirm(`«${n}» حذف شود؟`)) return; await api('/templates/delete', 'POST', { name: n }); await reload(); }, 'bad'))));
   });
-  mount(...items, form);
+  // افزودن سریع
+  const name = h('input', { placeholder: 'نام (مثلاً ۶۰ گیگ دوماهه)', maxlength: 40 }), g = num(60, 'GB', 'any'), d = num(60, 'روز'), m = modeSel('on_hold');
+  const add = mk('➕ افزودن تمپلت', async () => { if (!name.value.trim()) throw new Error('نام را وارد کنید.'); await api('/templates', 'POST', { name: name.value.trim(), old_name: null, gb: +g.value, days: +d.value, mode: m.value }); toast('اضافه شد'); await reload(); }, 'pri');
+  mount(h('h2', { style: 'font-size:13px;margin:0 2px 8px' }, `تمپلت‌ها (${items.length}) — برای ویرایش روی هر مورد بزنید`), ...items,
+    h('div', { class: 'card' }, h('h2', {}, 'تمپلت جدید'), field('نام', name), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m), h('p', { class: 'hint' }, '۰ یعنی نامحدود.'), h('div', { class: 'btns' }, add)));
 }
 
 /* ───────── تنظیمات ───────── */
@@ -379,30 +409,39 @@ async function vSet() {
   const saveW = h('button', { class: 'btn' }, 'تغییر رمز وب‌پنل');
   saveW.onclick = () => run(saveW, async () => { await api('/settings', 'POST', { web_password: wp.value }); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
   // قیمت‌ها و لیست فروش
-  let sc = {}; try { sc = await api('/sales/settings'); } catch (e) { sc = null; }
+  let sc = null; try { sc = await api('/sales/settings'); } catch (e) { sc = null; }
   let priceCard = h('div', { class: 'card' }, h('h2', {}, '💰 قیمت‌ها'), h('p', { class: 'err' }, 'خطا در دریافت تنظیمات فروش'));
   if (sc) {
-    const ham = i(sc.hamkari_per_gb, '3000', 'number'), buy = i(sc.buy_per_tb, '750000', 'number'), mul = i(sc.hamkari_usage_multiplier, '1.5', 'number'), svc = i(sc.hamkari_service_names, 'hamkari');
+    const ham = i(sc.hamkari_per_gb, '3000', 'number'), buy = i(sc.buy_per_tb, '750000', 'number'), mul = i(sc.hamkari_usage_multiplier, '1.5', 'number');
+    const svc = i(sc.hamkari_service_names, 'hamkari'), ign = i(sc.ignore_service_names, 'tes, test');
     const rows = h('div', {});
+    const fa = n => (+n || 0).toLocaleString('fa-IR');
     const addRow = p => {
-      const g = i(p.gb, 'گیگ', 'number'), m = i(p.months, 'ماه', 'number'), pr = i(p.price, 'قیمت', 'number');
-      const del = h('button', { class: 'btn sm bad', type: 'button' }, '🗑');
-      const row = h('div', { class: 'btns', style: 'align-items:center;margin-bottom:6px' }, g, m, pr, del); row._f = { g, m, pr };
+      const g = i(p.gb, 'گیگ', 'number'), m = i(p.months, 'ماه', 'number'), pr = i(p.price, 'تومان', 'number');
+      const per = h('span', { class: 'sub', style: 'min-width:64px;text-align:center' });
+      const calc = () => { per.textContent = +g.value > 0 && +pr.value > 0 ? fa(Math.round(pr.value / g.value)) + '/GB' : ''; };
+      [g, m, pr].forEach(x => x.addEventListener('input', calc)); calc();
+      const del = h('button', { class: 'btn sm bad', type: 'button', style: 'flex:none' }, '🗑');
+      const row = h('div', { style: 'display:grid;grid-template-columns:1fr 0.7fr 1.4fr auto auto;gap:6px;align-items:center;margin-bottom:6px' }, g, m, pr, per, del); row._f = { g, m, pr };
       del.onclick = () => row.remove(); rows.append(row);
     };
+    const head = h('div', { class: 'sub', style: 'display:grid;grid-template-columns:1fr 0.7fr 1.4fr auto auto;gap:6px;margin:6px 0' }, h('span', {}, 'حجم GB'), h('span', {}, 'ماه'), h('span', {}, 'قیمت (تومان)'), h('span', { style: 'min-width:64px;text-align:center' }, 'گیگی'), h('span', { style: 'width:36px' }));
     sc.single_prices.forEach(addRow);
     const addB = h('button', { class: 'btn sm', type: 'button' }, '➕ پلن جدید'); addB.onclick = () => addRow({ gb: '', months: 1, price: '' });
     const saveS = h('button', { class: 'btn pri' }, 'ذخیره قیمت‌ها');
     saveS.onclick = () => run(saveS, async () => {
-      const single_prices = [...rows.children].map(r => ({ gb: +r._f.g.value, months: +r._f.m.value, price: +r._f.pr.value }));
-      await api('/sales/settings', 'POST', { hamkari_per_gb: +ham.value, buy_per_tb: +buy.value, hamkari_usage_multiplier: +mul.value, hamkari_service_names: svc.value, single_prices });
-      toast('✅ قیمت‌ها ذخیره شد (از گزارش بعدی اعمال می‌شود)');
+      const single_prices = [...rows.children].map(r => ({ gb: +r._f.g.value, months: +r._f.m.value, price: +r._f.pr.value })).filter(p => p.gb > 0 && p.months > 0);
+      await api('/sales/settings', 'POST', { hamkari_per_gb: +ham.value, buy_per_tb: +buy.value, hamkari_usage_multiplier: +mul.value, hamkari_service_names: svc.value, ignore_service_names: ign.value, single_prices });
+      toast('✅ قیمت‌ها ذخیره شد (از گزارش بعدی اعمال می‌شود)'); vSet();
     });
     priceCard = h('div', { class: 'card' }, h('h2', {}, '💰 قیمت‌ها و لیست فروش'),
-      field('قیمت هر گیگ همکاری (تومان)', ham), field('نام سرویس همکاری (با کاما)', svc),
-      field('قیمت خرید هر ترابایت (تومان)', buy), field('ضریب مصرف همکاری', mul),
-      h('h2', { style: 'font-size:13px;margin:10px 0 6px' }, 'لیست قیمت فروش تکی (گیگ | ماه | قیمت)'), rows,
-      h('div', { class: 'btns' }, addB, saveS));
+      h('div', { class: 'row' }, field('هر گیگ همکاری (تومان)', ham), field('نام سرویس همکاری', svc)),
+      h('h2', { style: 'font-size:13px;margin:12px 0 0' }, '👤 لیست فروش تکی (MS)'), head, rows,
+      h('p', { class: 'hint' }, `حجم‌های خارج از لیست روی سرویس MS به‌نرخ گیگی ${fa(sc.fallback_rate)} تومان (از پلن ۳۰ گیگ یک‌ماهه) حساب می‌شود.`),
+      h('div', { class: 'btns', style: 'margin-top:6px' }, addB),
+      h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, '🧾 هزینه و سرویس‌ها'),
+      h('div', { class: 'row' }, field('خرید هر ترابایت', buy), field('ضریب مصرف همکاری', mul)),
+      field('سرویس‌های نادیده (تست؛ با کاما)', ign), h('div', { class: 'btns' }, saveS));
   }
   mount(
     priceCard,
