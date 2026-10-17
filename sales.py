@@ -1,0 +1,248 @@
+# -*- coding: utf-8 -*-
+"""گزارش فروش بر پایه‌ی خواندن مستقیم دیتابیس MySQL پنل ربکا.
+
+- هیچ پولینگ/اسنپ‌شاتی ندارد: فقط وقتی گزارش لازم است (۰۰:۰۰ تهران یا دکمه) یک کوئری read-only اجرا می‌شود.
+- ساخت کاربر  = users.created_at داخل بازه‌ی روز
+- ریست/تمدید = user_usage_logs.reset_at داخل بازه‌ی روز
+نام جدول/ستون‌ها در config.json > sales.schema قابل تغییر است (دستور /dbcheck ساختار واقعی را نشان می‌دهد).
+"""
+from __future__ import annotations
+
+import asyncio
+import html as _html
+import logging
+from collections import Counter
+from datetime import date, datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+    TEHRAN = ZoneInfo("Asia/Tehran")
+except Exception:  # noqa: BLE001
+    TEHRAN = timezone(timedelta(hours=3, minutes=30))
+
+from common import load_config, esc
+
+log = logging.getLogger("rebecca.sales")
+
+DEFAULT_SCHEMA = {
+    "users": "users", "u_id": "id", "u_name": "username", "u_created": "created_at",
+    "u_limit": "data_limit", "u_expire": "expire", "u_hold": "on_hold_expire_duration", "u_service": "service_id",
+    "resets": "user_usage_logs", "r_user": "user_id", "r_at": "reset_at",
+    "services": "services", "s_id": "id", "s_name": "name",
+}
+GB = 1024 ** 3
+
+
+# ───────────────────────────── زمان ─────────────────────────────
+def tehran_day() -> str:
+    return datetime.now(TEHRAN).strftime("%Y-%m-%d")
+
+
+def shift_day(day: str, delta: int) -> str:
+    return (date.fromisoformat(day) + timedelta(days=delta)).strftime("%Y-%m-%d")
+
+
+def _bounds_db(day: str, partial: bool):
+    """بازه‌ی روز تهران → datetime ساده در منطقه‌ی زمانی دیتابیس (پیش‌فرض UTC)."""
+    cfg = load_config()["sales"]
+    off = int(cfg.get("db_tz_offset_minutes", 0))
+    d = date.fromisoformat(day)
+    s = datetime(d.year, d.month, d.day, tzinfo=TEHRAN)
+    e = s + timedelta(days=1)
+    if partial:
+        e = min(e, datetime.now(TEHRAN))
+    conv = lambda x: x.astimezone(timezone.utc).replace(tzinfo=None) + timedelta(minutes=off)  # noqa: E731
+    return conv(s), conv(e)
+
+
+# ───────────────────────────── دیتابیس ─────────────────────────────
+def _connect():
+    import pymysql
+    db = load_config()["sales"].get("db") or {}
+    if not db.get("name"):
+        raise RuntimeError("اتصال دیتابیس تنظیم نشده؛ از /setdb استفاده کنید.")
+    return pymysql.connect(
+        host=db.get("host", "127.0.0.1"), port=int(db.get("port", 3306)), user=db.get("user", ""),
+        password=db.get("password", ""), database=db["name"], charset="utf8mb4",
+        connect_timeout=5, read_timeout=15, cursorclass=pymysql.cursors.DictCursor,
+    )
+
+
+def _schema() -> dict:
+    s = dict(DEFAULT_SCHEMA)
+    s.update(load_config()["sales"].get("schema") or {})
+    return s
+
+
+def _ident(x: str) -> str:
+    x = str(x)
+    if not x.replace("_", "").isalnum():
+        raise ValueError(f"نام نامعتبر: {x}")
+    return f"`{x}`"
+
+
+def fetch_events(day: str, partial: bool) -> list[dict]:
+    s = _schema()
+    a, b = _bounds_db(day, partial)
+    U, R = _ident(s["users"]), _ident(s["resets"])
+    cols = (f"u.{_ident(s['u_name'])} AS username, u.{_ident(s['u_limit'])} AS data_limit, u.{_ident(s['u_expire'])} AS expire, "
+            f"u.{_ident(s['u_hold'])} AS hold, u.{_ident(s['u_service'])} AS service_id, u.{_ident(s['u_created'])} AS created_at")
+    sql_new = (f"SELECT 'new' AS kind, u.{_ident(s['u_created'])} AS at, {cols} FROM {U} u "
+               f"WHERE u.{_ident(s['u_created'])} >= %s AND u.{_ident(s['u_created'])} < %s")
+    sql_rst = (f"SELECT 'renew' AS kind, r.{_ident(s['r_at'])} AS at, {cols} FROM {R} r "
+               f"JOIN {U} u ON u.{_ident(s['u_id'])} = r.{_ident(s['r_user'])} "
+               f"WHERE r.{_ident(s['r_at'])} >= %s AND r.{_ident(s['r_at'])} < %s")
+    sql_svc = f"SELECT {_ident(s['s_id'])} AS id, {_ident(s['s_name'])} AS name FROM {_ident(s['services'])}"
+    conn = _connect()
+    try:
+        with conn.cursor() as c:
+            c.execute(sql_new, (a, b)); rows = list(c.fetchall())
+            c.execute(sql_rst, (a, b)); rows += list(c.fetchall())
+            try:
+                c.execute(sql_svc); svc = {r["id"]: str(r["name"] or "") for r in c.fetchall()}
+            except Exception:  # noqa: BLE001
+                svc = {}
+    finally:
+        conn.close()
+    for r in rows:
+        r["service_name"] = svc.get(r["service_id"], "")
+    return rows
+
+
+# ───────────────────────────── طبقه‌بندی و قیمت ─────────────────────────────
+def _is_hamkari(r: dict, cfg: dict) -> bool:
+    if r["service_id"] in [int(x) for x in cfg.get("hamkari_service_ids", []) if str(x).lstrip("-").isdigit()]:
+        return True
+    names = [str(n).lower() for n in cfg.get("hamkari_service_names", [])]
+    return any(n and n in r["service_name"].lower() for n in names)
+
+
+def _months(r: dict) -> int:
+    """مدت پلن (ماه) از on_hold یا فاصله‌ی انقضا تا لحظه‌ی رویداد؛ حداقل ۱."""
+    days = 0
+    if r.get("hold"):
+        days = int(r["hold"]) / 86400
+    elif r.get("expire") and r.get("at"):
+        at = r["at"].replace(tzinfo=timezone.utc).timestamp() if isinstance(r["at"], datetime) else 0
+        days = (int(r["expire"]) - at) / 86400
+    return 2 if days > 45 else 1
+
+
+def classify(rows: list[dict], cfg: dict) -> dict:
+    ham, single, other = Counter(), Counter(), Counter()
+    plans = cfg["single_prices"]
+    for r in rows:
+        gb = round((r["data_limit"] or 0) / GB)
+        if gb <= 0:
+            continue
+        key = ("new" if r["kind"] == "new" else "renew")
+        if _is_hamkari(r, cfg):
+            ham[(gb, key)] += 1
+            continue
+        m = _months(r)
+        match = next((p for p in plans if int(p["gb"]) == gb and int(p["months"]) == m), None)
+        (single if match else other)[(gb, m, key)] += 1
+    return {"ham": ham, "single": single, "other": other}
+
+
+def compute(day: str, partial: bool) -> dict:
+    cfg = load_config()["sales"]
+    rows = fetch_events(day, partial)
+    cl = classify(rows, cfg)
+    price = {(int(p["gb"]), int(p["months"])): int(p["price"]) for p in cfg["single_prices"]}
+    ham_gb = sum(gb * n for (gb, _k), n in cl["ham"].items())
+    ham_income = ham_gb * int(cfg["hamkari_per_gb"])
+    single_income = sum(price[(gb, m)] * n for (gb, m, _k), n in cl["single"].items())
+    single_gb = sum(gb * n for (gb, _m, _k), n in cl["single"].items())
+    mult = float(cfg.get("hamkari_usage_multiplier", 1.5))
+    per_gb_cost = int(cfg.get("buy_per_tb", 750000)) / float(cfg.get("tb_gb", 1000))
+    cost = (ham_gb * mult + single_gb) * per_gb_cost
+    return {"cl": cl, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
+            "single_gb": single_gb, "cost": cost, "income": ham_income + single_income}
+
+
+def _t(n) -> str:
+    return f"{int(round(n)):,}".replace(",", "٬")
+
+
+def build_report(day: str, html: bool = True, partial: bool = False) -> str:
+    try:
+        d = compute(day, partial)
+    except Exception as e:  # noqa: BLE001
+        log.exception("sales report")
+        msg = f"❌ خطا در خواندن دیتابیس: {e}"
+        return _html.escape(msg) if html else msg
+    cl, L = d["cl"], []
+    L.append(f"📈 گزارش فروش {day}" + (" (تا این لحظه)" if partial else ""))
+    L.append("")
+    L.append("🤝 همکاری (Hamkari)")
+    if not cl["ham"]:
+        L.append("  — فروشی نبود")
+    for (gb, k), n in sorted(cl["ham"].items()):
+        L.append(f"  {n} تا {gb} گیگ — {'ساخت' if k == 'new' else 'تمدید/ریست'}")
+    L.append(f"  جمع: {_t(d['ham_gb'])} گیگ ← {_t(d['ham_income'])} تومان")
+    L.append("")
+    L.append("👤 فروش تکی")
+    if not cl["single"]:
+        L.append("  — فروشی نبود")
+    for (gb, m, k), n in sorted(cl["single"].items()):
+        L.append(f"  {n} تا {gb} گیگ {'یک' if m == 1 else 'دو'}ماهه — {'ساخت' if k == 'new' else 'تمدید/ریست'}")
+    L.append(f"  جمع: {_t(d['single_income'])} تومان")
+    if cl["other"]:
+        L.append("")
+        L.append("⚠️ خارج از لیست قیمت (محاسبه نشد):")
+        for (gb, m, k), n in sorted(cl["other"].items()):
+            L.append(f"  {n} تا {gb} گیگ {m} ماهه")
+    L.append("")
+    L.append(f"💰 جمع کل فروش: {_t(d['income'])} تومان")
+    L.append(f"🧾 هزینه‌ی خرید حجم: {_t(d['cost'])} تومان")
+    L.append(f"✅ سود تخمینی: {_t(d['income'] - d['cost'])} تومان")
+    text = "\n".join(L)
+    return _html.escape(text) if html else text
+
+
+# ───────────────────────────── سازگاری با bot.py (بدون پولینگ) ─────────────────────────────
+async def poll_all():
+    return None  # دیگر لازم نیست؛ گزارش مستقیم از دیتابیس خوانده می‌شود
+
+
+async def watch_loop():
+    return None  # ردیاب دوره‌ای حذف شد (مصرف CPU/RAM صفر)
+
+
+async def report_loop(bot):
+    """هر شب ۰۰:۰۰ تهران گزارش روز قبل را برای ادمین‌ها می‌فرستد؛ بین دو گزارش کاملاً خواب است."""
+    while True:
+        now = datetime.now(TEHRAN)
+        nxt = (now + timedelta(days=1)).replace(hour=0, minute=0, second=5, microsecond=0)
+        await asyncio.sleep(max(1, (nxt - now).total_seconds()))
+        cfg = load_config()
+        if not cfg["sales"].get("enabled", True):
+            continue
+        day = shift_day(tehran_day(), -1)
+        text = await asyncio.to_thread(build_report, day, True, False)
+        for uid in cfg["admin_ids"]:
+            try:
+                await bot.send_message(uid, text, parse_mode="HTML")
+            except Exception as e:  # noqa: BLE001
+                log.warning("send report to %s: %s", uid, e)
+
+
+def db_check() -> str:
+    """ساختار واقعی جدول‌ها را برای تطبیق schema نشان می‌دهد."""
+    s = _schema()
+    out = []
+    conn = _connect()
+    try:
+        with conn.cursor() as c:
+            for t in (s["users"], s["resets"], s["services"]):
+                try:
+                    c.execute(f"SHOW COLUMNS FROM {_ident(t)}")
+                    out.append(f"✅ {t}: " + ", ".join(r["Field"] for r in c.fetchall()))
+                except Exception as e:  # noqa: BLE001
+                    out.append(f"❌ {t}: {e}")
+            c.execute("SHOW TABLES")
+            out.append("جدول‌ها: " + ", ".join(list(r.values())[0] for r in c.fetchall()))
+    finally:
+        conn.close()
+    return "\n".join(out)
