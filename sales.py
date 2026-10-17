@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import logging
+import re
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
@@ -128,6 +129,49 @@ def _ident(x: str) -> str:
     return f"`{x}`"
 
 
+def usernames_like(prefix: str) -> list[str]:
+    """نام‌کاربری‌هایی که با prefix شروع می‌شوند (کوئری سبک و read-only)."""
+    sc = _schema()
+    like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    conn = _connect()
+    try:
+        with conn.cursor() as c:
+            c.execute(f"SELECT {_ident(sc['u_name'])} AS n FROM {_ident(sc['users'])} WHERE {_ident(sc['u_name'])} LIKE %s", (like,))
+            return [r["n"] for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def _pick_next(names: list[str], prefix: str) -> dict:
+    rx = re.compile(r"^" + re.escape(prefix) + r"(\d+)$", re.I)
+    best, last = 0, ""
+    for n in names:
+        m = rx.match(str(n))
+        if m and int(m.group(1)) >= best:
+            best, last = int(m.group(1)), str(n)
+    return {"prefix": prefix, "last": last, "next": best + 1}
+
+
+async def next_number(api, prefix: str, use_db: bool = True) -> dict:
+    """آخرین نام‌کاربری با این پیشوند را پیدا می‌کند و شماره‌ی بعدی را برمی‌گرداند.
+    اول از دیتابیس (سبک‌تر)، اگر نبود از جستجوی API پنل."""
+    prefix = (prefix or "").strip()
+    if use_db and (load_config()["sales"].get("db") or {}).get("name"):
+        try:
+            return _pick_next(await asyncio.to_thread(usernames_like, prefix), prefix)
+        except Exception as e:  # noqa: BLE001
+            log.warning("next_number via db failed: %s", e)
+    names, off = [], 0
+    while off < 5000:
+        res = await api.request("GET", "/api/users", params={"offset": off, "limit": 200, "search": prefix})
+        users = res.get("users", []) if isinstance(res, dict) else (res or [])
+        names += [u.get("username", "") for u in users]
+        if len(users) < 200:
+            break
+        off += 200
+    return _pick_next(names, prefix)
+
+
 def fetch_events(day: str, partial: bool) -> list[dict]:
     return _fetch(*_bounds_db(day, partial))
 
@@ -190,21 +234,59 @@ def _months(r: dict) -> int:
     return 2 if days > 45 else 1
 
 
+def _norm(x) -> str:
+    return str(x or "").lower()
+
+
+def _is_ignored(r: dict, cfg: dict) -> bool:
+    """سرویس‌هایی مثل Tes (تست رایگان) فروش حساب نمی‌شوند."""
+    names = [_norm(n) for n in cfg.get("ignore_service_names", [])]
+    sn = _norm(r.get("service_name"))
+    return bool(sn) and any(n and n in sn for n in names)
+
+
+def fallback_rate(cfg: dict) -> float:
+    """نرخ هر گیگ فروش تکی برای حجم‌های خارج از لیست؛ از پلن ۳۰ گیگ یک‌ماهه (قابل تغییر)."""
+    plans = cfg.get("single_prices", [])
+    want = int(cfg.get("fallback_plan_gb", 30))
+    p = next((p for p in plans if int(p["gb"]) == want and int(p["months"]) == 1), None)
+    if not p and plans:
+        p = min(plans, key=lambda p: (int(p["months"]), int(p["gb"])))
+    return (int(p["price"]) / max(1, int(p["gb"]))) if p else 0.0
+
+
+def price_for(service_name: str, gb: float, months: int, cfg: dict | None = None):
+    """قیمت فروش یک اکانت → (قیمت، نوع). نوع: ham | list | extra | ignored"""
+    cfg = cfg or load_config()["sales"]
+    r = {"service_name": service_name, "service_id": None}
+    if _is_ignored(r, cfg):
+        return 0, "ignored"
+    if _is_hamkari(r, cfg):
+        return int(round(gb * int(cfg["hamkari_per_gb"]))), "ham"
+    for p in cfg["single_prices"]:
+        if int(p["gb"]) == round(gb) and int(p["months"]) == months:
+            return int(p["price"]), "list"
+    return int(round(gb * fallback_rate(cfg))), "extra"
+
+
 def classify(rows: list[dict], cfg: dict) -> dict:
-    ham, single, other = Counter(), Counter(), Counter()
+    ham, single, extra, ignored = Counter(), Counter(), Counter(), Counter()
     plans = cfg["single_prices"]
     for r in rows:
         gb = round((r["data_limit"] or 0) / GB)
         if gb <= 0:
             continue
         key = ("new" if r["kind"] == "new" else "renew")
-        if _is_hamkari(r, cfg):
+        if _is_hamkari(r, cfg):          # همکاری: همیشه گیگی (حتی خارج از لیست)
             ham[(gb, key)] += 1
+            continue
+        if _is_ignored(r, cfg):          # تست و سرویس‌های غیرفروشی
+            ignored[(gb, key)] += 1
             continue
         m = _months(r)
         match = next((p for p in plans if int(p["gb"]) == gb and int(p["months"]) == m), None)
-        (single if match else other)[(gb, m, key)] += 1
-    return {"ham": ham, "single": single, "other": other}
+        (single if match else extra)[(gb, m, key)] += 1   # ms خارج از لیست: به‌نرخ گیگی
+    return {"ham": ham, "single": single, "extra": extra, "ignored": ignored}
 
 
 def compute(day: str, partial: bool) -> dict:
@@ -219,15 +301,19 @@ def compute_rows(rows: list[dict]) -> dict:
     cfg = load_config()["sales"]
     cl = classify(rows, cfg)
     price = {(int(p["gb"]), int(p["months"])): int(p["price"]) for p in cfg["single_prices"]}
+    rate = fallback_rate(cfg)
     ham_gb = sum(gb * n for (gb, _k), n in cl["ham"].items())
     ham_income = ham_gb * int(cfg["hamkari_per_gb"])
     single_income = sum(price[(gb, m)] * n for (gb, m, _k), n in cl["single"].items())
     single_gb = sum(gb * n for (gb, _m, _k), n in cl["single"].items())
+    extra_gb = sum(gb * n for (gb, _m, _k), n in cl["extra"].items())
+    extra_income = extra_gb * rate
     mult = float(cfg.get("hamkari_usage_multiplier", 1.5))
     per_gb_cost = int(cfg.get("buy_per_tb", 750000)) / float(cfg.get("tb_gb", 1000))
-    cost = (ham_gb * mult + single_gb) * per_gb_cost
+    cost = (ham_gb * mult + single_gb + extra_gb) * per_gb_cost
     return {"cl": cl, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
-            "single_gb": single_gb, "cost": cost, "income": ham_income + single_income}
+            "single_gb": single_gb, "extra_gb": extra_gb, "extra_income": extra_income, "rate": rate, "cost": cost,
+            "income": ham_income + single_income + extra_income}
 
 
 def _t(n) -> str:
@@ -245,17 +331,21 @@ def _render(title: str, d: dict, html: bool) -> str:
         L.append(f"  {n} تا {gb} گیگ — {'ساخت' if k == 'new' else 'تمدید/ریست'}")
     L.append(f"  جمع: {_t(d['ham_gb'])} گیگ ← {_t(d['ham_income'])} تومان")
     L.append("")
-    L.append("👤 فروش تکی")
+    L.append("👤 فروش تکی (MS)")
     if not cl["single"]:
         L.append("  — فروشی نبود")
     for (gb, m, k), n in sorted(cl["single"].items()):
         L.append(f"  {n} تا {gb} گیگ {'یک' if m == 1 else 'دو'}ماهه — {'ساخت' if k == 'new' else 'تمدید/ریست'}")
-    L.append(f"  جمع: {_t(d['single_income'])} تومان")
-    if cl["other"]:
+    L.append(f"  جمع لیست: {_t(d['single_income'])} تومان")
+    if cl["extra"]:
         L.append("")
-        L.append("⚠️ خارج از لیست قیمت (محاسبه نشد):")
-        for (gb, m, k), n in sorted(cl["other"].items()):
-            L.append(f"  {n} تا {gb} گیگ {m} ماهه")
+        L.append(f"📐 تکی خارج از لیست (هر گیگ {_t(d['rate'])} تومان):")
+        for (gb, m, k), n in sorted(cl["extra"].items()):
+            L.append(f"  {n} تا {gb} گیگ {m} ماهه ← {_t(gb * n * d['rate'])}")
+        L.append(f"  جمع: {_t(d['extra_income'])} تومان")
+    if cl["ignored"]:
+        L.append("")
+        L.append(f"🚫 نادیده‌گرفته (تست/غیرفروشی): {sum(cl['ignored'].values())} مورد")
     L.append("")
     L.append(f"💰 جمع کل فروش: {_t(d['income'])} تومان")
     L.append(f"🧾 هزینه‌ی خرید حجم: {_t(d['cost'])} تومان")
@@ -354,7 +444,14 @@ def build_events(day: str, html: bool = True, partial: bool = False, limit: int 
         if isinstance(at, datetime):
             at = (at - timedelta(minutes=off)).replace(tzinfo=timezone.utc).astimezone(TEHRAN).strftime("%H:%M")
         gb = round((r["data_limit"] or 0) / GB)
-        typ = "همکاری" if _is_hamkari(r, cfg) else f"تکی {_months(r)}ماهه"
+        if _is_hamkari(r, cfg):
+            typ = "همکاری"
+        elif _is_ignored(r, cfg):
+            typ = f"نادیده ({r.get('service_name')})"
+        else:
+            m = _months(r)
+            inlist = any(int(p["gb"]) == gb and int(p["months"]) == m for p in cfg["single_prices"])
+            typ = f"تکی {m}ماهه" + ("" if inlist else " (خارج لیست)")
         L.append(f"{at} | {'ساخت' if r['kind'] == 'new' else 'تمدید'} | {r['username']} | {gb}GB | {typ}")
     if len(rows) > limit:
         L.append(f"… و {len(rows) - limit} مورد دیگر")
