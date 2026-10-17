@@ -106,6 +106,11 @@ def fetch_events(day: str, partial: bool) -> list[dict]:
         conn.close()
     for r in rows:
         r["service_name"] = svc.get(r["service_id"], "")
+    # ریستی که بلافاصله (≤ ۲ دقیقه) بعد از ساخت همان کاربر ثبت شده، فروش جدا حساب نمی‌شود
+    created = {r["username"]: r["at"] for r in rows if r["kind"] == "new" and isinstance(r["at"], datetime)}
+    rows = [r for r in rows if not (r["kind"] == "renew" and r["username"] in created and isinstance(r["at"], datetime)
+                                    and abs((r["at"] - created[r["username"]]).total_seconds()) <= 120)]
+    rows.sort(key=lambda r: r["at"] if isinstance(r["at"], datetime) else datetime.min)
     return rows
 
 
@@ -246,3 +251,26 @@ def db_check() -> str:
     finally:
         conn.close()
     return "\n".join(out)
+
+
+def build_events(day: str, html: bool = True, partial: bool = False, limit: int = 80) -> str:
+    """فهرست تک‌تک رویدادها (ساخت/تمدید) برای تطبیق دقیق گزارش با واقعیت."""
+    try:
+        cfg = load_config()["sales"]
+        rows = fetch_events(day, partial)
+    except Exception as e:  # noqa: BLE001
+        msg = f"❌ خطا در خواندن دیتابیس: {e}"
+        return _html.escape(msg) if html else msg
+    off = int(cfg.get("db_tz_offset_minutes", 0))
+    L = [f"🔎 جزئیات رویدادهای {day} ({len(rows)} مورد)", ""]
+    for r in rows[:limit]:
+        at = r["at"]
+        if isinstance(at, datetime):
+            at = (at - timedelta(minutes=off)).replace(tzinfo=timezone.utc).astimezone(TEHRAN).strftime("%H:%M")
+        gb = round((r["data_limit"] or 0) / GB)
+        typ = "همکاری" if _is_hamkari(r, cfg) else f"تکی {_months(r)}ماهه"
+        L.append(f"{at} | {'ساخت' if r['kind'] == 'new' else 'تمدید'} | {r['username']} | {gb}GB | {typ}")
+    if len(rows) > limit:
+        L.append(f"… و {len(rows) - limit} مورد دیگر")
+    text = "\n".join(L)
+    return _html.escape(text) if html else text
