@@ -17,6 +17,7 @@ from telegram.ext import (
 )
 
 import common as C
+import ops
 import sales
 from common import esc, get_api, get_panel, load_config, new_panel_id, update_config
 
@@ -29,7 +30,8 @@ END = ConversationHandler.END
 (C_TPL, C_BASE, C_START, C_COUNT, C_SERVICE, C_CONFIRM,
  T_NAME, T_GB, T_DAYS, T_EDIT,
  S_URL, S_SUB, S_USER, S_PASS,
- Q_SEARCH, E_GB, E_DAYS, C_PANEL, S_NAME) = range(19)
+ Q_SEARCH, E_GB, E_DAYS, C_PANEL, S_NAME,
+ B_PATTERN, B_ACTION, B_PICK, B_CONFIRM, N_TEXT) = range(24)
 
 STATUS_ICON = {"active": "🟢", "disabled": "⚫", "expired": "🔴", "limited": "🟠", "on_hold": "⏳"}
 
@@ -91,9 +93,11 @@ def main_kb() -> M:
     return M([
         [B("⚡ ساخت سریع", callback_data="c:quick"), B("🎯 ساخت با انتخاب تمپلت", callback_data="c:pick")],
         [B("🔍 جستجو و مدیریت کاربر", callback_data="search"), B("📋 لیست کاربران", callback_data="l:all:0")],
+        [B("👥 عملیات گروهی", callback_data="bk:start"), B("⏰ نزدیک انقضا", callback_data="soon")],
         [B("⚙️ تمپلت‌ها", callback_data="t:menu"), B("📊 وضعیت سرور", callback_data="stats")],
         [B("🧹 پاکسازی منقضی‌ها", callback_data=f"clean:ask:{pid}"), B("📥 خروجی لینک‌ها", callback_data="export")],
-        [B("📤 ارسال فروش امروز", callback_data="rp:today"), B("📈 دیروز", callback_data="rp:yday")],
+        [B("📤 فروش امروز", callback_data="rp:today"), B("📈 دیروز", callback_data="rp:yday"),
+         B("📅 هفته", callback_data="rp:week"), B("🗓 ماه", callback_data="rp:month")],
         [B(f"🖥 پنل‌ها (فعال: {pn['name']})", callback_data="pn:list")],
     ])
 
@@ -668,22 +672,31 @@ async def setup_pass(update, context):
 
 
 # ───────────────────────────── جستجو و مدیریت کاربر ─────────────────────────────
-def render_user(u: dict, api):
+async def user_card(u: dict, api):
     pid = api.pid
     name, st = u["username"], u.get("status", "unknown")
     used, lim = u.get("used_traffic", 0) or 0, u.get("data_limit") or 0
     pct = f" ({used * 100 / lim:.0f}%)" if lim else ""
     sub = api.full_sub(u.get("subscription_url", "")) or "نامشخص"
-    pn = esc(api.name)
-    text = (f"👤 <b>{esc(name)}</b> ({pn})\n{STATUS_ICON.get(st, '❔')} وضعیت: {esc(st)}\n"
+    try:
+        names = {s["id"]: s["name"] for s in await api.list_services()}
+    except Exception:  # noqa: BLE001
+        names = {}
+    sid = u.get("service_id")
+    sname = names.get(sid) or (f"#{sid}" if sid is not None else "—")
+    note = str(u.get("note") or "").strip()
+    text = (f"👤 <b>{esc(name)}</b> ({esc(api.name)})\n{STATUS_ICON.get(st, '❔')} وضعیت: {esc(st)}\n"
+            f"📂 سرویس: <b>{esc(sname)}</b>\n"
             f"📊 مصرف: {C.fmt_gb(used)} / {C.fmt_gb(lim)}{pct}\n"
-            f"⏳ اعتبار: {C.fmt_expire(u.get('expire'), st, u.get('on_hold_expire_duration'))}\n\n🔗 <code>{esc(sub)}</code>")
+            f"⏳ اعتبار: {C.fmt_expire(u.get('expire'), st, u.get('on_hold_expire_duration'))}\n"
+            + (f"📝 {esc(note[:200])}\n" if note else "") + f"\n🔗 <code>{esc(sub)}</code>")
     tg = "✅ فعال‌سازی" if st == "disabled" else "⛔ غیرفعال‌سازی"
     kb = M([
         [B("🖼 QR", callback_data=f"u:qr:{pid}:{name}"), B("✏️ ویرایش", callback_data=f"u:edit:{pid}:{name}")],
+        [B("🔀 تغییر سرویس", callback_data=f"u:svc:{pid}:{name}"), B("⚡ تمدید با تمپلت", callback_data=f"u:renew:{pid}:{name}")],
         [B("🔄 صفر کردن مصرف", callback_data=f"u:rst:{pid}:{name}"), B("🔗 لینک جدید", callback_data=f"u:rev:{pid}:{name}")],
-        [B(tg, callback_data=f"u:tg:{pid}:{name}"), B("🗑 حذف", callback_data=f"u:del:{pid}:{name}")],
-        [B("🔙 منوی اصلی", callback_data="back")],
+        [B("📝 یادداشت", callback_data=f"u:note:{pid}:{name}"), B(tg, callback_data=f"u:tg:{pid}:{name}")],
+        [B("🗑 حذف", callback_data=f"u:del:{pid}:{name}"), B("🔙 منوی اصلی", callback_data="back")],
     ])
     return text, kb
 
@@ -703,7 +716,7 @@ async def search_do(update, context):
     try:
         try:
             u = await api.request("GET", api.upath(q), retries=0)
-            text, kb = render_user(u, api)
+            text, kb = await user_card(u, api)
             await update.message.reply_html(text, reply_markup=kb)
             return END
         except C.RebeccaError as e:
@@ -745,6 +758,19 @@ async def user_action(update, context):
             await api.request("DELETE", p)
             await q.answer("🗑 حذف شد", show_alert=True)
             return await home(update, context, f"✅ کاربر {esc(uname)} حذف شد.\n\n")
+        if act == "svc":
+            await q.answer()
+            cur = (await api.request("GET", p)).get("service_id")
+            rows = [[B(("✅ " if s["id"] == cur else "📂 ") + s["name"], callback_data=f"u:svs:{pid}:{s['id']}:{uname}")]
+                    for s in await api.list_services()]
+            rows.append([B("↩️ بازگشت", callback_data=f"u:view:{pid}:{uname}")])
+            return await show(update, context, f"🔀 سرویس جدید <b>{esc(uname)}</b> را انتخاب کنید:", M(rows))
+        if act == "renew":
+            await q.answer()
+            rows = [[B(f"{n} ({t['gb']}GB/{t['days']}d)", callback_data=f"u:rnw:{pid}:{i}:{uname}")]
+                    for i, (n, t) in enumerate(load_config()["templates"].items())]
+            rows.append([B("↩️ بازگشت", callback_data=f"u:view:{pid}:{uname}")])
+            return await show(update, context, f"⚡ تمدید <b>{esc(uname)}</b> با کدام تمپلت؟\n(مصرف صفر و حجم/مدت جدید اعمال می‌شود)", M(rows))
         if act == "rst":
             await api.request("POST", p + "/reset")
             await q.answer("✅ مصرف صفر شد", show_alert=True)
@@ -758,10 +784,209 @@ async def user_action(update, context):
             await q.answer(f"وضعیت: {new}")
         else:
             await q.answer()
-        text, kb = render_user(await api.request("GET", p), api)
+        text, kb = await user_card(await api.request("GET", p), api)
         await show(update, context, text, kb)
     except Exception as e:  # noqa: BLE001
         await q.answer(f"❌ {str(e)[:180]}", show_alert=True)
+
+
+@nav
+async def user_apply(update, context):
+    """اعمال تغییر سرویس / تمدید با تمپلت (با تأیید)."""
+    q = update.callback_query
+    _, act, pid, idx, uname = q.data.split(":", 4)
+    api = get_api(pid)
+    try:
+        if act == "svs":
+            await C.set_service(api, uname, int(idx))
+            await q.answer("✅ سرویس تغییر کرد")
+        else:
+            name = tpl_by_idx(int(idx))
+            if not name:
+                return await q.answer("تمپلت پیدا نشد", show_alert=True)
+            tpl = load_config()["templates"][name]
+            if act == "rnw":
+                await q.answer()
+                kb = M([[B("✅ تمدید شود", callback_data=f"u:rnok:{pid}:{idx}:{uname}"), B("↩️ انصراف", callback_data=f"u:view:{pid}:{uname}")]])
+                return await show(update, context, f"⚡ تمدید <b>{esc(uname)}</b>\n📌 {esc(name)}\n{esc(C.tpl_summary(tpl))}\n\nمصرف صفر می‌شود. ادامه می‌دهید؟", kb)
+            await C.renew_user(api, uname, tpl)
+            await q.answer("✅ تمدید شد", show_alert=True)
+        text, kb = await user_card(await api.request("GET", api.upath(uname)), api)
+        await show(update, context, text, kb)
+    except Exception as e:  # noqa: BLE001
+        await q.answer(f"❌ {str(e)[:180]}", show_alert=True)
+
+
+@admin_only
+async def note_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    _, _, pid, uname = q.data.split(":", 3)
+    context.user_data.clear()
+    context.user_data["nt2"] = {"u": uname, "pid": pid}
+    await show(update, context, f"📝 یادداشت <b>{esc(uname)}</b> را بفرستید (نام مشتری، شماره، توضیح…)\n<code>-</code> = حذف یادداشت", cancel_kb())
+    return N_TEXT
+
+
+@admin_only
+async def note_text(update, context):
+    d = context.user_data.pop("nt2", None)
+    if not d:
+        return END
+    api = get_api(d["pid"])
+    t = update.message.text.strip()
+    try:
+        await C.set_note(api, d["u"], "" if t == "-" else t)
+        text, kb = await user_card(await api.request("GET", api.upath(d["u"])), api)
+        await update.message.reply_html("✅ ذخیره شد.\n\n" + text, reply_markup=kb)
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_html(err_text(e), reply_markup=main_kb())
+    return END
+
+
+# ───────────────────────────── عملیات گروهی ─────────────────────────────
+def _bk(context) -> dict:
+    return context.user_data.setdefault("bk", {})
+
+
+@admin_only
+async def bulk_start(update, context):
+    await update.callback_query.answer()
+    context.user_data.clear()
+    api = get_api()
+    _bk(context)["pid"] = api.pid
+    await show(update, context,
+               f"👥 <b>عملیات گروهی</b> روی پنل «{esc(api.name)}»\n\nنام کاربران را بفرستید:\n"
+               "• <code>ali 1 10</code> ← ali1 تا ali10\n• <code>ali</code> ← فقط یک کاربر", cancel_kb())
+    return B_PATTERN
+
+
+@admin_only
+async def bulk_pattern(update, context):
+    parts = update.message.text.split()
+    bk = _bk(context)
+    try:
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            names = C.make_names(parts[0], int(parts[1]), int(parts[2]), load_config()["max_batch"])
+        elif len(parts) == 1:
+            names = C.make_names(parts[0], None, 1, 1)
+        else:
+            raise ValueError("فرمت درست: ali 1 10  یا  ali")
+    except ValueError as e:
+        await update.message.reply_text(f"⚠️ {e}\nدوباره بفرستید:")
+        return B_PATTERN
+    bk["names"] = names
+    acts = list(C.BULK_ACTIONS.items())
+    rows = [[B(lbl, callback_data=f"bk:a:{k}") for k, lbl in acts[i:i + 2]] for i in range(0, len(acts), 2)]
+    await update.message.reply_html(f"✅ {len(names)} کاربر ({esc(names[0])}{' … ' + esc(names[-1]) if len(names) > 1 else ''})\n\nچه کاری انجام شود؟",
+                                    reply_markup=cancel_kb(rows))
+    return B_ACTION
+
+
+@admin_only
+async def bulk_action(update, context):
+    q = update.callback_query
+    await q.answer()
+    bk = _bk(context)
+    if "names" not in bk:
+        await show(update, context, "⚠️ نشست منقضی شد.", main_kb())
+        return END
+    bk["action"] = q.data.split(":")[2]
+    if bk["action"] == "service":
+        try:
+            services = await get_api(bk["pid"]).list_services()
+        except Exception as e:  # noqa: BLE001
+            await show(update, context, err_text(e), main_kb())
+            return END
+        bk["services"] = {s["id"]: s["name"] for s in services}
+        rows = [[B(f"📂 {s['name']}", callback_data=f"bk:s:{s['id']}")] for s in services]
+        await show(update, context, "🔀 به کدام سرویس منتقل شوند؟", cancel_kb(rows))
+        return B_PICK
+    if bk["action"] == "renew":
+        rows = [[B(f"{n} ({t['gb']}GB/{t['days']}d)", callback_data=f"bk:t:{i}")] for i, (n, t) in enumerate(load_config()["templates"].items())]
+        await show(update, context, "⚡ تمدید با کدام تمپلت؟ (مصرف صفر می‌شود)", cancel_kb(rows))
+        return B_PICK
+    return await bulk_confirm(update, context)
+
+
+@admin_only
+async def bulk_pick(update, context):
+    q = update.callback_query
+    await q.answer()
+    bk = _bk(context)
+    kind, val = q.data.split(":")[1], int(q.data.split(":")[2])
+    if kind == "s":
+        bk["service_id"] = val
+    else:
+        name = tpl_by_idx(val)
+        if not name:
+            await q.answer("تمپلت پیدا نشد", show_alert=True)
+            return B_PICK
+        bk["tpl"] = name
+    return await bulk_confirm(update, context)
+
+
+async def bulk_confirm(update, context):
+    bk = _bk(context)
+    names = bk["names"]
+    api = get_api(bk["pid"])
+    line = ""
+    if bk["action"] == "service":
+        line = f"\n📂 سرویس جدید: <b>{esc(bk['services'].get(bk['service_id'], bk['service_id']))}</b>"
+    elif bk["action"] == "renew":
+        t = load_config()["templates"][bk["tpl"]]
+        line = f"\n📌 {esc(bk['tpl'])} — {esc(C.tpl_summary(t))}"
+    warn = "\n\n⚠️ <b>حذف برگشت‌پذیر نیست!</b>" if bk["action"] == "delete" else ""
+    text = (f"📝 <b>تأیید عملیات گروهی</b>\n🖥 پنل: <b>{esc(api.name)}</b>\n⚙️ عملیات: {C.BULK_ACTIONS[bk['action']]}"
+            f"\n👥 تعداد: <b>{len(names)}</b> ({esc(names[0])}{' … ' + esc(names[-1]) if len(names) > 1 else ''}){line}{warn}")
+    await show(update, context, text, cancel_kb([[B("✅ اجرا شود", callback_data="bk:go")]]))
+    return B_CONFIRM
+
+
+@admin_only
+async def bulk_go(update, context):
+    q = update.callback_query
+    await q.answer()
+    bk = context.user_data.get("bk")
+    if not bk or "action" not in bk:
+        await show(update, context, "⚠️ نشست منقضی شد.", main_kb())
+        return END
+    api = get_api(bk["pid"])
+    tpl = load_config()["templates"].get(bk.get("tpl", ""))
+    last, msg = [0.0], q.message
+
+    async def progress(done, total):
+        if done == total or time.monotonic() - last[0] > 1.5:
+            last[0] = time.monotonic()
+            try:
+                await msg.edit_text(f"⏳ در حال انجام… {done}/{total}")
+            except TelegramError:
+                pass
+    ok, bad = await C.bulk_apply(api, bk["names"], bk["action"], service_id=bk.get("service_id"), tpl=tpl, on_progress=progress)
+    context.user_data.clear()
+    text = f"✅ {C.BULK_ACTIONS[bk['action']]}: <b>{len(ok)}</b> از {len(bk['names'])} کاربر انجام شد."
+    if bad:
+        lines = "\n".join(f"• <code>{esc(n)}</code>: {esc(r)}" for n, r in bad[:15])
+        text += f"\n\n⚠️ <b>{len(bad)}</b> مورد ناموفق:\n{lines}" + (f"\n… و {len(bad) - 15} مورد دیگر" if len(bad) > 15 else "")
+    await context.bot.send_message(update.effective_chat.id, text, reply_markup=main_kb(), parse_mode=HTML)
+    return END
+
+
+# ───────────────────────────── نزدیک انقضا ─────────────────────────────
+@nav
+async def soon_cb(update, context):
+    if update.callback_query:
+        await update.callback_query.answer("در حال بررسی…")
+    api, rc = get_api(), load_config()["reminders"]
+    try:
+        items = await ops.find_soon(api, rc["days"], rc["low_pct"])
+    except Exception as e:  # noqa: BLE001
+        return await show(update, context, err_text(e), main_kb())
+    if not items:
+        return await show(update, context, f"✅ در پنل «{esc(api.name)}» کاربری نزدیک انقضا یا اتمام حجم نیست.", main_kb())
+    rows = [[B(f"{i['username']} — {i['reason']}"[:60], callback_data=f"u:view:{api.pid}:{i['username']}")] for i in items[:20]]
+    rows.append([B("🔙 منوی اصلی", callback_data="back")])
+    await show(update, context, f"⏰ پنل «{esc(api.name)}»: <b>{len(items)}</b> کاربر تا {rc['days']} روز دیگر منقضی می‌شوند یا کمتر از {rc['low_pct']}٪ حجم دارند.\nروی هر کدام بزنید تا تمدیدش کنید:", M(rows))
 
 
 @admin_only
@@ -811,7 +1036,7 @@ async def edit_days(update, context):
     try:
         api = get_api(eu["pid"])
         u = await C.apply_user_edit(api, eu["u"], eu.get("gb"), days)
-        text, kb = render_user(u, api)
+        text, kb = await user_card(u, api)
         await context.bot.send_message(update.effective_chat.id, "✅ ذخیره شد.\n\n" + text, reply_markup=kb, parse_mode=HTML)
     except Exception as e:  # noqa: BLE001
         await context.bot.send_message(update.effective_chat.id, err_text(e), reply_markup=main_kb(), parse_mode=HTML)
@@ -916,34 +1141,37 @@ async def export_cb(update, context):
 
 
 # ───────────────────────────── گزارش فروش ─────────────────────────────
+def _report_text(which: str) -> str:
+    today = sales.tehran_day()
+    if which == "today":
+        return sales.build_report(today, True, True)
+    if which == "yday":
+        return sales.build_report(sales.shift_day(today, -1), True, False)
+    return sales.build_range_report(which, True)
+
+
 @nav
 async def report_cb(update, context):
+    """از منو: گزارش را به‌صورت پیام جدید می‌فرستد؛ دکمه‌ی به‌روزرسانی همان پیام را ویرایش می‌کند."""
     q = update.callback_query
-    await q.answer("در حال بررسی تغییرات پنل‌ها…")
-    today = sales.tehran_day()
-    which = q.data.split(":")[1]
-    day, partial = (today, True) if which == "today" else (sales.shift_day(today, -1), False)
-    if partial:
-        try:
-            await asyncio.wait_for(sales.poll_all(), 60)  # آخرین تغییرات پنل قبل از گزارش
-        except Exception as e:  # noqa: BLE001
-            log.warning("poll before report: %s", e)
-    text = await asyncio.to_thread(sales.build_report, day, partial=partial)
-    await show(update, context, text, M([[B("🔄 به‌روزرسانی", callback_data=f"rp:{which}"), B("🔙 منوی اصلی", callback_data="back")]]))
+    parts = q.data.split(":")
+    which, refresh = parts[1], len(parts) > 2
+    await q.answer("در حال خواندن گزارش از دیتابیس…")
+    text = await asyncio.to_thread(_report_text, which)
+    kb = M([[B("🔄 به‌روزرسانی", callback_data=f"rp:{which}:r"), B("🔙 منوی اصلی", callback_data="back")]])
+    if refresh:
+        await show(update, context, text, kb)
+    else:
+        await context.bot.send_message(update.effective_chat.id, text[:4000], reply_markup=kb, parse_mode=HTML)
 
 
 @nav
 async def report_cmd(update, context):
-    await sales_reply(update, context)
-
-
-async def sales_reply(update, context):
-    try:
-        await asyncio.wait_for(sales.poll_all(), 60)
-    except Exception as e:  # noqa: BLE001
-        log.warning("poll before report: %s", e)
-    text = await asyncio.to_thread(sales.build_report, sales.tehran_day(), partial=True)
-    await update.message.reply_html(text, reply_markup=main_kb())
+    """/report | /report yesterday | /report week | /report month"""
+    arg = (context.args[0].lower() if context.args else "today")
+    which = {"yesterday": "yday", "yday": "yday", "week": "week", "month": "month"}.get(arg, "today")
+    text = await asyncio.to_thread(_report_text, which)
+    await update.message.reply_html(text[:4000], reply_markup=main_kb())
 
 
 # ───────────────────── تنظیمات فروش (قیمت/حجم/دیتابیس) ─────────────────────
@@ -1062,6 +1290,52 @@ async def dbcheck_cmd(update, context):
     await update.message.reply_text(txt[:4000])
 
 
+# ───────────────────────────── هشدار، مانیتور، پشتیبان، راهنما ─────────────────────────────
+@admin_only
+async def remind_cmd(update, context):
+    a = context.args
+
+    def status() -> str:
+        rc = load_config()["reminders"]
+        return (f"⏰ هشدار انقضا: <b>{'روشن' if rc['enabled'] else 'خاموش'}</b> — هر روز ساعت {rc['hour']} (تهران) | "
+                f"تا {rc['days']} روز مانده یا کمتر از {rc['low_pct']}٪ حجم")
+    if a and a[0] in ("on", "off"):
+        update_config(lambda c: c["reminders"].__setitem__("enabled", a[0] == "on"))
+    elif len(a) == 3 and all(x.isdigit() for x in a) and 1 <= int(a[0]) <= 23:
+        update_config(lambda c: c["reminders"].update(hour=int(a[0]), days=max(1, int(a[1])), low_pct=max(1, int(a[2]))))
+    elif a:
+        return await _arg_err(update, "/remind on | off | 10 3 10  (ساعت، روز، درصد حجم)")
+    await update.message.reply_html(status() + "\n\nفهرست لحظه‌ای: /soon")
+
+
+@admin_only
+async def monitor_cmd(update, context):
+    a = context.args
+    if a and a[0] in ("on", "off"):
+        update_config(lambda c: c["monitor"].__setitem__("enabled", a[0] == "on"))
+    elif a:
+        return await _arg_err(update, "/monitor on | off")
+    mc = load_config()["monitor"]
+    await update.message.reply_html(f"🩺 مانیتور پنل‌ها: <b>{'روشن' if mc['enabled'] else 'خاموش'}</b> — بررسی هر {mc['interval'] // 60} دقیقه؛ فقط هنگام قطع/وصل پیام می‌دهد.")
+
+
+@admin_only
+async def backup_cmd(update, context):
+    with open(C.CONFIG_FILE, "rb") as f:
+        bio = io.BytesIO(f.read())
+    bio.name = f"rebecca-config-{time.strftime('%Y%m%d')}.json"
+    await update.message.reply_document(bio, caption="💾 پشتیبان تنظیمات — شامل توکن ربات و رمز پنل‌هاست؛ جای امن نگه دارید و جایی منتشر نکنید.")
+
+
+@admin_only
+async def help_cmd(update, context):
+    await update.message.reply_html(
+        "📖 <b>راهنمای دستورها</b>\n\n"
+        "/start — منوی اصلی\n/report [yesterday|week|month] — گزارش فروش\n/events — جزئیات ساخت/تمدیدها\n"
+        "/soon — کاربران نزدیک انقضا/اتمام حجم\n/remind — هشدار روزانه انقضا\n/monitor — مانیتور سلامت پنل‌ها\n"
+        "/prices — قیمت‌ها و تنظیمات فروش\n/dbcheck — بررسی اتصال دیتابیس\n/backup — پشتیبان تنظیمات\n/cancel — لغو")
+
+
 # ───────────────────────────── راه‌اندازی ─────────────────────────────
 async def on_error(update, context):
     log.error("خطا در پردازش آپدیت", exc_info=context.error)
@@ -1073,9 +1347,12 @@ async def on_error(update, context):
 
 
 async def post_init(app: Application):
-    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("prices", "قیمت‌ها و تنظیمات فروش"), BotCommand("cancel", "لغو عملیات جاری")])
+    await app.bot.set_my_commands([
+        BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش (امروز/week/month)"), BotCommand("soon", "نزدیک انقضا"),
+        BotCommand("prices", "قیمت‌ها و تنظیمات فروش"), BotCommand("help", "راهنما"), BotCommand("cancel", "لغو عملیات جاری")])
     # ردیاب فروش و گزارش روزانه ۰۰:۰۰ (به وقت ایران)
-    app.bot_data["bg"] = [asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot))]
+    app.bot_data["bg"] = [asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot)),
+                          asyncio.create_task(ops.monitor_loop(app.bot)), asyncio.create_task(ops.reminder_loop(app.bot))]
 
 
 def build_app() -> Application:
@@ -1089,7 +1366,9 @@ def build_app() -> Application:
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), CommandHandler("report", report_cmd),
-            cb(back_cb, pattern=r"^back$"), cb(report_cb, pattern=r"^rp:(today|yday)$"),
+            cb(back_cb, pattern=r"^back$"), cb(report_cb, pattern=r"^rp:(today|yday|week|month)(:r)?$"),
+            CommandHandler("soon", soon_cb), cb(soon_cb, pattern=r"^soon$"),
+            cb(bulk_start, pattern=r"^bk:start$"), cb(note_start, pattern=r"^u:note:"),
             cb(create_entry, pattern=r"^c:(quick|pick)$"),
             cb(tpl_new, pattern=r"^t:new$"), cb(tpl_edit_field, pattern=r"^te:(name|gb|days):\d+$"),
             cb(setup_start, pattern=r"^pn:(new|edit:\w+)$"), cb(search_start, pattern=r"^search$"),
@@ -1099,7 +1378,8 @@ def build_app() -> Application:
             cb(tpl_menu, pattern=r"^t:menu$"), cb(tpl_action, pattern=r"^t:(sel|del|mode|edit):\d+$"),
             cb(list_users, pattern=r"^l:"), cb(stats, pattern=r"^stats$"), cb(core_cb, pattern=r"^core:(ask|go):\w+$"),
             cb(clean_cb, pattern=r"^clean:(ask|go):\w+$"), cb(export_cb, pattern=r"^export$"),
-            cb(user_action, pattern=r"^u:(view|qr|rst|rev|tg|del|delok):"),
+            cb(user_action, pattern=r"^u:(view|qr|rst|rev|tg|del|delok|svc|renew):"),
+            cb(user_apply, pattern=r"^u:(svs|rnw|rnok):"),
         ],
         states={
             C_TPL: [cb(create_pick_tpl, pattern=r"^c:t:\d+$")],
@@ -1118,12 +1398,18 @@ def build_app() -> Application:
             Q_SEARCH: [MessageHandler(txt, search_do)],
             E_GB: [cb(edit_gb, pattern=r"^e:keep$"), MessageHandler(txt, edit_gb)],
             E_DAYS: [cb(edit_days, pattern=r"^e:keep$"), MessageHandler(txt, edit_days)],
+            N_TEXT: [MessageHandler(txt, note_text)],
+            B_PATTERN: [MessageHandler(txt, bulk_pattern)],
+            B_ACTION: [cb(bulk_action, pattern=r"^bk:a:\w+$")],
+            B_PICK: [cb(bulk_pick, pattern=r"^bk:(s|t):\d+$")],
+            B_CONFIRM: [cb(bulk_go, pattern=r"^bk:go$")],
         },
         fallbacks=[CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), cb(back_cb, pattern=r"^back$")],
         allow_reentry=True,
     )
     for name, fn in (("prices", prices_cmd), ("events", events_cmd), ("setham", setham_cmd), ("setplan", setplan_cmd), ("delplan", delplan_cmd),
-                     ("setcost", setcost_cmd), ("setmult", setmult_cmd), ("setdb", setdb_cmd), ("dbcheck", dbcheck_cmd)):
+                     ("setcost", setcost_cmd), ("setmult", setmult_cmd), ("setdb", setdb_cmd), ("dbcheck", dbcheck_cmd),
+                     ("remind", remind_cmd), ("monitor", monitor_cmd), ("backup", backup_cmd), ("help", help_cmd)):
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(conv)
     app.add_error_handler(on_error)
