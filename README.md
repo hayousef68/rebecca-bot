@@ -24,6 +24,9 @@ bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/in
 
 (برای نگه‌داشتن نسخه پشتیبان تنظیمات: `uninstall -y --keep-config`)
 
+```bash
+rebecca-bot update
+```
 ## مدیریت
 
 بعد از نصب دستور `rebecca-bot` ساخته می‌شود:
