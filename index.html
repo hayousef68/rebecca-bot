@@ -322,15 +322,46 @@ function userItem(u, parent) {
 /* ───────── خانه ───────── */
 async function vHome() {
   if (!hasPanel()) return vCreate();
-  const box = h('div', { class: 'stat' }); const res = h('div', { class: 'card' });
-  try {
-    const s = await api('/stats');
-    const cell = (t, v) => h('div', {}, h('span', {}, t), h('strong', {}, v));
-    box.replaceChildren(cell('کل کاربران', s.total_user ?? 0), cell('فعال', s.users_active ?? 0), cell('On-Hold', s.users_on_hold ?? 0), cell('CPU', (s.cpu_usage ?? 0) + '%'),
-      cell('RAM', `${gb(s.mem_used)} / ${gb(s.mem_total)}`), cell('پهنای باند', `↓${gb(s.incoming_bandwidth)} ↑${gb(s.outgoing_bandwidth)}`));
-  } catch (e) { box.replaceChildren(h('p', { class: 'err' }, e.message)); }
+  const res = h('div', { class: 'card' });
+  const sp = n => String(Math.round(+n || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');   // عدد صحیح با فاصله‌ی هزارگان
+  const mb = b => sp((+b || 0) / 1048576) + ' MB';                                       // مگابایت، بدون اعشار
+  const fa = n => (+n || 0).toLocaleString('fa-IR');
+  const usersBox = h('div', { class: 'stat' }), sysBox = h('div', { class: 'card' }), saleBox = h('div', { class: 'stat' }), extraBox = h('div');
+  const cell = (t, v, sub) => h('div', {}, h('span', {}, t), h('strong', {}, v), sub ? h('span', {}, sub) : null);
+  const meter = (label, pct, text) => h('div', { style: 'margin-bottom:10px' }, h('div', { style: 'display:flex;justify-content:space-between;font-size:13px' }, h('span', {}, label), h('span', { dir: 'ltr' }, text)),
+    h('div', { class: 'bar' }, h('i', { style: `width:${Math.min(100, Math.max(0, pct))}%;${pct > 85 ? 'background:var(--bad)' : ''}` })));
+  const loadStats = async () => {
+    try {
+      const s = await api('/stats');
+      const items = [['کل کاربران', s.total_user], ['فعال', s.users_active], ['On-Hold', s.users_on_hold], ['آنلاین', s.online_users],
+        ['منقضی', s.users_expired], ['محدود‌شده', s.users_limited], ['غیرفعال', s.users_disabled]].filter(([, v]) => v != null).slice(0, 6);
+      usersBox.replaceChildren(...items.map(([t, v]) => cell(t, sp(v))));
+      const ramP = s.mem_total ? s.mem_used * 100 / s.mem_total : 0;
+      sysBox.replaceChildren(
+        meter('CPU', s.cpu_usage || 0, Math.round(s.cpu_usage || 0) + '%'),
+        meter('RAM', ramP, `${mb(s.mem_used)} / ${mb(s.mem_total)}`),
+        h('div', { style: 'display:flex;justify-content:space-between;font-size:13px' }, h('span', {}, '🌐 پهنای باند'),
+          h('span', { dir: 'ltr' }, `↓ ${mb(s.incoming_bandwidth)}   ↑ ${mb(s.outgoing_bandwidth)}`)));
+    } catch (e) { usersBox.replaceChildren(h('p', { class: 'err' }, e.message)); sysBox.replaceChildren(); }
+  };
+  const loadSales = async () => {
+    try {
+      const r = await api('/report/summary?kind=today');
+      saleBox.replaceChildren(cell('💰 فروش امروز', fa(r.income), 'تومان'), cell('✅ سود تخمینی', fa(r.profit), 'تومان'),
+        cell('➕ ساخت', fa(r.new)), cell('🔄 تمدید/ریست', fa(r.renew)));
+      extraBox.replaceChildren(...(r.extra.length ? [h('div', { class: 'card' }, h('h2', {}, '📐 حجم‌های خارج از لیست قیمت'),
+        h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'با ثبت قیمت، از گزارش بعدی جزو فروش‌های لیست حساب می‌شود.'),
+        ...r.extra.map(x => { const b = h('button', { class: 'btn sm pri', type: 'button', style: 'flex:none' }, '➕ ثبت قیمت');
+          b.onclick = () => run(b, async () => { const v = prompt(`قیمت ${x.gb} گیگ ${x.months} ماهه (تومان):`, x.suggest); if (v == null) return; const p = parseInt(String(v).replace(/[^\d]/g, ''), 10);
+            if (!(p >= 0)) throw new Error('قیمت نامعتبر است.'); await api('/sales/plan', 'POST', { gb: x.gb, months: x.months, price: p }); toast('✅ به لیست قیمت اضافه شد'); await loadSales(); await loadRep(curRep); });
+          return h('div', { style: 'display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px' }, h('span', { class: 'sub' }, `${x.count} تا ${x.gb} گیگ ${x.months} ماهه (پیشنهاد ${fa(x.suggest)})`), b); }))] : []));
+    } catch { saleBox.replaceChildren(); extraBox.replaceChildren(); }
+  };
+  const refB = h('button', { class: 'chip', type: 'button' }, '🔄 بروزرسانی');
+  refB.onclick = () => { loadStats(); loadSales(); loadRep(curRep); };
+  let curRep = 'today';
   const rep = h('pre', { style: 'white-space:pre-wrap;font:inherit;line-height:1.9;margin:8px 0 0' }, 'در حال بارگذاری…');
-  const loadRep = async d => { try { rep.textContent = (await api('/report?day=' + d)).text; } catch (e) { rep.textContent = e.message; } };
+  const loadRep = async d => { curRep = d; try { rep.textContent = (await api('/report?day=' + d)).text; } catch (e) { rep.textContent = e.message; } };
   const monthSel = h('select', {}, h('option', { value: '' }, 'انتخاب ماه شمسی…'));
   api('/report/months').then(r => r.months.forEach(m => monthSel.append(h('option', { value: m.from + '|' + m.to }, m.label)))).catch(() => {});
   const pickMonth = () => { if (!monthSel.value) return toast('یک ماه انتخاب کنید', true); const [f, t] = monthSel.value.split('|'); loadRange(f, t); };
@@ -346,7 +377,9 @@ async function vHome() {
     h('div', { class: 'row', style: 'margin-bottom:8px' }, monthSel, h('button', { class: 'btn sm', onclick: pickMonth }, 'نمایش ماه')),
     h('div', { class: 'row', style: 'margin-bottom:8px;align-items:center' }, dFrom, dTo, h('button', { class: 'btn sm', onclick: pickRange }, 'نمایش بازه')),
     rep, h('div', { class: 'btns' }, sendBtn, detBtn), h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
-  loadRep('today'); mount(box, h('div', { style: 'height:12px' }), repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
+  loadStats(); loadSales(); loadRep('today');
+  mount(h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin:0 2px 8px' }, h('h2', { style: 'font-size:13px;margin:0' }, '📊 وضعیت پنل'), refB),
+    usersBox, h('div', { style: 'height:10px' }), sysBox, saleBox, h('div', { style: 'height:10px' }), extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const clean = h('button', { class: 'btn' }, '🧹 پاکسازی منقضی‌ها'); const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   clean.onclick = () => run(clean, async () => {
     const { count } = await api('/cleanup?dry=true', 'POST');
