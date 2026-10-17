@@ -93,7 +93,7 @@ def main_kb() -> M:
         [B("🔍 جستجو و مدیریت کاربر", callback_data="search"), B("📋 لیست کاربران", callback_data="l:all:0")],
         [B("⚙️ تمپلت‌ها", callback_data="t:menu"), B("📊 وضعیت سرور", callback_data="stats")],
         [B("🧹 پاکسازی منقضی‌ها", callback_data=f"clean:ask:{pid}"), B("📥 خروجی لینک‌ها", callback_data="export")],
-        [B("📈 گزارش فروش امروز", callback_data="rp:today"), B("📈 دیروز", callback_data="rp:yday")],
+        [B("📤 ارسال فروش امروز", callback_data="rp:today"), B("📈 دیروز", callback_data="rp:yday")],
         [B(f"🖥 پنل‌ها (فعال: {pn['name']})", callback_data="pn:list")],
     ])
 
@@ -946,6 +946,112 @@ async def sales_reply(update, context):
     await update.message.reply_html(text, reply_markup=main_kb())
 
 
+# ───────────────────── تنظیمات فروش (قیمت/حجم/دیتابیس) ─────────────────────
+def _prices_text() -> str:
+    sc = load_config()["sales"]
+    lines = ["⚙️ <b>تنظیمات فروش</b>", "",
+             f"🤝 همکاری: هر گیگ <b>{sales._t(sc['hamkari_per_gb'])}</b> تومان",
+             f"🧾 خرید: هر ترابایت <b>{sales._t(sc.get('buy_per_tb', 750000))}</b> تومان | ضریب مصرف همکاری: <b>{sc.get('hamkari_usage_multiplier', 1.5)}</b>",
+             "", "👤 لیست قیمت تکی:"]
+    for x in sorted(sc["single_prices"], key=lambda x: (x["months"], x["gb"])):
+        lines.append(f"  {x['gb']} گیگ {x['months']} ماهه = {sales._t(x['price'])}")
+    lines += ["", "<b>دستورات:</b>",
+              "<code>/setham 3000</code> — قیمت هر گیگ همکاری",
+              "<code>/setplan 60 1 250000</code> — افزودن/ویرایش پلن (گیگ، ماه، قیمت)",
+              "<code>/delplan 60 1</code> — حذف پلن",
+              "<code>/setcost 750000</code> — قیمت خرید هر ترابایت",
+              "<code>/setmult 1.5</code> — ضریب مصرف همکاری",
+              "<code>/setdb host port user pass dbname</code> — اتصال MySQL (فقط خواندن)",
+              "<code>/dbcheck</code> — بررسی اتصال و ساختار جدول‌ها"]
+    return "\n".join(lines)
+
+
+@admin_only
+async def prices_cmd(update, context):
+    await update.message.reply_html(_prices_text())
+
+
+def _arg_err(update, usage):
+    return update.message.reply_html(f"❌ فرمت درست: <code>{usage}</code>")
+
+
+@admin_only
+async def setham_cmd(update, context):
+    try:
+        v = int(context.args[0])
+    except (IndexError, ValueError):
+        return await _arg_err(update, "/setham 3000")
+    update_config(lambda c: c["sales"].__setitem__("hamkari_per_gb", v))
+    await update.message.reply_html("✅ ذخیره شد.\n\n" + _prices_text())
+
+
+@admin_only
+async def setplan_cmd(update, context):
+    try:
+        gb, mo, pr = int(context.args[0]), int(context.args[1]), int(context.args[2])
+    except (IndexError, ValueError):
+        return await _arg_err(update, "/setplan 60 1 250000")
+
+    def mut(c):
+        lst = [x for x in c["sales"]["single_prices"] if not (x["gb"] == gb and x["months"] == mo)]
+        lst.append({"gb": gb, "months": mo, "price": pr})
+        c["sales"]["single_prices"] = lst
+    update_config(mut)
+    await update.message.reply_html("✅ ذخیره شد.\n\n" + _prices_text())
+
+
+@admin_only
+async def delplan_cmd(update, context):
+    try:
+        gb, mo = int(context.args[0]), int(context.args[1])
+    except (IndexError, ValueError):
+        return await _arg_err(update, "/delplan 60 1")
+    update_config(lambda c: c["sales"].__setitem__("single_prices", [x for x in c["sales"]["single_prices"] if not (x["gb"] == gb and x["months"] == mo)]))
+    await update.message.reply_html("✅ حذف شد.\n\n" + _prices_text())
+
+
+@admin_only
+async def setcost_cmd(update, context):
+    try:
+        v = int(context.args[0])
+    except (IndexError, ValueError):
+        return await _arg_err(update, "/setcost 750000")
+    update_config(lambda c: c["sales"].__setitem__("buy_per_tb", v))
+    await update.message.reply_html("✅ ذخیره شد.\n\n" + _prices_text())
+
+
+@admin_only
+async def setmult_cmd(update, context):
+    try:
+        v = float(context.args[0])
+    except (IndexError, ValueError):
+        return await _arg_err(update, "/setmult 1.5")
+    update_config(lambda c: c["sales"].__setitem__("hamkari_usage_multiplier", v))
+    await update.message.reply_html("✅ ذخیره شد.\n\n" + _prices_text())
+
+
+@admin_only
+async def setdb_cmd(update, context):
+    a = context.args
+    if len(a) != 5 or not a[1].isdigit():
+        return await _arg_err(update, "/setdb 127.0.0.1 3306 user pass dbname")
+    update_config(lambda c: c["sales"].__setitem__("db", {"host": a[0], "port": int(a[1]), "user": a[2], "password": a[3], "name": a[4]}))
+    try:
+        await update.message.delete()  # پیام حاوی رمز را پاک کن
+    except TelegramError:
+        pass
+    await context.bot.send_message(update.effective_chat.id, "✅ تنظیمات دیتابیس ذخیره شد. برای تست: /dbcheck")
+
+
+@admin_only
+async def dbcheck_cmd(update, context):
+    try:
+        txt = await asyncio.to_thread(sales.db_check)
+    except Exception as e:  # noqa: BLE001
+        txt = f"❌ {e}"
+    await update.message.reply_text(txt[:4000])
+
+
 # ───────────────────────────── راه‌اندازی ─────────────────────────────
 async def on_error(update, context):
     log.error("خطا در پردازش آپدیت", exc_info=context.error)
@@ -957,7 +1063,7 @@ async def on_error(update, context):
 
 
 async def post_init(app: Application):
-    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("cancel", "لغو عملیات جاری")])
+    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("prices", "قیمت‌ها و تنظیمات فروش"), BotCommand("cancel", "لغو عملیات جاری")])
     # ردیاب فروش و گزارش روزانه ۰۰:۰۰ (به وقت ایران)
     app.bot_data["bg"] = [asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot))]
 
@@ -1006,6 +1112,9 @@ def build_app() -> Application:
         fallbacks=[CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), cb(back_cb, pattern=r"^back$")],
         allow_reentry=True,
     )
+    for name, fn in (("prices", prices_cmd), ("setham", setham_cmd), ("setplan", setplan_cmd), ("delplan", delplan_cmd),
+                     ("setcost", setcost_cmd), ("setmult", setmult_cmd), ("setdb", setdb_cmd), ("dbcheck", dbcheck_cmd)):
+        app.add_handler(CommandHandler(name, fn))
     app.add_handler(conv)
     app.add_error_handler(on_error)
     return app
