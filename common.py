@@ -36,17 +36,27 @@ DEFAULT_SERVICES = [{"id": 6, "name": "Hamkari"}, {"id": 1, "name": "ms"}, {"id"
 DEFAULT_CFG = {
     "bot_token": "",
     "admin_ids": [],
-    "panel_url": "",
-    "sub_url": "",
-    "username": "",
-    "password": "",
-    "verify_ssl": False,
+    "panels": [],
+    "active_panel": "",
     "templates": DEFAULT_TEMPLATES,
     "active_template": "",
-    "services": [],
     "max_batch": 200,
     "max_qr": 100,
     "web_port": 8686,
+    "sales": {
+        "enabled": True,
+        "poll_seconds": 120,
+        "hamkari_per_gb": 3000,
+        "hamkari_service_ids": [],
+        "hamkari_service_names": ["hamkari"],
+        "single_prices": [
+            {"gb": 30, "months": 1, "price": 150000},
+            {"gb": 60, "months": 1, "price": 250000},
+            {"gb": 90, "months": 1, "price": 350000},
+            {"gb": 60, "months": 2, "price": 290000},
+            {"gb": 90, "months": 2, "price": 390000},
+        ],
+    },
     "web": {"user": "admin", "salt": "", "hash": ""},
 }
 
@@ -59,6 +69,39 @@ _cache = {"sig": None, "data": None}
 def _num(x):
     v = float(x)
     return int(v) if v.is_integer() else v
+
+
+def _normalize_panels(cfg: dict, raw: dict) -> list[dict]:
+    panels, seen = [], set()
+    src = raw.get("panels") if isinstance(raw.get("panels"), list) else []
+    if not src and (raw.get("panel_url") or raw.get("username")):  # مهاجرت از نسخه تک‌پنلی
+        src = [{"id": "p1", "name": "پنل ۱", "panel_url": raw.get("panel_url", ""), "sub_url": raw.get("sub_url", ""),
+                "username": raw.get("username", ""), "password": raw.get("password", ""),
+                "verify_ssl": raw.get("verify_ssl", False), "services": raw.get("services") or DEFAULT_SERVICES}]
+    for i, p in enumerate(src):
+        if not isinstance(p, dict):
+            continue
+        pid = str(p.get("id") or f"p{i + 1}")
+        if pid in seen:
+            continue
+        seen.add(pid)
+        svc = [s for s in (p.get("services") or []) if isinstance(s, dict) and "id" in s]
+        panels.append({
+            "id": pid, "name": str(p.get("name") or f"پنل {i + 1}")[:40],
+            "panel_url": str(p.get("panel_url") or "").strip(), "sub_url": str(p.get("sub_url") or "").strip(),
+            "username": str(p.get("username") or "").strip(), "password": str(p.get("password") or ""),
+            "verify_ssl": bool(p.get("verify_ssl", False)), "services": svc,
+        })
+    return panels
+
+
+def get_panel(cfg: dict, pid: str | None) -> dict | None:
+    return next((p for p in cfg["panels"] if p["id"] == pid), None)
+
+
+def new_panel_id(cfg: dict) -> str:
+    nums = [int(p["id"][1:]) for p in cfg["panels"] if p["id"][1:].isdigit()]
+    return f"p{max(nums, default=0) + 1}"
 
 
 def _normalize(data: dict) -> dict:
@@ -84,12 +127,29 @@ def _normalize(data: dict) -> dict:
         except (TypeError, ValueError):
             pass
     cfg["admin_ids"] = ids
-    if not isinstance(cfg.get("services"), list):
-        cfg["services"] = []
+    cfg["panels"] = _normalize_panels(cfg, data if isinstance(data, dict) else {})
+    for k in ("panel_url", "sub_url", "username", "password", "verify_ssl", "services"):
+        cfg.pop(k, None)
+    ids = [p["id"] for p in cfg["panels"]]
+    if cfg.get("active_panel") not in ids:
+        cfg["active_panel"] = ids[0] if ids else ""
     if not isinstance(cfg.get("web"), dict):
         cfg["web"] = {}
     for k, v in DEFAULT_CFG["web"].items():
         cfg["web"].setdefault(k, v)
+    sales = copy.deepcopy(DEFAULT_CFG["sales"])
+    if isinstance(cfg.get("sales"), dict):
+        sales.update(cfg["sales"])
+    for k in ("hamkari_service_ids", "hamkari_service_names", "single_prices"):
+        if not isinstance(sales.get(k), list):
+            sales[k] = copy.deepcopy(DEFAULT_CFG["sales"][k])
+    sales["single_prices"] = [p for p in sales["single_prices"] if isinstance(p, dict) and {"gb", "months", "price"} <= p.keys()]
+    for k in ("poll_seconds", "hamkari_per_gb"):
+        try:
+            sales[k] = int(sales[k])
+        except (TypeError, ValueError):
+            sales[k] = DEFAULT_CFG["sales"][k]
+    cfg["sales"] = sales
     for k in ("max_batch", "max_qr", "web_port"):
         try:
             cfg[k] = int(cfg[k])
@@ -273,7 +333,9 @@ class RebeccaClient:
     LOGIN_PATHS = ("/api/admin/token", "/dashboard/api/admin/token", "/api/v1/admin/token")
     SERVICE_PATHS = ("/api/services", "/api/service", "/api/v1/services")
 
-    def __init__(self):
+    def __init__(self, pid: str = ""):
+        self.pid = pid
+        self.name = ""
         self._http: httpx.AsyncClient | None = None
         self._token: str | None = None
         self._sig = None
@@ -286,8 +348,9 @@ class RebeccaClient:
     # تنظیمات هر بار از کانفیگ همگام می‌شود؛ با تغییر آن، نشست قبلی دور ریخته می‌شود
     def _sync(self):
         cfg = load_config()
-        base = _strip_dashboard(cfg["panel_url"])
-        sig = (base, cfg["username"], cfg["password"], bool(cfg["verify_ssl"]))
+        pn = get_panel(cfg, self.pid) or {}
+        base = _strip_dashboard(pn.get("panel_url", ""))
+        sig = (base, pn.get("username", ""), pn.get("password", ""), bool(pn.get("verify_ssl")))
         if sig != self._sig:
             old, self._http = self._http, None
             self._token = self._login_path = None
@@ -298,9 +361,10 @@ class RebeccaClient:
                     asyncio.get_running_loop().create_task(old.aclose())
                 except RuntimeError:
                     pass
-        self.base, self.username, self.password = base, cfg["username"], cfg["password"]
-        self.verify = bool(cfg["verify_ssl"])
-        self.sub_base = _strip_dashboard(cfg["sub_url"]) or base
+        self.base, self.username, self.password = base, pn.get("username", ""), pn.get("password", "")
+        self.verify = bool(pn.get("verify_ssl"))
+        self.name = pn.get("name", "")
+        self.sub_base = _strip_dashboard(pn.get("sub_url", "")) or base
         return cfg
 
     def is_configured(self) -> bool:
@@ -422,10 +486,13 @@ class RebeccaClient:
                         out.append({"id": int(s["id"]), "name": str(s.get("name") or s.get("title") or s["id"])})
                 if out:
                     self._svc = (time.time(), out)
-                    if out != load_config()["services"]:
-                        update_config(lambda c: c.__setitem__("services", out))
+                    def save(c):
+                        pn = get_panel(c, self.pid)
+                        if pn is not None and pn["services"] != out:
+                            pn["services"] = out
+                    update_config(save)
                     return out
-        return load_config()["services"] or copy.deepcopy(DEFAULT_SERVICES)
+        return (get_panel(load_config(), self.pid) or {}).get("services", [])
 
     async def iter_users(self, status: str | None = None, page: int = 200) -> list[dict]:
         out, off = [], 0
@@ -443,10 +510,24 @@ class RebeccaClient:
         return out
 
 
-api = RebeccaClient()
+_clients: dict[str, RebeccaClient] = {}
 
 
-async def create_users(names, tpl, service_id, *, concurrency=5, on_progress=None):
+def get_api(pid: str | None = None) -> RebeccaClient:
+    """کلاینت مخصوص هر پنل (توکن و نشست جدا). بدون pid یعنی پنل فعال."""
+    pid = pid or load_config()["active_panel"]
+    if pid not in _clients:
+        _clients[pid] = RebeccaClient(pid)
+    _clients[pid]._sync()  # نام و آدرس‌ها همیشه با config هماهنگ باشند
+    return _clients[pid]
+
+
+def drop_api(pid: str):
+    c = _clients.pop(pid, None)
+    return c
+
+
+async def create_users(api, names, tpl, service_id, *, concurrency=5, on_progress=None):
     """ساخت هم‌زمان کنترل‌شده. خروجی: (موفق‌ها به ترتیب، [(نام، دلیل خطا)])."""
     sem = asyncio.Semaphore(concurrency)
     ok, failed, done = {}, {}, 0
@@ -473,7 +554,7 @@ async def create_users(names, tpl, service_id, *, concurrency=5, on_progress=Non
     return [ok[n] for n in names if n in ok], [(n, failed[n]) for n in names if n in failed]
 
 
-async def apply_user_edit(username: str, gb, days):
+async def apply_user_edit(api, username: str, gb, days):
     """gb/days = None یعنی بدون تغییر. مصرف کاربر صفر نمی‌شود."""
     u = await api.request("GET", api.upath(username))
     p = {}
@@ -489,7 +570,7 @@ async def apply_user_edit(username: str, gb, days):
     return await api.request("PUT", api.upath(username), json=p)
 
 
-async def delete_users(usernames, concurrency=10):
+async def delete_users(api, usernames, concurrency=10):
     sem = asyncio.Semaphore(concurrency)
     n_ok = 0
 
