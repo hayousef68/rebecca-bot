@@ -331,12 +331,20 @@ async function vHome() {
   } catch (e) { box.replaceChildren(h('p', { class: 'err' }, e.message)); }
   const rep = h('pre', { style: 'white-space:pre-wrap;font:inherit;line-height:1.9;margin:8px 0 0' }, 'در حال بارگذاری…');
   const loadRep = async d => { try { rep.textContent = (await api('/report?day=' + d)).text; } catch (e) { rep.textContent = e.message; } };
+  const monthSel = h('select', {}, h('option', { value: '' }, 'انتخاب ماه شمسی…'));
+  api('/report/months').then(r => r.months.forEach(m => monthSel.append(h('option', { value: m.from + '|' + m.to }, m.label)))).catch(() => {});
+  const pickMonth = () => { if (!monthSel.value) return toast('یک ماه انتخاب کنید', true); const [f, t] = monthSel.value.split('|'); loadRange(f, t); };
+  const dFrom = h('input', { type: 'date', dir: 'ltr', 'aria-label': 'از تاریخ' }), dTo = h('input', { type: 'date', dir: 'ltr', 'aria-label': 'تا تاریخ' });
+  const pickRange = () => { if (!dFrom.value || !dTo.value) return toast('هر دو تاریخ را انتخاب کنید', true); loadRange(dFrom.value, dTo.value); };
+  const loadRange = async (f, t) => { rep.textContent = 'در حال بارگذاری…'; try { rep.textContent = (await api(`/report?from=${f}&to=${t}`)).text; } catch (e) { rep.textContent = e.message; } };
   const detBtn = h('button', { class: 'btn' }, '🔎 جزئیات امروز');
   detBtn.onclick = () => run(detBtn, async () => { rep.textContent = (await api('/report/events?day=today')).text; });
   const sendBtn = h('button', { class: 'btn pri' }, '📤 ارسال گزارش امروز به ربات');
   sendBtn.onclick = () => run(sendBtn, async () => { await api('/report/send?day=today', 'POST'); toast('✅ گزارش به تلگرام ارسال شد'); });
   const repCard = h('div', { class: 'card' }, h('h2', {}, '📈 گزارش فروش'),
-    h('div', { class: 'chips', style: 'padding-bottom:4px' }, h('button', { class: 'chip on', onclick: () => loadRep('today') }, 'امروز'), h('button', { class: 'chip', onclick: () => loadRep('yesterday') }, 'دیروز'), h('button', { class: 'chip', onclick: () => loadRep('week') }, '۷ روز'), h('button', { class: 'chip', onclick: () => loadRep('month') }, 'ماه جاری')),
+    h('div', { class: 'chips', style: 'padding-bottom:4px' }, h('button', { class: 'chip on', onclick: () => loadRep('today') }, 'امروز'), h('button', { class: 'chip', onclick: () => loadRep('yesterday') }, 'دیروز'), h('button', { class: 'chip', onclick: () => loadRep('week') }, '۷ روز'), h('button', { class: 'chip', onclick: () => loadRep('month') }, 'ماه جاری'), h('button', { class: 'chip', onclick: () => loadRep('lmonth') }, 'ماه گذشته')),
+    h('div', { class: 'row', style: 'margin-bottom:8px' }, monthSel, h('button', { class: 'btn sm', onclick: pickMonth }, 'نمایش ماه')),
+    h('div', { class: 'row', style: 'margin-bottom:8px;align-items:center' }, dFrom, dTo, h('button', { class: 'btn sm', onclick: pickRange }, 'نمایش بازه')),
     rep, h('div', { class: 'btns' }, sendBtn, detBtn), h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
   loadRep('today'); mount(box, h('div', { style: 'height:12px' }), repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const clean = h('button', { class: 'btn' }, '🧹 پاکسازی منقضی‌ها'); const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
@@ -451,8 +459,29 @@ async function vSet() {
       h('div', { class: 'row' }, field('خرید هر ترابایت', buy), field('ضریب مصرف همکاری', mul)),
       field('سرویس‌های نادیده (تست؛ با کاما)', ign), h('div', { class: 'btns' }, saveS));
   }
+  // بکاپ و بازیابی
+  const autoB = h('input', { type: 'checkbox', id: 'autob', checked: c.backup_enabled });
+  autoB.onchange = () => api('/backup/settings', 'POST', { enabled: autoB.checked }).then(() => toast(autoB.checked ? 'بکاپ شبانه روشن شد' : 'بکاپ شبانه خاموش شد')).catch(e => { autoB.checked = !autoB.checked; toast(e.message, true); });
+  const dlB = h('button', { class: 'btn', type: 'button' }, '⬇️ دانلود بکاپ'); dlB.onclick = () => { location.href = '/api/backup'; };
+  const tgB = h('button', { class: 'btn', type: 'button' }, '📤 ارسال بکاپ به تلگرام'); tgB.onclick = () => run(tgB, async () => { await api('/backup/send', 'POST'); toast('✅ بکاپ به تلگرام ارسال شد'); });
+  const fileI = h('input', { type: 'file', accept: '.json,application/json' });
+  const rsB = h('button', { class: 'btn bad', type: 'button' }, '♻️ بازیابی از فایل');
+  rsB.onclick = () => run(rsB, async () => {
+    const f = fileI.files[0]; if (!f) throw new Error('ابتدا فایل بکاپ را انتخاب کنید.');
+    if (f.size > 2e6) throw new Error('حجم فایل زیاد است.');
+    if (!confirm('همه‌ی تنظیمات فعلی (پنل‌ها، توکن، قیمت‌ها، دیتابیس) با این فایل جایگزین شود؟\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
+    const r = await api('/backup/restore', 'POST', { content: await f.text() });
+    toast(`✅ بازیابی شد (${r.panels} پنل) · ربات در حال ریستارت`);
+    setTimeout(() => location.reload(), r.web_changed ? 1800 : 1200);
+  });
+  const backupCard = h('div', { class: 'card' }, h('h2', {}, '💾 بکاپ و بازیابی'),
+    h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ هر شب ساعت ۰۰:۰۰ همراه گزارش فروش'),
+    h('div', { class: 'btns' }, dlB, tgB),
+    h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, 'بازیابی از فایل بکاپ'), fileI,
+    h('p', { class: 'hint' }, 'فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
+    h('div', { class: 'btns' }, rsB));
   mount(
-    priceCard,
+    priceCard, backupCard,
     h('h2', { style: 'font-size:13px;margin:0 2px 8px' }, `پنل‌های ربکا (${c.panels.length})`), ...list,
     h('div', { class: 'card' }, ptitle, field('نام پنل', nm), field('آدرس پنل', url), field('دامنه سابسکریپشن', sub), field('نام کاربری ادمین', user), field('رمز عبور', pass),
       h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
