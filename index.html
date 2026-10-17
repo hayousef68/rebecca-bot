@@ -189,7 +189,7 @@ async function vCreate() {
       if (my !== seq) return;
       start.value = r.next; if (r.prefix.toLowerCase() === base.value.trim().toLowerCase()) base.value = r.prefix;
       if (fillOne || !one.value) one.value = r.prefix + r.next;
-      last.textContent = r.last ? `آخرین کاربر: ${r.last} ← شماره‌ی بعدی: ${r.next}` : `هنوز کاربری با «${r.prefix}» نیست ← شروع از ${r.next}`;
+      last.textContent = r.last ? `آخرین کاربر: ${r.last} ← شماره‌ی بعدی: ${r.next}` + (r.max ? ` (⚠️ بالاترین عدد موجود: ${r.max})` : '') : `هنوز کاربری با «${r.prefix}» نیست ← شروع از ${r.next}`;
     } catch (e) { if (my === seq) last.textContent = 'تشخیص خودکار ممکن نشد: ' + e.message; }
     upd();
   };
