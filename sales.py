@@ -425,6 +425,43 @@ def build_range_report(kind: str, html: bool = True) -> str:
     return build_period_report(jmonth_start(today), today, "🗓 گزارش ماه جاری", html)
 
 
+def summary(kind: str = "today") -> dict:
+    """خلاصه‌ی عددی فروش برای کارت‌های صفحه‌ی خانه (today | yday | week | month | lmonth)."""
+    today = tehran_day()
+    if kind == "yday":
+        d1 = d2 = shift_day(today, -1)
+    elif kind == "week":
+        d1, d2 = shift_day(today, -6), today
+    elif kind == "month":
+        d1, d2 = jmonth_start(today), today
+    elif kind == "lmonth":
+        m = jmonths(2)[1]
+        d1, d2 = m["from"], m["to"]
+    else:
+        d1 = d2 = today
+    d = compute_range(d1, d2, d2 >= today)
+    cl = d["cl"]
+    cnt = lambda c, i: sum(n for k, n in c.items() if k[i] == "new")  # noqa: E731
+    news = cnt(cl["ham"], 1) + cnt(cl["single"], 2) + cnt(cl["extra"], 2)
+    total = sum(cl["ham"].values()) + sum(cl["single"].values()) + sum(cl["extra"].values())
+    agg: dict = {}
+    for (gb, m, _k), n in cl["extra"].items():
+        agg[(gb, m)] = agg.get((gb, m), 0) + n
+    extra = [{"gb": gb, "months": m, "count": n, "suggest": int(round(gb * d["rate"]))} for (gb, m), n in sorted(agg.items())]
+    return {"income": int(round(d["income"])), "cost": int(round(d["cost"])), "profit": int(round(d["income"] - d["cost"])),
+            "new": news, "renew": total - news, "ham_gb": d["ham_gb"], "ignored": sum(cl["ignored"].values()), "extra": extra}
+
+
+def set_plan(gb: int, months: int, price: int) -> None:
+    """افزودن/ویرایش یک پلن در لیست قیمت تکی."""
+    def mut(c):
+        lst = [p for p in c["sales"]["single_prices"] if not (int(p["gb"]) == gb and int(p["months"]) == months)]
+        lst.append({"gb": gb, "months": months, "price": price})
+        c["sales"]["single_prices"] = lst
+    from common import update_config
+    update_config(mut)
+
+
 # ───────────────────────────── سازگاری با bot.py (بدون پولینگ) ─────────────────────────────
 async def poll_all():
     return None  # دیگر لازم نیست؛ گزارش مستقیم از دیتابیس خوانده می‌شود
