@@ -10,7 +10,7 @@ set -euo pipefail
 
 REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/hayousef68/rebecca-bot/main}"
 DIR="/opt/rebecca-bot"
-FILES="common.py sales.py bot.py webapp.py index.html requirements.txt"
+FILES="common.py sales.py ops.py bot.py webapp.py index.html requirements.txt"
 BOT_UNIT="/etc/systemd/system/rebecca-bot.service"
 WEB_UNIT="/etc/systemd/system/rebecca-webapp.service"
 BIN="/usr/local/bin/rebecca-bot"
