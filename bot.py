@@ -332,9 +332,19 @@ async def validate_and_pick_service(update, context):
     if len(services) == 1:
         cr["service_id"] = services[0]["id"]
         return await confirm_step(update, context)
+    # تکی ← ms ، گروهی ← hamkari (در مرحله‌ی تأیید قابل تغییر است)
+    auto = C.pick_default_service(services, group=len(cr["names"]) > 1)
+    if auto is not None:
+        cr["service_id"] = auto
+        return await confirm_step(update, context)
+    return await ask_service(update, context)
+
+
+async def ask_service(update, context):
+    cr = context.user_data["cr"]
     rows, row = [], []
-    for s in services:
-        row.append(B(f"📂 {s['name']}", callback_data=f"srv:{s['id']}"))
+    for sid, name in cr["services"].items():
+        row.append(B(("✅ " if sid == cr.get("service_id") else "📂 ") + name, callback_data=f"srv:{sid}"))
         if len(row) == 2:
             rows.append(row)
             row = []
@@ -342,6 +352,15 @@ async def validate_and_pick_service(update, context):
         rows.append(row)
     await context.bot.send_message(update.effective_chat.id, "📂 <b>سرویس</b> را انتخاب کنید:", reply_markup=cancel_kb(rows), parse_mode=HTML)
     return C_SERVICE
+
+
+@admin_only
+async def create_change_service(update, context):
+    await update.callback_query.answer()
+    if "cr" not in context.user_data or "services" not in context.user_data["cr"]:
+        await show(update, context, "⚠️ نشست منقضی شد. دوباره شروع کنید.", main_kb())
+        return END
+    return await ask_service(update, context)
 
 
 @admin_only
@@ -361,7 +380,7 @@ async def confirm_step(update, context):
     text = (f"📝 <b>تأیید نهایی</b>\n\n🖥 پنل: <b>{esc(pn['name'])}</b>\n👥 تعداد: <b>{len(names)}</b>\n🔤 نام‌ها: <code>{esc(rng)}</code>\n"
             f"📌 تمپلت: {esc(cr['tpl'])}\n{esc(C.tpl_summary(t))}\n"
             f"📂 سرویس: {esc(cr['services'].get(cr['service_id'], cr['service_id']))}")
-    kb = cancel_kb([[B("✅ شروع ساخت", callback_data="c:go")]])
+    kb = cancel_kb([[B("✅ شروع ساخت", callback_data="c:go")], [B("🔀 تغییر سرویس", callback_data="c:svc")]])
     await show(update, context, text, kb)
     return C_CONFIRM
 
@@ -1141,9 +1160,13 @@ async def stats(update, context):
         s = await api.request("GET", "/api/system")
     except Exception as e:  # noqa: BLE001
         return await show(update, context, err_text(e), main_kb())
-    text = (f"📊 <b>وضعیت {esc(api.name)}</b>\n👥 کل: {s.get('total_user', 0)} | 🟢 فعال: {s.get('users_active', 0)} | ⏳ On-Hold: {s.get('users_on_hold', 0)}\n"
-            f"🖥 CPU: {s.get('cpu_usage', 0)}% | 🧠 RAM: {C.fmt_gb(s.get('mem_used', 0))}/{C.fmt_gb(s.get('mem_total', 0))}\n"
-            f"📥 {C.fmt_gb(s.get('incoming_bandwidth', 0))} | 📤 {C.fmt_gb(s.get('outgoing_bandwidth', 0))}")
+    mem_t = s.get("mem_total", 0) or 0
+    ram_p = f" ({s.get('mem_used', 0) * 100 / mem_t:.0f}%)" if mem_t else ""
+    text = (f"📊 <b>وضعیت {esc(api.name)}</b>\n"
+            f"👥 کل: <b>{s.get('total_user', 0)}</b> | 🟢 فعال: <b>{s.get('users_active', 0)}</b> | 🌐 آنلاین: <b>{s.get('online_users', 0)}</b>\n"
+            f"⏳ On-Hold: {s.get('users_on_hold', 0)} | 🔴 منقضی: {s.get('users_expired', 0)} | 🟠 محدود: {s.get('users_limited', 0)} | ⚫ غیرفعال: {s.get('users_disabled', 0)}\n"
+            f"🖥 CPU: {float(s.get('cpu_usage') or 0):.0f}% | 🧠 RAM: {C.fmt_bw(s.get('mem_used', 0))}/{C.fmt_bw(mem_t)}{ram_p}\n"
+            f"🌐 ↓ <code>{C.fmt_bw(s.get('incoming_bandwidth', 0))}</code>  ↑ <code>{C.fmt_bw(s.get('outgoing_bandwidth', 0))}</code>")
     await show(update, context, text, M([[B("🔄 ریستارت هسته Xray", callback_data=f"core:ask:{api.pid}")], [B("🔙 منوی اصلی", callback_data="back")]]))
 
 
@@ -1456,7 +1479,7 @@ def build_app() -> Application:
             C_START: [cb(create_next, pattern=r"^c:next$"), cb(create_start, pattern=r"^c:single$"), MessageHandler(txt, create_start)],
             C_COUNT: [cb(create_one, pattern=r"^c:one$"), MessageHandler(txt, create_count)],
             C_SERVICE: [cb(create_service, pattern=r"^srv:\d+$")],
-            C_CONFIRM: [cb(create_go, pattern=r"^c:go$")],
+            C_CONFIRM: [cb(create_go, pattern=r"^c:go$"), cb(create_change_service, pattern=r"^c:svc$")],
             T_NAME: [MessageHandler(txt, tpl_new_name)], T_GB: [MessageHandler(txt, tpl_new_gb)],
             T_DAYS: [MessageHandler(txt, tpl_new_days)], T_EDIT: [MessageHandler(txt, tpl_edit_value)],
             S_URL: [MessageHandler(txt, setup_url)],
