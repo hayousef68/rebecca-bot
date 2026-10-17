@@ -14,6 +14,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 
 import common as C
+import ops
 import sales
 from common import get_api, get_panel, load_config, new_panel_id, update_config, RebeccaClient
 
@@ -115,6 +116,8 @@ async def stats(api: RebeccaClient = Depends(P)):
 
 @app.get("/api/report", dependencies=[Depends(guard)])
 async def report(day: str = "today"):
+    if day in ("week", "month"):
+        return {"day": day, "text": await asyncio.to_thread(sales.build_range_report, day, False)}
     today = sales.tehran_day()
     d = {"today": today, "yesterday": sales.shift_day(today, -1)}.get(day, day)
     try:
@@ -263,6 +266,7 @@ def _slim(u: dict, api) -> dict:
         "used": u.get("used_traffic") or 0, "limit": u.get("data_limit") or 0,
         "expire_text": C.fmt_expire(u.get("expire"), st, u.get("on_hold_expire_duration")),
         "sub": api.full_sub(u.get("subscription_url", "")),
+        "service_id": u.get("service_id"), "note": u.get("note") or "",
     }
 
 
@@ -281,6 +285,69 @@ async def users(search: str = "", status: str = "", offset: int = Query(0, ge=0)
 class EditReq(BaseModel):
     gb: float | None = Field(default=None, ge=0)
     days: int | None = Field(default=None, ge=0)
+
+
+class ServiceReq(BaseModel):
+    service_id: int
+
+
+class NoteReq(BaseModel):
+    note: str = Field(default="", max_length=500)
+
+
+class RenewReq(BaseModel):
+    template: str
+
+
+@app.post("/api/user/{uname}/service", dependencies=[Depends(guard)])
+async def user_service(uname: str, r: ServiceReq, api: RebeccaClient = Depends(P)):
+    return _slim(await C.set_service(api, uname, r.service_id), api)
+
+
+@app.post("/api/user/{uname}/note", dependencies=[Depends(guard)])
+async def user_note(uname: str, r: NoteReq, api: RebeccaClient = Depends(P)):
+    await C.set_note(api, uname, r.note.strip())
+    return _slim(await api.request("GET", api.upath(uname)), api)
+
+
+@app.post("/api/user/{uname}/renew", dependencies=[Depends(guard)])
+async def user_renew(uname: str, r: RenewReq, api: RebeccaClient = Depends(P)):
+    tpl = load_config()["templates"].get(r.template)
+    if not tpl:
+        raise HTTPException(404, "تمپلت پیدا نشد.")
+    await C.renew_user(api, uname, tpl)
+    return _slim(await api.request("GET", api.upath(uname)), api)
+
+
+class BulkReq(BaseModel):
+    base: str = Field(min_length=1, max_length=32)
+    start: int | None = None
+    count: int = 1
+    action: str
+    service_id: int | None = None
+    template: str | None = None
+
+
+@app.post("/api/bulk", dependencies=[Depends(guard)])
+async def bulk(r: BulkReq, api: RebeccaClient = Depends(P)):
+    cfg = load_config()
+    names = C.make_names(r.base, r.start, r.count, cfg["max_batch"])
+    if r.action not in C.BULK_ACTIONS:
+        raise HTTPException(400, "عملیات ناشناخته")
+    if r.action == "service" and r.service_id is None:
+        raise HTTPException(400, "سرویس را انتخاب کنید.")
+    tpl = cfg["templates"].get(r.template or "") if r.action == "renew" else None
+    if r.action == "renew" and not tpl:
+        raise HTTPException(400, "تمپلت را انتخاب کنید.")
+    ok, bad = await C.bulk_apply(api, names, r.action, service_id=r.service_id, tpl=tpl, concurrency=6)
+    return {"ok": len(ok), "total": len(names), "failed": [{"username": n, "reason": why} for n, why in bad]}
+
+
+@app.get("/api/soon", dependencies=[Depends(guard)])
+async def soon(api: RebeccaClient = Depends(P)):
+    rc = load_config()["reminders"]
+    items = await ops.find_soon(api, rc["days"], rc["low_pct"])
+    return {"days": rc["days"], "low_pct": rc["low_pct"], "items": [{"username": i["username"], "reason": i["reason"]} for i in items[:200]]}
 
 
 @app.post("/api/user/{uname}/{action}", dependencies=[Depends(guard)])
