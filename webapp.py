@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 import os
 import time
@@ -16,6 +17,7 @@ from pydantic import BaseModel, Field
 import common as C
 import ops
 import sales
+from sales import price_for
 from common import get_api, get_panel, load_config, new_panel_id, update_config, RebeccaClient
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -101,6 +103,7 @@ async def state():
         "panels": _panels_view(cfg), "active_panel": cfg["active_panel"],
         "bot": bool(cfg["bot_token"] and cfg["admin_ids"]),
         "templates": cfg["templates"], "active": cfg["active_template"], "max_batch": cfg["max_batch"],
+        "default_prefix": cfg["default_prefix"], "multi_panel": len(cfg["panels"]) > 1,
     }
 
 
@@ -149,6 +152,7 @@ class SalesReq(BaseModel):
     buy_per_tb: int = Field(ge=0, le=10**10)
     hamkari_usage_multiplier: float = Field(ge=0.1, le=100)
     hamkari_service_names: str = Field(default="hamkari", max_length=200)
+    ignore_service_names: str = Field(default="", max_length=200)
     single_prices: list[PlanReq] = Field(max_length=50)
 
 
@@ -158,6 +162,8 @@ async def sales_settings_get():
     return {"hamkari_per_gb": sc["hamkari_per_gb"], "buy_per_tb": sc.get("buy_per_tb", 750000),
             "hamkari_usage_multiplier": sc.get("hamkari_usage_multiplier", 1.5),
             "hamkari_service_names": ", ".join(sc.get("hamkari_service_names", [])),
+            "ignore_service_names": ", ".join(sc.get("ignore_service_names", [])),
+            "fallback_rate": round(sales.fallback_rate(sc)),
             "single_prices": sorted(sc["single_prices"], key=lambda x: (x["months"], x["gb"]))}
 
 
@@ -174,7 +180,9 @@ async def sales_settings_save(r: SalesReq):
     def mut(c):
         c["sales"].update(hamkari_per_gb=r.hamkari_per_gb, buy_per_tb=r.buy_per_tb,
                           hamkari_usage_multiplier=r.hamkari_usage_multiplier,
-                          hamkari_service_names=names or ["hamkari"], single_prices=plans)
+                          hamkari_service_names=names or ["hamkari"],
+                          ignore_service_names=[n.strip().lower() for n in r.ignore_service_names.split(",") if n.strip()],
+                          single_prices=plans)
     update_config(mut)
     return {"ok": True}
 
@@ -228,6 +236,16 @@ def _tg_bot(token: str):
     return _bot["obj"]
 
 
+@app.get("/api/next-name", dependencies=[Depends(guard)])
+async def next_name(prefix: str = Query("", max_length=28), api: RebeccaClient = Depends(P)):
+    """آخرین کاربر با این پیشوند و شماره‌ی بعدی (برای پر کردن خودکار فرم ساخت)."""
+    prefix = prefix.strip() or load_config()["default_prefix"]
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,28}", prefix):
+        raise HTTPException(400, "پیشوند فقط حروف انگلیسی، عدد و _")
+    use_db = len(load_config()["panels"]) <= 1  # دیتابیس مربوط به یک پنل است
+    return await sales.next_number(api, prefix, use_db)
+
+
 @app.post("/api/create", dependencies=[Depends(guard)])
 async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
     cfg = load_config()
@@ -248,7 +266,14 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
             tg = "queued"
         else:
             tg = "no_bot"
-    return {"ok": results, "failed": [{"username": n, "reason": r} for n, r in failed], "telegram": tg}
+    value = 0
+    try:
+        svc_name = next((s["name"] for s in await api.list_services() if s["id"] == req.service_id), "")
+        months = 2 if int(tpl["days"]) > 45 else 1
+        value = price_for(svc_name, tpl["gb"], months)[0] * len(results) if tpl["gb"] else 0
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": results, "failed": [{"username": n, "reason": r} for n, r in failed], "telegram": tg, "value": value}
 
 
 async def _safe_send(cfg, results, header):
@@ -400,6 +425,8 @@ async def tpl_save(r: TplReq):
 
     def mut(c):
         old = r.old_name or r.name
+        if r.old_name is None and r.name in c["templates"]:
+            raise ValueError("نام تمپلت تکراری است.")
         if r.name != old and r.name in c["templates"]:
             raise ValueError("نام تمپلت تکراری است.")
         items = [(r.name if k == old else k, v) for k, v in c["templates"].items()]
