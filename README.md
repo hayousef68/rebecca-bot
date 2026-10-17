@@ -24,9 +24,25 @@ bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/in
 
 (برای نگه‌داشتن نسخه پشتیبان تنظیمات: `uninstall -y --keep-config`)
 
+آپدیت ربات
+
 ```bash
 rebecca-bot update
 ```
+
+تنظیم برای وصل شدن ربات به دیتابیس پنل
+
+```bash
+/setdb 127.0.0.1 3306 user pass dbname
+```
+
+نمونه 
+```bash
+/setdb 127.0.0.1 3306 rebecca gs650hwhCC.iWSQLUmMNwX1WC rebecca
+```
+
+
+
 ## مدیریت
 
 بعد از نصب دستور `rebecca-bot` ساخته می‌شود:
