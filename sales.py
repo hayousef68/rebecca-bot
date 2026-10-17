@@ -42,6 +42,53 @@ def shift_day(day: str, delta: int) -> str:
     return (date.fromisoformat(day) + timedelta(days=delta)).strftime("%Y-%m-%d")
 
 
+def g2j(gy: int, gm: int, gd: int):
+    g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    gy2 = gy + 1 if gm > 2 else gy
+    days = 355666 + (365 * gy) + ((gy2 + 3) // 4) - ((gy2 + 99) // 100) + ((gy2 + 399) // 400) + gd + g_d_m[gm - 1]
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        return jy, 1 + days // 31, 1 + days % 31
+    return jy, 7 + (days - 186) // 30, 1 + (days - 186) % 30
+
+
+_WD = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه", "یکشنبه"]  # weekday(): Mon=0
+_FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def jdate(day: str, weekday: bool = True) -> str:
+    d = date.fromisoformat(day)
+    jy, jm, jd = g2j(d.year, d.month, d.day)
+    out = f"{jy}/{jm:02d}/{jd:02d}".translate(_FA)
+    return f"{_WD[d.weekday()]} {out}" if weekday else out
+
+
+def jmonth_start(day: str) -> str:
+    """اولین روز ماه شمسی که day در آن است (به میلادی)."""
+    d = date.fromisoformat(day)
+    _, _, jd = g2j(d.year, d.month, d.day)
+    return (d - timedelta(days=jd - 1)).strftime("%Y-%m-%d")
+
+
+def _bounds_days(d1: str, d2: str, partial: bool):
+    """از شروع d1 تا پایان d2 (به وقت تهران) → datetime ساده در منطقه‌ی دیتابیس."""
+    off = int(load_config()["sales"].get("db_tz_offset_minutes", 0))
+    a = date.fromisoformat(d1)
+    b = date.fromisoformat(d2)
+    s = datetime(a.year, a.month, a.day, tzinfo=TEHRAN)
+    e = datetime(b.year, b.month, b.day, tzinfo=TEHRAN) + timedelta(days=1)
+    if partial:
+        e = min(e, datetime.now(TEHRAN))
+    conv = lambda x: x.astimezone(timezone.utc).replace(tzinfo=None) + timedelta(minutes=off)  # noqa: E731
+    return conv(s), conv(e)
+
+
 def _bounds_db(day: str, partial: bool):
     """بازه‌ی روز تهران → datetime ساده در منطقه‌ی زمانی دیتابیس (پیش‌فرض UTC)."""
     cfg = load_config()["sales"]
@@ -82,8 +129,16 @@ def _ident(x: str) -> str:
 
 
 def fetch_events(day: str, partial: bool) -> list[dict]:
+    return _fetch(*_bounds_db(day, partial))
+
+
+def fetch_events_range(d1: str, d2: str, partial: bool) -> list[dict]:
+    return _fetch(*_bounds_days(d1, d2, partial))
+
+
+def _fetch(a, b) -> list[dict]:
     s = _schema()
-    a, b = _bounds_db(day, partial)
+    off = int(load_config()["sales"].get("db_tz_offset_minutes", 0))
     U, R = _ident(s["users"]), _ident(s["resets"])
     cols = (f"u.{_ident(s['u_name'])} AS username, u.{_ident(s['u_limit'])} AS data_limit, u.{_ident(s['u_expire'])} AS expire, "
             f"u.{_ident(s['u_hold'])} AS hold, u.{_ident(s['u_service'])} AS service_id, u.{_ident(s['u_created'])} AS created_at")
@@ -106,6 +161,7 @@ def fetch_events(day: str, partial: bool) -> list[dict]:
         conn.close()
     for r in rows:
         r["service_name"] = svc.get(r["service_id"], "")
+        r["_off"] = off
     # ریستی که بلافاصله (≤ ۲ دقیقه) بعد از ساخت همان کاربر ثبت شده، فروش جدا حساب نمی‌شود
     created = {r["username"]: r["at"] for r in rows if r["kind"] == "new" and isinstance(r["at"], datetime)}
     rows = [r for r in rows if not (r["kind"] == "renew" and r["username"] in created and isinstance(r["at"], datetime)
@@ -128,7 +184,8 @@ def _months(r: dict) -> int:
     if r.get("hold"):
         days = int(r["hold"]) / 86400
     elif r.get("expire") and r.get("at"):
-        at = r["at"].replace(tzinfo=timezone.utc).timestamp() if isinstance(r["at"], datetime) else 0
+        at = ((r["at"] - timedelta(minutes=int(r.get("_off", 0)))).replace(tzinfo=timezone.utc).timestamp()
+              if isinstance(r["at"], datetime) else 0)
         days = (int(r["expire"]) - at) / 86400
     return 2 if days > 45 else 1
 
@@ -151,8 +208,15 @@ def classify(rows: list[dict], cfg: dict) -> dict:
 
 
 def compute(day: str, partial: bool) -> dict:
+    return compute_rows(fetch_events(day, partial))
+
+
+def compute_range(d1: str, d2: str, partial: bool) -> dict:
+    return compute_rows(fetch_events_range(d1, d2, partial))
+
+
+def compute_rows(rows: list[dict]) -> dict:
     cfg = load_config()["sales"]
-    rows = fetch_events(day, partial)
     cl = classify(rows, cfg)
     price = {(int(p["gb"]), int(p["months"])): int(p["price"]) for p in cfg["single_prices"]}
     ham_gb = sum(gb * n for (gb, _k), n in cl["ham"].items())
@@ -170,15 +234,9 @@ def _t(n) -> str:
     return f"{int(round(n)):,}".replace(",", "٬")
 
 
-def build_report(day: str, html: bool = True, partial: bool = False) -> str:
-    try:
-        d = compute(day, partial)
-    except Exception as e:  # noqa: BLE001
-        log.exception("sales report")
-        msg = f"❌ خطا در خواندن دیتابیس: {e}"
-        return _html.escape(msg) if html else msg
+def _render(title: str, d: dict, html: bool) -> str:
     cl, L = d["cl"], []
-    L.append(f"📈 گزارش فروش {day}" + (" (تا این لحظه)" if partial else ""))
+    L.append(title)
     L.append("")
     L.append("🤝 همکاری (Hamkari)")
     if not cl["ham"]:
@@ -204,6 +262,34 @@ def build_report(day: str, html: bool = True, partial: bool = False) -> str:
     L.append(f"✅ سود تخمینی: {_t(d['income'] - d['cost'])} تومان")
     text = "\n".join(L)
     return _html.escape(text) if html else text
+
+
+def _err(e: Exception, html: bool) -> str:
+    log.exception("sales report")
+    msg = f"❌ خطا در خواندن دیتابیس: {e}"
+    return _html.escape(msg) if html else msg
+
+
+def build_report(day: str, html: bool = True, partial: bool = False) -> str:
+    try:
+        d = compute(day, partial)
+    except Exception as e:  # noqa: BLE001
+        return _err(e, html)
+    return _render(f"📈 گزارش فروش {jdate(day)}" + (" (تا این لحظه)" if partial else ""), d, html)
+
+
+def build_range_report(kind: str, html: bool = True) -> str:
+    """kind: week = ۷ روز اخیر | month = از اول ماه شمسی تا همین لحظه"""
+    today = tehran_day()
+    if kind == "week":
+        d1, title = shift_day(today, -6), "📅 گزارش ۷ روز اخیر"
+    else:
+        d1, title = jmonth_start(today), "🗓 گزارش ماه جاری"
+    try:
+        d = compute_range(d1, today, True)
+    except Exception as e:  # noqa: BLE001
+        return _err(e, html)
+    return _render(f"{title}\n{jdate(d1, False)} تا {jdate(today, False)} (تا این لحظه)", d, html)
 
 
 # ───────────────────────────── سازگاری با bot.py (بدون پولینگ) ─────────────────────────────
