@@ -66,6 +66,7 @@ DEFAULT_CFG = {
             {"gb": 90, "months": 2, "price": 390000},
         ],
     },
+    "backup": {"enabled": True},
     "monitor": {"enabled": True, "interval": 300},
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
     "web": {"user": "admin", "salt": "", "hash": ""},
@@ -163,7 +164,7 @@ def _normalize(data: dict) -> dict:
     cfg["sales"] = sales
     pre = str(cfg.get("default_prefix") or "")
     cfg["default_prefix"] = pre if re.fullmatch(r"[A-Za-z0-9_]{0,28}", pre) else DEFAULT_CFG["default_prefix"]
-    for key in ("monitor", "reminders"):
+    for key in ("monitor", "reminders", "backup"):
         sec = copy.deepcopy(DEFAULT_CFG[key])
         if isinstance(cfg.get(key), dict):
             sec.update(cfg[key])
@@ -219,6 +220,12 @@ def save_config(cfg: dict) -> None:
             if os.path.exists(tmp):
                 os.unlink(tmp)
         _cache["data"] = None
+
+
+def config_backup_bytes() -> bytes:
+    """محتوای فعلی config.json برای بکاپ."""
+    with open(CONFIG_FILE, "rb") as f:
+        return f.read()
 
 
 def update_config(mutator) -> dict:
