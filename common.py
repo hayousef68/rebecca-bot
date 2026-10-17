@@ -47,6 +47,12 @@ DEFAULT_CFG = {
         "enabled": True,
         "poll_seconds": 120,
         "hamkari_per_gb": 3000,
+        "buy_per_tb": 750000,
+        "tb_gb": 1000,
+        "hamkari_usage_multiplier": 1.5,
+        "db_tz_offset_minutes": 0,
+        "db": {},
+        "schema": {},
         "hamkari_service_ids": [],
         "hamkari_service_names": ["hamkari"],
         "single_prices": [
