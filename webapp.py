@@ -118,8 +118,14 @@ async def stats(api: RebeccaClient = Depends(P)):
 
 
 @app.get("/api/report", dependencies=[Depends(guard)])
-async def report(day: str = "today"):
-    if day in ("week", "month"):
+async def report(day: str = "today", date_from: str = Query("", alias="from", max_length=10), date_to: str = Query("", alias="to", max_length=10)):
+    if date_from and date_to:
+        try:
+            sales.shift_day(date_from, 0); sales.shift_day(date_to, 0)
+        except ValueError:
+            raise HTTPException(400, "تاریخ نامعتبر؛ فرمت YYYY-MM-DD")
+        return {"day": "range", "text": await asyncio.to_thread(sales.build_period_report, date_from, date_to, "", False)}
+    if day in ("week", "month", "lmonth"):
         return {"day": day, "text": await asyncio.to_thread(sales.build_range_report, day, False)}
     today = sales.tehran_day()
     d = {"today": today, "yesterday": sales.shift_day(today, -1)}.get(day, day)
@@ -128,6 +134,11 @@ async def report(day: str = "today"):
     except ValueError:
         raise HTTPException(400, "تاریخ نامعتبر؛ today / yesterday / YYYY-MM-DD")
     return {"day": d, "text": await asyncio.to_thread(sales.build_report, d, html=False, partial=(d == today))}
+
+
+@app.get("/api/report/months", dependencies=[Depends(guard)])
+async def report_months():
+    return {"months": sales.jmonths(12)}
 
 
 @app.get("/api/report/events", dependencies=[Depends(guard)])
@@ -484,7 +495,8 @@ async def settings_get():
     panels = [{"id": p["id"], "name": p["name"], "panel_url": p["panel_url"], "sub_url": p["sub_url"], "username": p["username"],
                "has_password": bool(p["password"]), "verify_ssl": p["verify_ssl"]} for p in c["panels"]]
     return {"panels": panels, "active_panel": c["active_panel"], "bot_token": _mask(c["bot_token"]),
-            "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin")}
+            "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin"),
+            "backup_enabled": c["backup"]["enabled"]}
 
 
 class SettingsReq(BaseModel):
@@ -516,6 +528,75 @@ async def settings_save(r: SettingsReq):
         except Exception:  # noqa: BLE001
             log.warning("ریستارت خودکار ربات ممکن نشد")
     return {"ok": True, "bot_restarted": restart_bot}
+
+
+# ───────────────────────────── بکاپ و بازیابی ─────────────────────────────
+class BackupSettingsReq(BaseModel):
+    enabled: bool
+
+
+class RestoreReq(BaseModel):
+    content: str = Field(min_length=2, max_length=2_000_000)
+
+
+@app.get("/api/backup", dependencies=[Depends(guard)])
+async def backup_download():
+    try:
+        data = await asyncio.to_thread(C.config_backup_bytes)
+    except OSError:
+        raise HTTPException(404, "فایل تنظیمات پیدا نشد.")
+    return Response(data, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="rebecca-config-{sales.tehran_day()}.json"'})
+
+
+@app.post("/api/backup/settings", dependencies=[Depends(guard)])
+async def backup_settings(r: BackupSettingsReq):
+    update_config(lambda c: c["backup"].__setitem__("enabled", r.enabled))
+    return {"ok": True}
+
+
+@app.post("/api/backup/send", dependencies=[Depends(guard)])
+async def backup_send():
+    cfg = load_config()
+    if not (cfg["bot_token"] and cfg["admin_ids"]):
+        raise HTTPException(400, "توکن ربات یا ادمین تنظیم نشده")
+    n = await sales.send_backup(_tg_bot(cfg["bot_token"]), cfg["admin_ids"], "💾 بکاپ تنظیمات — جای امن نگه دارید.")
+    if not n:
+        raise HTTPException(502, "ارسال به تلگرام ناموفق بود (ربات را در تلگرام Start کرده‌اید؟)")
+    return {"sent": n}
+
+
+@app.post("/api/backup/restore", dependencies=[Depends(guard)])
+async def backup_restore(r: RestoreReq):
+    """فایل بکاپ را اعتبارسنجی، از وضعیت فعلی نسخه‌ی پشتیبان می‌گیرد، اعمال می‌کند و ربات را ریستارت می‌کند."""
+    import json
+    import shutil
+    try:
+        data = json.loads(r.content)
+    except ValueError:
+        raise HTTPException(400, "فایل JSON معتبر نیست.")
+    if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates"}):
+        raise HTTPException(400, "این فایل شبیه بکاپ تنظیمات ربات نیست.")
+    new = C._normalize(data)
+    cur = load_config()
+    if not (new.get("web") or {}).get("hash"):          # بکاپ بدون رمز وب: رمز فعلی حفظ شود
+        new["web"] = cur["web"]
+    web_changed = (new["web"].get("hash"), new["web"].get("user")) != (cur["web"].get("hash"), cur["web"].get("user"))
+    safety = None
+    if os.path.exists(C.CONFIG_FILE):
+        safety = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.copy2(C.CONFIG_FILE, safety)
+        os.chmod(safety, 0o600)
+    C.save_config(new)
+    for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
+        C.drop_api(p)
+    _bot.update(token=None, obj=None)
+    try:
+        proc = await asyncio.create_subprocess_exec("systemctl", "restart", "rebecca-bot")
+        asyncio.create_task(proc.wait())
+    except Exception:  # noqa: BLE001
+        log.warning("ریستارت خودکار ربات ممکن نشد")
+    return {"ok": True, "panels": len(new["panels"]), "web_changed": web_changed, "safety": os.path.basename(safety) if safety else None}
 
 
 class PanelReq(BaseModel):
