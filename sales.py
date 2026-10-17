@@ -136,7 +136,7 @@ def usernames_like(prefix: str) -> list[str]:
     conn = _connect()
     try:
         with conn.cursor() as c:
-            c.execute(f"SELECT {_ident(sc['u_name'])} AS n FROM {_ident(sc['users'])} WHERE {_ident(sc['u_name'])} LIKE %s", (like,))
+            c.execute(f"SELECT {_ident(sc['u_name'])} AS n FROM {_ident(sc['users'])} WHERE LOWER({_ident(sc['u_name'])}) LIKE LOWER(%s)", (like,))
             return [r["n"] for r in c.fetchall()]
     finally:
         conn.close()
@@ -149,7 +149,8 @@ def _pick_next(names: list[str], prefix: str) -> dict:
         m = rx.match(str(n))
         if m and int(m.group(1)) >= best:
             best, last = int(m.group(1)), str(n)
-    return {"prefix": prefix, "last": last, "next": best + 1}
+    # بزرگی/کوچکی حروف را از آخرین کاربر می‌گیریم (مثلاً Ms_8714 → Ms_)
+    return {"prefix": last[:len(prefix)] if last else prefix, "last": last, "next": best + 1}
 
 
 async def next_number(api, prefix: str, use_db: bool = True) -> dict:
@@ -162,7 +163,7 @@ async def next_number(api, prefix: str, use_db: bool = True) -> dict:
         except Exception as e:  # noqa: BLE001
             log.warning("next_number via db failed: %s", e)
     names, off = [], 0
-    while off < 5000:
+    while off < 50000:
         res = await api.request("GET", "/api/users", params={"offset": off, "limit": 200, "search": prefix})
         users = res.get("users", []) if isinstance(res, dict) else (res or [])
         names += [u.get("username", "") for u in users]
