@@ -63,6 +63,8 @@ DEFAULT_CFG = {
             {"gb": 90, "months": 2, "price": 390000},
         ],
     },
+    "monitor": {"enabled": True, "interval": 300},
+    "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
     "web": {"user": "admin", "salt": "", "hash": ""},
 }
 
@@ -156,6 +158,19 @@ def _normalize(data: dict) -> dict:
         except (TypeError, ValueError):
             sales[k] = DEFAULT_CFG["sales"][k]
     cfg["sales"] = sales
+    for key in ("monitor", "reminders"):
+        sec = copy.deepcopy(DEFAULT_CFG[key])
+        if isinstance(cfg.get(key), dict):
+            sec.update(cfg[key])
+        for k, dv in DEFAULT_CFG[key].items():
+            if isinstance(dv, bool):
+                sec[k] = bool(sec[k])
+            else:
+                try:
+                    sec[k] = max(1, int(sec[k]))
+                except (TypeError, ValueError):
+                    sec[k] = dv
+        cfg[key] = sec
     for k in ("max_batch", "max_qr", "web_port"):
         try:
             cfg[k] = int(cfg[k])
@@ -290,6 +305,18 @@ def build_payload(username: str, tpl: dict, service_id: int) -> dict:
     p = {"username": username, "data_limit": int(gb * GB) if gb > 0 else 0, "service_id": int(service_id), "status": mode}
     if mode == "on_hold":
         p["on_hold_expire_duration"] = days * 86400 if days > 0 else 30 * 86400
+    else:
+        p["expire"] = int(time.time()) + days * 86400 if days > 0 else 0
+    return p
+
+
+def build_renew_payload(tpl: dict) -> dict:
+    """تمدید با تمپلت: حجم و مدت جدید، به حالت On-Hold (اولین اتصال) یا Active."""
+    gb, days, mode = tpl["gb"], int(tpl["days"]), tpl.get("mode", "on_hold")
+    p = {"data_limit": int(gb * GB) if gb > 0 else 0, "status": mode}
+    if mode == "on_hold":
+        p["on_hold_expire_duration"] = days * 86400 if days > 0 else 30 * 86400
+        p["expire"] = 0
     else:
         p["expire"] = int(time.time()) + days * 86400 if days > 0 else 0
     return p
@@ -574,6 +601,73 @@ async def apply_user_edit(api, username: str, gb, days):
     if u.get("status") in ("expired", "limited"):
         p["status"] = "active"
     return await api.request("PUT", api.upath(username), json=p)
+
+
+async def set_service(api, username: str, service_id: int):
+    """تغییر سرویس کاربر؛ بعد از تغییر وضعیت را می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
+    p = api.upath(username)
+    res = await api.request("PUT", p, json={"service_id": int(service_id)})
+    after = res if isinstance(res, dict) and "service_id" in res else await api.request("GET", p)
+    got = after.get("service_id")
+    if got is not None and int(got) != int(service_id):
+        raise RebeccaError("پنل تغییر سرویس را اعمال نکرد (سرویس همچنان قبلی است).")
+    return after
+
+
+async def renew_user(api, username: str, tpl: dict):
+    """ریست مصرف + حجم/مدت جدید طبق تمپلت. ابتدا ریست، بعد وضعیت (تا ریست وضعیت On-Hold را خراب نکند)."""
+    p = api.upath(username)
+    await api.request("POST", p + "/reset")
+    return await api.request("PUT", p, json=build_renew_payload(tpl))
+
+
+async def set_note(api, username: str, note: str):
+    return await api.request("PUT", api.upath(username), json={"note": note[:500]})
+
+
+BULK_ACTIONS = {
+    "service": "🔀 تغییر سرویس", "renew": "⚡ تمدید با تمپلت", "reset": "🔄 صفر کردن مصرف",
+    "disable": "⛔ غیرفعال‌سازی", "enable": "✅ فعال‌سازی", "delete": "🗑 حذف",
+}
+
+
+async def bulk_apply(api, names, action: str, *, service_id=None, tpl=None, concurrency=5, on_progress=None):
+    """اجرای یک عملیات روی چند کاربر. خروجی: (موفق‌ها، [(نام، دلیل)])"""
+    if action not in BULK_ACTIONS:
+        raise ValueError("عملیات ناشناخته")
+    sem = asyncio.Semaphore(concurrency)
+    ok, bad, done = [], {}, 0
+
+    async def one(n):
+        nonlocal done
+        async with sem:
+            p = api.upath(n)
+            try:
+                if action == "service":
+                    await set_service(api, n, service_id)
+                elif action == "renew":
+                    await renew_user(api, n, tpl)
+                elif action == "reset":
+                    await api.request("POST", p + "/reset")
+                elif action in ("disable", "enable"):
+                    await api.request("PUT", p, json={"status": "disabled" if action == "disable" else "active"})
+                else:
+                    await api.request("DELETE", p)
+                ok.append(n)
+            except RebeccaError as e:
+                bad[n] = "پیدا نشد" if e.status == 404 else str(e)
+            except Exception as e:  # noqa: BLE001
+                log.exception("bulk %s %s", action, n)
+                bad[n] = f"خطای غیرمنتظره: {e.__class__.__name__}"
+            done += 1
+            if on_progress:
+                try:
+                    await on_progress(done, len(names))
+                except Exception:  # noqa: BLE001
+                    pass
+
+    await asyncio.gather(*(one(n) for n in names))
+    return [n for n in names if n in ok], [(n, bad[n]) for n in names if n in bad]
 
 
 async def delete_users(api, usernames, concurrency=10):
