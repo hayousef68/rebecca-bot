@@ -218,8 +218,28 @@ async function vUsers() {
   }
   search.addEventListener('input', debounce(() => { U.q = search.value.trim(); load(true); }, 350));
   more.onclick = () => run(more, () => load(false));
-  mount(search, h('div', { style: 'height:10px' }), chips, info, list, more); load(true);
+  try { S.svcs = (await api('/services')).services; } catch { S.svcs = []; }
+  mount(bulkCard(), h('div', { style: 'height:10px' }), search, h('div', { style: 'height:10px' }), chips, info, list, more); load(true);
 }
+function bulkCard() {
+  const base = h('input', { placeholder: 'نام پایه، مثلاً ali', dir: 'ltr', maxlength: 32 }), start = h('input', { type: 'number', min: 0, placeholder: 'عدد شروع (خالی = تک کاربر)', dir: 'ltr' }), count = h('input', { type: 'number', min: 1, value: 10, dir: 'ltr' });
+  const act = h('select', {}, [['service', '🔀 تغییر سرویس'], ['renew', '⚡ تمدید با تمپلت'], ['reset', '🔄 صفر کردن مصرف'], ['disable', '⛔ غیرفعال‌سازی'], ['enable', '✅ فعال‌سازی'], ['delete', '🗑 حذف']].map(([v, t]) => h('option', { value: v }, t)));
+  const svc = h('select', {}, (S.svcs || []).map(s => h('option', { value: s.id }, s.name)));
+  const tpl = h('select', {}, Object.entries(S.st.templates).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB/${t.days || '∞'}d`)));
+  const svcF = field('سرویس جدید', svc), tplF = field('تمپلت', tpl), out = h('div'), go = h('button', { class: 'btn pri' }, 'اجرا');
+  const sync = () => { svcF.hidden = act.value !== 'service'; tplF.hidden = act.value !== 'renew'; count.disabled = start.value === ''; };
+  [act, start].forEach(x => x.addEventListener('input', sync)); sync();
+  go.onclick = () => run(go, async () => {
+    if (!base.value.trim()) throw new Error('نام پایه را وارد کنید.');
+    const n = start.value === '' ? 1 : +count.value;
+    if (!confirm(`${act.selectedOptions[0].textContent} روی ${n} کاربر اجرا شود؟`)) return;
+    const r = await api('/bulk', 'POST', { base: base.value.trim(), start: start.value === '' ? null : +start.value, count: n, action: act.value, service_id: svc.value ? +svc.value : null, template: tpl.value });
+    out.replaceChildren(h('p', { class: 'hint' }, `✅ ${r.ok} از ${r.total} کاربر انجام شد.`), r.failed.slice(0, 20).map(f => h('p', { class: 'err' }, `${f.username}: ${f.reason}`)));
+  });
+  return h('details', { class: 'item' }, h('summary', {}, h('span', { class: 'nm' }, '👥 عملیات گروهی'), h('span', { class: 'sub' }, 'سرویس، تمدید، ریست…')),
+    h('div', { class: 'body' }, field('نام پایه', base), h('div', { class: 'row' }, field('عدد شروع', start), field('تعداد', count)), field('عملیات', act), svcF, tplF, h('div', { class: 'btns' }, go), out));
+}
+
 function userItem(u, parent) {
   const pct = u.limit ? Math.min(100, u.used * 100 / u.limit) : 0;
   const d = h('details', { class: 'item s-' + u.status });
@@ -238,14 +258,27 @@ function userItem(u, parent) {
     toast('ذخیره شد'); const n = userItem(r, parent); d.replaceWith(n); n.open = true;
   });
   const q = h('div'); const P = `/user/${encodeURIComponent(u.username)}/`;
+  const svcName = ((S.svcs || []).find(s => s.id === u.service_id) || {}).name || (u.service_id != null ? '#' + u.service_id : '—');
+  const swap = n => { d.replaceWith(n); n.open = true; };
+  const svcSel = h('select', {}, (S.svcs || []).map(s => h('option', { value: s.id, selected: s.id === u.service_id }, s.name)));
+  const svcBtn = h('button', { class: 'btn sm' }, '🔀 تغییر سرویس');
+  svcBtn.onclick = () => run(svcBtn, async () => { if (!svcSel.value) throw new Error('سرویسی موجود نیست.'); const r = await api(P + 'service', 'POST', { service_id: +svcSel.value }); toast('سرویس تغییر کرد'); swap(userItem(r, parent)); });
+  const tplSel = h('select', {}, Object.entries(S.st.templates).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB/${t.days || '∞'}d`)));
+  const rnBtn = h('button', { class: 'btn sm pri' }, '⚡ تمدید');
+  rnBtn.onclick = () => { if (!confirm(`«${u.username}» با تمپلت «${tplSel.value}» تمدید شود؟ (مصرف صفر می‌شود)`)) return; run(rnBtn, async () => { const r = await api(P + 'renew', 'POST', { template: tplSel.value }); toast('تمدید شد'); swap(userItem(r, parent)); }); };
+  const noteI = h('input', { value: u.note || '', placeholder: 'یادداشت (نام مشتری، شماره…)', maxlength: 500 });
+  const noteB = h('button', { class: 'btn sm' }, '📝 ذخیره یادداشت');
+  noteB.onclick = () => run(noteB, async () => { const r = await api(P + 'note', 'POST', { note: noteI.value }); toast('یادداشت ذخیره شد'); swap(userItem(r, parent)); });
   body.append(h('div', { class: 'bar' }, h('i', { style: `width:${pct}%` })),
-    h('p', { class: 'sub' }, `مصرف: ${gb(u.used)} / ${gb(u.limit)} · اعتبار: ${u.expire_text}`),
+    h('p', { class: 'sub' }, `سرویس: ${svcName} · مصرف: ${gb(u.used)} / ${gb(u.limit)} · اعتبار: ${u.expire_text}`),
     h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
     h('div', { class: 'btns' },
       h('button', { class: 'btn sm', onclick: () => toggleQR(q, u.sub, u.username) }, '🖼 QR'),
       h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 کپی'),
       act('🔄 صفر کردن مصرف', P + 'reset', 'مصرف صفر شد'), act('🔗 لینک جدید', P + 'revoke', 'لینک جدید ساخته شد'),
       act(u.status === 'disabled' ? '✅ فعال‌سازی' : '⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد')),
+    h('div', { class: 'row', style: 'margin-top:12px' }, svcSel, svcBtn), h('div', { class: 'row', style: 'margin-top:8px' }, tplSel, rnBtn),
+    h('div', { class: 'row', style: 'margin-top:8px' }, noteI, noteB),
     h('div', { class: 'row', style: 'margin-top:12px' }, gbI, dI), h('div', { class: 'btns' }, save,
       (() => { const b = h('button', { class: 'btn sm bad' }, '🗑 حذف'); b.onclick = () => { if (!confirm(`کاربر ${u.username} حذف شود؟`)) return; run(b, async () => { await api(P + 'delete', 'POST'); toast('حذف شد'); d.remove(); }); }; return b; })()));
   d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username), h('span', { class: 'sub' }, `${gb(u.used)} / ${gb(u.limit)}`)), body);
@@ -269,7 +302,7 @@ async function vHome() {
   const sendBtn = h('button', { class: 'btn pri' }, '📤 ارسال گزارش امروز به ربات');
   sendBtn.onclick = () => run(sendBtn, async () => { await api('/report/send?day=today', 'POST'); toast('✅ گزارش به تلگرام ارسال شد'); });
   const repCard = h('div', { class: 'card' }, h('h2', {}, '📈 گزارش فروش'),
-    h('div', { class: 'chips', style: 'padding-bottom:4px' }, h('button', { class: 'chip on', onclick: () => loadRep('today') }, 'امروز'), h('button', { class: 'chip', onclick: () => loadRep('yesterday') }, 'دیروز')),
+    h('div', { class: 'chips', style: 'padding-bottom:4px' }, h('button', { class: 'chip on', onclick: () => loadRep('today') }, 'امروز'), h('button', { class: 'chip', onclick: () => loadRep('yesterday') }, 'دیروز'), h('button', { class: 'chip', onclick: () => loadRep('week') }, '۷ روز'), h('button', { class: 'chip', onclick: () => loadRep('month') }, 'ماه جاری')),
     rep, h('div', { class: 'btns' }, sendBtn, detBtn), h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
   loadRep('today'); mount(box, h('div', { style: 'height:12px' }), repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const clean = h('button', { class: 'btn' }, '🧹 پاکسازی منقضی‌ها'); const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
@@ -280,7 +313,12 @@ async function vHome() {
     const r = await api('/cleanup?dry=false', 'POST'); toast(`${r.deleted} کاربر حذف شد`);
   });
   core.onclick = () => { if (confirm('هسته Xray ریستارت شود؟')) run(core, async () => { await api('/core/restart', 'POST'); toast('ریستارت شد'); }); };
-  res.replaceChildren(h('h2', {}, 'عملیات'), h('div', { class: 'btns' }, clean, core));
+  const soonOut = h('div'), soonBtn = h('button', { class: 'btn' }, '⏰ نزدیک انقضا / کم‌حجم');
+  soonBtn.onclick = () => run(soonBtn, async () => {
+    const r = await api('/soon');
+    soonOut.replaceChildren(h('p', { class: 'hint' }, r.items.length ? `${r.items.length} کاربر (تا ${r.days} روز یا کمتر از ${r.low_pct}٪ حجم)` : '✅ موردی نیست'), r.items.map(i => h('p', { class: 'sub' }, `${i.username} — ${i.reason}`)));
+  });
+  res.replaceChildren(h('h2', {}, 'عملیات'), h('div', { class: 'btns' }, clean, core, soonBtn), soonOut);
 }
 
 /* ───────── تمپلت ───────── */
