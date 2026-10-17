@@ -124,6 +124,32 @@ async def report(day: str = "today"):
     return {"day": d, "text": await asyncio.to_thread(sales.build_report, d, html=False, partial=(d == today))}
 
 
+@app.post("/api/report/send", dependencies=[Depends(guard)])
+async def report_send(day: str = "today"):
+    """گزارش را همین الان به ادمین‌ها در تلگرام می‌فرستد (فقط یک کوئری read-only)."""
+    cfg = load_config()
+    if not (cfg["bot_token"] and cfg["admin_ids"]):
+        raise HTTPException(400, "توکن ربات یا ادمین تنظیم نشده")
+    today = sales.tehran_day()
+    d = {"today": today, "yesterday": sales.shift_day(today, -1)}.get(day, day)
+    try:
+        sales.shift_day(d, 0)
+    except ValueError:
+        raise HTTPException(400, "تاریخ نامعتبر؛ today / yesterday / YYYY-MM-DD")
+    text = await asyncio.to_thread(sales.build_report, d, True, d == today)
+    bot = _tg_bot(cfg["bot_token"])
+    sent = 0
+    for uid in cfg["admin_ids"]:
+        try:
+            await bot.send_message(uid, text, parse_mode="HTML")
+            sent += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning("send report to %s: %s", uid, e)
+    if not sent:
+        raise HTTPException(502, "ارسال به تلگرام ناموفق بود (ربات را در تلگرام Start کرده‌اید؟)")
+    return {"sent": sent}
+
+
 @app.get("/api/qr", dependencies=[Depends(guard)])
 async def qr(text: str = Query(..., min_length=1, max_length=2000)):
     png = await asyncio.to_thread(C.make_qr_png, text)
