@@ -104,6 +104,7 @@ async def state():
         "bot": bool(cfg["bot_token"] and cfg["admin_ids"]),
         "templates": cfg["templates"], "active": cfg["active_template"], "max_batch": cfg["max_batch"],
         "default_prefix": cfg["default_prefix"], "multi_panel": len(cfg["panels"]) > 1,
+        "ham_names": cfg.get("sales", {}).get("hamkari_service_names", ["hamkari"]),
     }
 
 
