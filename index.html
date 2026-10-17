@@ -66,7 +66,7 @@ img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:1
 </style>
 </head>
 <body>
-<header><h1>پنل مدیریت ربکا</h1><span id="conn" class="pill">…</span></header>
+<header><h1>پنل مدیریت ربکا</h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:12px"></select><span id="conn" class="pill">…</span></div></header>
 <main id="view"></main>
 <nav id="nav"></nav>
 <div id="toast" class="toast" hidden></div>
@@ -89,6 +89,7 @@ function h(tag, props = {}, ...kids) {
 }
 async function api(path, method = 'GET', body) {
   let r;
+  if (S.panel && !/^\/(state|templates|panels|qr)/.test(path) && path !== '/settings') path += (path.includes('?') ? '&' : '?') + 'panel=' + encodeURIComponent(S.panel);
   try {
     r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' }, body: body ? JSON.stringify(body) : undefined });
   } catch { throw new Error('ارتباط با سرور برقرار نشد.'); }
@@ -117,7 +118,7 @@ async function run(btn, fn) {
   try { await fn(); } catch (e) { toast(e.message, true); } finally { btn.disabled = false; btn.textContent = old; }
 }
 
-const S = { st: null, tab: 'create', users: { q: '', status: '', off: 0 }, last: null };
+const S = { st: null, panel: null, tab: 'create', users: { q: '', status: '', off: 0 }, last: null };
 const TABS = [['create', '➕', 'ساخت'], ['users', '👥', 'کاربران'], ['home', '📊', 'خانه'], ['tpl', '⚙️', 'تمپلت'], ['set', '🔧', 'تنظیمات']];
 
 function renderNav() {
@@ -125,22 +126,37 @@ function renderNav() {
     h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k), 'aria-label': t }, h('b', {}, ic), t)));
 }
 async function go(tab) { S.tab = tab; renderNav(); await ({ create: vCreate, users: vUsers, home: vHome, tpl: vTpl, set: vSet })[tab](); window.scrollTo(0, 0); }
+const hasPanel = () => S.st.panels.some(p => p.ok);
 async function refreshState() {
   S.st = await api('/state');
-  const c = $('#conn'); c.textContent = S.st.configured ? 'متصل' : 'پنل تنظیم نشده'; c.className = 'pill ' + (S.st.configured ? 'ok' : 'bad');
+  let saved = null; try { saved = localStorage.getItem('rb.panel'); } catch {}
+  if (!S.st.panels.some(p => p.id === S.panel)) S.panel = S.st.panels.some(p => p.id === saved) ? saved : S.st.active_panel;
+  const sel = $('#psel'); sel.hidden = S.st.panels.length < 2;
+  sel.replaceChildren(...S.st.panels.map(p => h('option', { value: p.id, selected: p.id === S.panel }, p.name)));
+  sel.onchange = () => setPanel(sel.value);
+  const cur = S.st.panels.find(p => p.id === S.panel), c = $('#conn');
+  c.textContent = !S.st.panels.length ? 'پنل ندارید' : (cur && cur.ok ? 'متصل' : 'ناقص'); c.className = 'pill ' + (cur && cur.ok ? 'ok' : 'bad');
+}
+async function setPanel(id) {
+  S.panel = id; S.users.off = 0; try { localStorage.setItem('rb.panel', id); } catch {}
+  $('#psel').value = id; await go(S.tab);
 }
 const mount = (...n) => $('#view').replaceChildren(...n);
 const field = (label, input) => h('div', {}, h('label', {}, label), input);
 
 /* ───────── ساخت ───────── */
-function vCreate() {
+async function vCreate() {
   const st = S.st;
-  if (!st.configured) return mount(h('div', { class: 'card' }, h('h2', {}, 'اتصال به پنل'), h('p', { class: 'hint' }, 'ابتدا از تب «تنظیمات» آدرس و حساب ادمین ربکا را وارد کنید.'), h('div', { class: 'btns' }, h('button', { class: 'btn pri', onclick: () => go('set') }, 'رفتن به تنظیمات'))));
+  if (!hasPanel()) return mount(h('div', { class: 'card' }, h('h2', {}, 'اتصال به پنل'), h('p', { class: 'hint' }, 'ابتدا از تب «تنظیمات» یک پنل ربکا اضافه کنید.'), h('div', { class: 'btns' }, h('button', { class: 'btn pri', onclick: () => go('set') }, 'رفتن به تنظیمات'))));
+  let services = [];
+  try { services = (await api('/services')).services; } catch (e) { toast(e.message, true); }
+  const psel = h('select', {}, st.panels.map(p => h('option', { value: p.id, selected: p.id === S.panel }, p.name + (p.ok ? '' : ' (ناقص)'))));
+  psel.onchange = () => setPanel(psel.value);
   const tpl = h('select', {}, Object.entries(st.templates).map(([n, t]) => h('option', { value: n, selected: n === st.active }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
   const base = h('input', { placeholder: 'ali', autocapitalize: 'none', autocomplete: 'off', dir: 'ltr', maxlength: 32 });
   const start = h('input', { type: 'number', inputmode: 'numeric', min: 0, placeholder: 'خالی = تک کاربر', dir: 'ltr' });
   const count = h('input', { type: 'number', inputmode: 'numeric', min: 1, max: st.max_batch, value: 10, dir: 'ltr' });
-  const svc = h('select', {}, st.services.map(s => h('option', { value: s.id }, s.name)));
+  const svc = h('select', {}, services.map(s => h('option', { value: s.id }, s.name)));
   const tg = h('input', { type: 'checkbox', id: 'tg', checked: st.bot });
   const prev = h('p', { class: 'hint' });
   const out = h('div');
@@ -153,13 +169,14 @@ function vCreate() {
   const go_ = h('button', { class: 'btn pri' }, '⚡ ساخت اکانت‌ها');
   go_.onclick = () => run(go_, async () => {
     if (!base.value.trim()) throw new Error('نام پایه را وارد کنید.');
+    if (!svc.value) throw new Error('سرویسی برای این پنل پیدا نشد؛ اتصال پنل را در تنظیمات بررسی کنید.');
     go_.textContent = 'در حال ساخت…';
     const r = await api('/create', 'POST', { base: base.value.trim(), start: start.value === '' ? null : +start.value, count: start.value === '' ? 1 : +count.value, service_id: +svc.value, template: tpl.value, telegram: tg.checked });
-    S.last = r; showResults(out, r);
+    r.panelName = (st.panels.find(p => p.id === S.panel) || {}).name; S.last = r; showResults(out, r);
     if (r.telegram === 'queued') toast('QRها به تلگرام ادمین ارسال می‌شوند'); else if (r.telegram === 'no_bot') toast('ربات/ادمین تنظیم نشده؛ ارسال تلگرام انجام نشد', true);
   });
   mount(h('div', { class: 'card' }, h('h2', {}, 'ساخت اکانت (تکی یا گروهی)'),
-    field('تمپلت', tpl), field('نام پایه (انگلیسی)', base),
+    st.panels.length > 1 ? field('ساخت روی پنل', psel) : null, field('تمپلت', tpl), field('نام پایه (انگلیسی)', base),
     h('div', { class: 'row' }, field('عدد شروع', start), field('تعداد', count)), prev,
     field('سرویس', svc),
     st.bot ? h('label', { class: 'chk', for: 'tg' }, tg, 'ارسال QR و لینک‌ها به تلگرام ادمین') : null,
@@ -169,7 +186,7 @@ function vCreate() {
 function showResults(box, r) {
   const links = r.ok.map(u => `${u.username} | ${u.sub}`).join('\n');
   box.replaceChildren(
-    h('div', { class: 'card' }, h('h2', {}, `✅ ${r.ok.length} اکانت ساخته شد` + (r.failed.length ? ` — ⚠️ ${r.failed.length} ناموفق` : '')),
+    h('div', { class: 'card' }, h('h2', {}, `✅ ${r.ok.length} اکانت ساخته شد` + (r.panelName && S.st.panels.length > 1 ? ` روی «${r.panelName}»` : '') + (r.failed.length ? ` — ⚠️ ${r.failed.length} ناموفق` : '')),
       r.failed.slice(0, 20).map(f => h('p', { class: 'err' }, `${f.username}: ${f.reason}`)),
       r.ok.length ? h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: () => copy(r.ok.map(u => u.sub).join('\n')) }, '📋 کپی همه لینک‌ها'),
@@ -186,7 +203,7 @@ function showResults(box, r) {
 
 /* ───────── کاربران ───────── */
 async function vUsers() {
-  if (!S.st.configured) return vCreate();
+  if (!hasPanel()) return vCreate();
   const U = S.users; const list = h('div'); const more = h('button', { class: 'btn', hidden: true }, 'بیشتر'); const info = h('p', { class: 'hint' });
   const search = h('input', { type: 'search', placeholder: 'جستجوی نام کاربری…', value: U.q, dir: 'ltr', autocomplete: 'off' });
   const chips = h('div', { class: 'chips' }, [['', 'همه'], ['active', 'فعال'], ['on_hold', 'On-Hold'], ['expired', 'منقضی'], ['limited', 'محدود'], ['disabled', 'غیرفعال']].map(([k, t]) =>
@@ -237,15 +254,20 @@ function userItem(u, parent) {
 
 /* ───────── خانه ───────── */
 async function vHome() {
-  if (!S.st.configured) return vCreate();
+  if (!hasPanel()) return vCreate();
   const box = h('div', { class: 'stat' }); const res = h('div', { class: 'card' });
-  mount(box, h('div', { style: 'height:12px' }), res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   try {
     const s = await api('/stats');
     const cell = (t, v) => h('div', {}, h('span', {}, t), h('strong', {}, v));
     box.replaceChildren(cell('کل کاربران', s.total_user ?? 0), cell('فعال', s.users_active ?? 0), cell('On-Hold', s.users_on_hold ?? 0), cell('CPU', (s.cpu_usage ?? 0) + '%'),
       cell('RAM', `${gb(s.mem_used)} / ${gb(s.mem_total)}`), cell('پهنای باند', `↓${gb(s.incoming_bandwidth)} ↑${gb(s.outgoing_bandwidth)}`));
   } catch (e) { box.replaceChildren(h('p', { class: 'err' }, e.message)); }
+  const rep = h('pre', { style: 'white-space:pre-wrap;font:inherit;line-height:1.9;margin:8px 0 0' }, 'در حال بارگذاری…');
+  const loadRep = async d => { try { rep.textContent = (await api('/report?day=' + d)).text; } catch (e) { rep.textContent = e.message; } };
+  const repCard = h('div', { class: 'card' }, h('h2', {}, '📈 گزارش فروش'),
+    h('div', { class: 'chips', style: 'padding-bottom:4px' }, h('button', { class: 'chip on', onclick: () => loadRep('today') }, 'امروز'), h('button', { class: 'chip', onclick: () => loadRep('yesterday') }, 'دیروز')),
+    rep, h('p', { class: 'hint' }, 'ساخت و تمدیدهایی که روی پنل می‌زنید هر چند دقیقه شناسایی می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ در تلگرام می‌آید.'));
+  loadRep('today'); mount(box, h('div', { style: 'height:12px' }), repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const clean = h('button', { class: 'btn' }, '🧹 پاکسازی منقضی‌ها'); const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   clean.onclick = () => run(clean, async () => {
     const { count } = await api('/cleanup?dry=true', 'POST');
@@ -284,30 +306,48 @@ function vTpl() {
 async function vSet() {
   let c; try { c = await api('/settings'); } catch (e) { return mount(h('p', { class: 'err' }, e.message)); }
   const i = (v, p = '', t = 'text') => h('input', { type: t, value: v ?? '', placeholder: p, dir: 'ltr', autocomplete: 'off' });
-  const url = i(c.panel_url, 'https://panel.example.com:2096'), sub = i(c.sub_url, 'خالی = مشابه پنل'), user = i(c.username), pass = i('', c.has_password ? '•••••• (بدون تغییر)' : 'رمز ادمین پنل', 'password');
-  const ssl = h('input', { type: 'checkbox', id: 'ssl', checked: c.verify_ssl });
-  const tok = i(c.bot_token, '123456:ABC…'), adm = i(c.admin_ids.join(', '), 'شناسه عددی ادمین‌ها، با کاما'), wp = i('', 'حداقل ۸ کاراکتر', 'password');
-  const saveP = h('button', { class: 'btn pri' }, 'ذخیره و تست اتصال');
+  const refresh = async () => { await refreshState(); await vSet(); };
+  // فرم افزودن/ویرایش پنل
+  let editId = null;
+  const nm = h('input', { placeholder: 'مثلاً پنل اصلی', maxlength: 40 }), url = i('', 'https://panel.example.com:2096'), sub = i('', 'خالی = مشابه پنل'), user = i(''), pass = i('', 'رمز ادمین پنل', 'password');
+  const ssl = h('input', { type: 'checkbox', id: 'ssl' });
+  const ptitle = h('h2', {}, 'افزودن پنل جدید'); const saveP = h('button', { class: 'btn pri' }, 'ذخیره و تست اتصال');
+  const fill = p => { editId = p ? p.id : null; ptitle.textContent = p ? 'ویرایش: ' + p.name : 'افزودن پنل جدید'; nm.value = p ? p.name : ''; url.value = p ? p.panel_url : ''; sub.value = p ? p.sub_url : '';
+    user.value = p ? p.username : ''; pass.value = ''; pass.placeholder = p && p.has_password ? '•••••• (بدون تغییر)' : 'رمز ادمین پنل'; ssl.checked = p ? p.verify_ssl : false; };
   saveP.onclick = () => run(saveP, async () => {
-    await api('/settings', 'POST', { panel_url: url.value, sub_url: sub.value, username: user.value, password: pass.value || null, verify_ssl: ssl.checked });
-    const r = await api('/settings/test', 'POST'); toast(`✅ متصل شد · ${r.total_user} کاربر · ${r.services} سرویس`); await refreshState();
+    const r = await api('/panels', 'POST', { id: editId, name: nm.value, panel_url: url.value, sub_url: sub.value, username: user.value, password: pass.value || null, verify_ssl: ssl.checked });
+    S.panel = r.id; await refreshState();
+    try { const t = await api('/settings/test', 'POST'); toast(`✅ متصل شد · ${t.total_user} کاربر · ${t.services} سرویس`); }
+    catch (e) { toast('ذخیره شد ولی اتصال ناموفق: ' + e.message, true); }
+    await vSet();
   });
+  const list = c.panels.map(p => {
+    const on = p.id === c.active_panel;
+    const mk = (label, fn, cls = '') => { const b = h('button', { class: 'btn sm ' + cls }, label); b.onclick = () => run(b, fn); return b; };
+    return h('div', { class: 'item', style: on ? 'border-color:var(--ac)' : '' }, h('div', { class: 'head' }, h('span', { class: 'nm' }, (on ? '✅ ' : '🖥 ') + p.name), h('span', { class: 'sub', dir: 'ltr' }, p.panel_url.replace(/^https?:\/\//, ''))),
+      h('div', { class: 'body' }, h('div', { class: 'btns' },
+        on ? null : mk('فعال‌سازی', async () => { await api('/panels/active', 'POST', { name: p.id }); await refresh(); }),
+        mk('✏️ ویرایش', async () => { fill(p); saveP.scrollIntoView({ behavior: 'smooth' }); }),
+        mk('🔌 تست', async () => { S.panel = p.id; const t = await api('/settings/test', 'POST'); toast(`✅ ${t.total_user} کاربر · ${t.services} سرویس`); await refreshState(); }),
+        mk('🗑 حذف', async () => { if (!confirm(`پنل «${p.name}» از ربات حذف شود؟ (کاربران داخل پنل دست نمی‌خورند)`)) return; await api('/panels/delete', 'POST', { name: p.id }); await refresh(); }, 'bad'))));
+  });
+  const tok = i(c.bot_token, '123456:ABC…'), adm = i(c.admin_ids.join(', '), 'شناسه عددی ادمین‌ها، با کاما'), wp = i('', 'حداقل ۸ کاراکتر', 'password');
   const saveB = h('button', { class: 'btn pri' }, 'ذخیره تنظیمات ربات');
   saveB.onclick = () => run(saveB, async () => { const r = await api('/settings', 'POST', { bot_token: tok.value, admin_ids: adm.value }); toast(r.bot_restarted ? 'ذخیره شد و ربات ریستارت شد' : 'ذخیره شد'); await refreshState(); });
   const saveW = h('button', { class: 'btn' }, 'تغییر رمز وب‌پنل');
   saveW.onclick = () => run(saveW, async () => { await api('/settings', 'POST', { web_password: wp.value }); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
-  const sv = h('button', { class: 'btn' }, '🔄 به‌روزرسانی فهرست سرویس‌ها');
-  sv.onclick = () => run(sv, async () => { const r = await api('/services/refresh', 'POST'); toast(`${r.services.length} سرویس`); await refreshState(); });
   mount(
-    h('div', { class: 'card' }, h('h2', {}, 'اتصال به پنل ربکا'), field('آدرس پنل', url), field('دامنه سابسکریپشن', sub), field('نام کاربری ادمین', user), field('رمز عبور', pass),
-      h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'), h('div', { class: 'btns' }, saveP, sv)),
+    h('h2', { style: 'font-size:13px;margin:0 2px 8px' }, `پنل‌های ربکا (${c.panels.length})`), ...list,
+    h('div', { class: 'card' }, ptitle, field('نام پنل', nm), field('آدرس پنل', url), field('دامنه سابسکریپشن', sub), field('نام کاربری ادمین', user), field('رمز عبور', pass),
+      h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
+      h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)'))),
     h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)),
     h('div', { class: 'card' }, h('h2', {}, `رمز وب‌پنل (کاربر: ${c.web_user})`), field('رمز جدید', wp), h('div', { class: 'btns' }, saveW)));
 }
 
 (async () => {
   renderNav();
-  try { await refreshState(); await go(S.st.configured ? 'create' : 'set'); }
+  try { await refreshState(); await go(hasPanel() ? 'create' : 'set'); }
   catch (e) { mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
 })();
 </script>
