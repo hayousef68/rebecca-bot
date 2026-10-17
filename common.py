@@ -519,8 +519,7 @@ async def _retry(fn):
 
 
 async def send_results(bot, chat_id, results: list[dict], header: str, max_qr: int = 100):
-    """QR همه کاربران را در آلبوم‌های ۱۰تایی می‌فرستد + فایل متنی لینک‌ها."""
-    from telegram import InputMediaPhoto
+    """QR هر کاربر را جداگانه و پشت‌سرهم می‌فرستد + فایل متنی لینک‌ها."""
     from telegram.constants import ParseMode
     from telegram.error import TelegramError
 
@@ -529,19 +528,14 @@ async def send_results(bot, chat_id, results: list[dict], header: str, max_qr: i
 
     with_qr = [r for r in results if r["sub"]][:max_qr]
     pngs = await asyncio.gather(*(asyncio.to_thread(make_qr_png, r["sub"]) for r in with_qr))
-    for i in range(0, len(with_qr), 10):
-        chunk, imgs = with_qr[i:i + 10], pngs[i:i + 10]
+    # هر اشتراک جداگانه و پشت‌سرهم (به ترتیب ساخت)
+    for r, png in zip(with_qr, pngs):
         try:
-            if len(chunk) == 1:
-                await _retry(lambda: bot.send_photo(chat_id, imgs[0], caption=caption(chunk[0]), parse_mode=ParseMode.HTML))
-            else:
-                media = [InputMediaPhoto(p, caption=caption(r), parse_mode=ParseMode.HTML) for r, p in zip(chunk, imgs)]
-                await _retry(lambda: bot.send_media_group(chat_id, media))
+            await _retry(lambda: bot.send_photo(chat_id, png, caption=caption(r), parse_mode=ParseMode.HTML))
         except TelegramError as e:
-            log.warning("album failed: %s", e)
-            text = "\n\n".join(f"{r['username']}\n{r['sub']}" for r in chunk)
-            await _retry(lambda: bot.send_message(chat_id, text))
-        await asyncio.sleep(0.4)
+            log.warning("send_photo failed for %s: %s", r["username"], e)
+            await _retry(lambda: bot.send_message(chat_id, f"{r['username']}\n{r['sub']}"))
+        await asyncio.sleep(0.5)  # رعایت محدودیت نرخ تلگرام
     if len(results) > 1 or len(results) > len(with_qr):
         txt = "\n".join(f"{r['username']} | {r['sub']}" for r in results)
         bio = io.BytesIO(txt.encode("utf-8"))
