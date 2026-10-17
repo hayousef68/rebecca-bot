@@ -962,7 +962,8 @@ def _prices_text() -> str:
               "<code>/setcost 750000</code> — قیمت خرید هر ترابایت",
               "<code>/setmult 1.5</code> — ضریب مصرف همکاری",
               "<code>/setdb host port user pass dbname</code> — اتصال MySQL (فقط خواندن)",
-              "<code>/dbcheck</code> — بررسی اتصال و ساختار جدول‌ها"]
+              "<code>/dbcheck</code> — بررسی اتصال و ساختار جدول‌ها",
+              "<code>/events</code> یا <code>/events yesterday</code> — فهرست تک‌تک ساخت/تمدیدها"]
     return "\n".join(lines)
 
 
@@ -973,6 +974,15 @@ async def prices_cmd(update, context):
 
 def _arg_err(update, usage):
     return update.message.reply_html(f"❌ فرمت درست: <code>{usage}</code>")
+
+
+@admin_only
+async def events_cmd(update, context):
+    which = (context.args[0] if context.args else "today").lower()
+    today = sales.tehran_day()
+    day = sales.shift_day(today, -1) if which in ("yesterday", "yday", "dirooz") else today
+    text = await asyncio.to_thread(sales.build_events, day, True, day == today)
+    await update.message.reply_html(f"<pre>{text}</pre>"[:4000])
 
 
 @admin_only
@@ -1112,7 +1122,7 @@ def build_app() -> Application:
         fallbacks=[CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), cb(back_cb, pattern=r"^back$")],
         allow_reentry=True,
     )
-    for name, fn in (("prices", prices_cmd), ("setham", setham_cmd), ("setplan", setplan_cmd), ("delplan", delplan_cmd),
+    for name, fn in (("prices", prices_cmd), ("events", events_cmd), ("setham", setham_cmd), ("setplan", setplan_cmd), ("delplan", delplan_cmd),
                      ("setcost", setcost_cmd), ("setmult", setmult_cmd), ("setdb", setdb_cmd), ("dbcheck", dbcheck_cmd)):
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(conv)
