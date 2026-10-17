@@ -21,7 +21,7 @@ try:
 except Exception:  # noqa: BLE001
     TEHRAN = timezone(timedelta(hours=3, minutes=30))
 
-from common import load_config, esc
+from common import load_config, esc, config_backup_bytes
 
 log = logging.getLogger("rebecca.sales")
 
@@ -384,18 +384,45 @@ def build_report(day: str, html: bool = True, partial: bool = False) -> str:
     return _render(f"📈 گزارش فروش {jdate(day)}" + (" (تا این لحظه)" if partial else ""), d, html)
 
 
-def build_range_report(kind: str, html: bool = True) -> str:
-    """kind: week = ۷ روز اخیر | month = از اول ماه شمسی تا همین لحظه"""
+_JM = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
+
+
+def jmonths(n: int = 12) -> list[dict]:
+    """n ماه شمسی اخیر (از ماه جاری به عقب) با اولین و آخرین روز هر ماه (میلادی)."""
     today = tehran_day()
-    if kind == "week":
-        d1, title = shift_day(today, -6), "📅 گزارش ۷ روز اخیر"
-    else:
-        d1, title = jmonth_start(today), "🗓 گزارش ماه جاری"
+    start, out = jmonth_start(today), []
+    end = today
+    for _ in range(n):
+        y, m, _d = g2j(*map(int, start.split("-")))
+        out.append({"label": f"{_JM[m - 1]} {y}".translate(_FA), "from": start, "to": end})
+        end = shift_day(start, -1)
+        start = jmonth_start(end)
+    return out
+
+
+def build_period_report(d1: str, d2: str, title: str = "", html: bool = True) -> str:
+    """گزارش بازه‌ی دلخواه (روزهای میلادی، شامل هر دو سر بازه)."""
+    today = tehran_day()
+    if d1 > d2:
+        d1, d2 = d2, d1
+    d2 = min(d2, today)
     try:
-        d = compute_range(d1, today, True)
+        d = compute_range(d1, d2, d2 >= today)
     except Exception as e:  # noqa: BLE001
         return _err(e, html)
-    return _render(f"{title}\n{jdate(d1, False)} تا {jdate(today, False)} (تا این لحظه)", d, html)
+    tail = " (تا این لحظه)" if d2 >= today else ""
+    return _render(f"{title or '📆 گزارش بازه'}\n{jdate(d1, False)} تا {jdate(d2, False)}{tail}", d, html)
+
+
+def build_range_report(kind: str, html: bool = True) -> str:
+    """kind: week = ۷ روز اخیر | month = ماه شمسی جاری | lmonth = ماه شمسی گذشته (کامل)"""
+    today = tehran_day()
+    if kind == "week":
+        return build_period_report(shift_day(today, -6), today, "📅 گزارش ۷ روز اخیر", html)
+    if kind == "lmonth":
+        m = jmonths(2)[1]
+        return build_period_report(m["from"], m["to"], f"🗓 گزارش {m['label']}", html)
+    return build_period_report(jmonth_start(today), today, "🗓 گزارش ماه جاری", html)
 
 
 # ───────────────────────────── سازگاری با bot.py (بدون پولینگ) ─────────────────────────────
@@ -423,6 +450,29 @@ async def report_loop(bot):
                 await bot.send_message(uid, text, parse_mode="HTML")
             except Exception as e:  # noqa: BLE001
                 log.warning("send report to %s: %s", uid, e)
+        if cfg["backup"]["enabled"]:
+            await send_backup(bot, cfg["admin_ids"], "💾 بکاپ خودکار شبانه — شامل توکن و رمزهاست؛ جای امن نگه دارید.")
+
+
+async def send_backup(bot, admin_ids, caption: str) -> int:
+    """فایل config.json را به ادمین‌ها می‌فرستد؛ تعداد ارسال موفق را برمی‌گرداند."""
+    import io
+    try:
+        data = await asyncio.to_thread(config_backup_bytes)
+    except OSError as e:
+        log.warning("backup read: %s", e)
+        return 0
+    name = f"rebecca-config-{tehran_day()}.json"
+    sent = 0
+    for uid in admin_ids:
+        try:
+            bio = io.BytesIO(data)
+            bio.name = name
+            await bot.send_document(uid, bio, caption=caption)
+            sent += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning("send backup to %s: %s", uid, e)
+    return sent
 
 
 def db_check() -> str:
