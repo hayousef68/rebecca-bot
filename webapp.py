@@ -227,6 +227,9 @@ class CreateReq(BaseModel):
     service_id: int
     template: str | None = None
     telegram: bool = False
+    gb: float | None = Field(default=None, ge=0, le=100000)      # جایگزین حجم تمپلت (تکی)
+    days: int | None = Field(default=None, ge=0, le=36500)       # جایگزین مدت تمپلت
+    mode: str | None = Field(default=None, pattern="^(on_hold|active)$")
 
 
 def _tg_bot(token: str):
@@ -253,6 +256,13 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
     tpl = cfg["templates"].get(name)
     if not tpl:
         raise HTTPException(404, "تمپلت پیدا نشد.")
+    tpl = dict(tpl)
+    if req.gb is not None:
+        tpl["gb"] = int(req.gb) if float(req.gb).is_integer() else req.gb
+    if req.days is not None:
+        tpl["days"] = req.days
+    if req.mode:
+        tpl["mode"] = req.mode
     names = C.make_names(req.base, req.start, req.count, cfg["max_batch"])
     results, failed = await C.create_users(api, names, tpl, req.service_id, concurrency=6)
     tg = "off"
