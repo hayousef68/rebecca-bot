@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex,nofollow">
+<title>ورود | پنل ربکا</title>
+<style>
+:root{
+  --bg:#0a1016;--s1:#121b24;--s2:#1a2632;--line:#233241;--tx:#e9f0f6;--mu:#8497aa;
+  --ac:#f0b429;--ac2:#ff8a3d;--ac-ink:#1c1503;--bad:#f2706b;--ok:#3ecf8e;
+  font-family:"Vazirmatn","Vazir","IRANSansX","Segoe UI",Tahoma,system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+html,body{min-height:100%}
+body{
+  min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px 16px;color:var(--tx);font-size:14px;line-height:1.7;
+  background:radial-gradient(800px 420px at 85% -120px,#f0b42926,transparent 60%),radial-gradient(700px 420px at -10% 100%,#5aa9ff1c,transparent 60%),var(--bg);
+  overflow-x:hidden;
+}
+.orb{position:fixed;border-radius:50%;filter:blur(70px);opacity:.22;pointer-events:none;z-index:0}
+.orb.a{width:280px;height:280px;background:var(--ac);top:-90px;inset-inline-start:-80px}
+.orb.b{width:240px;height:240px;background:#5aa9ff;bottom:-90px;inset-inline-end:-60px}
+.wrap{position:relative;z-index:1;width:100%;max-width:400px}
+.brand{text-align:center;margin-bottom:22px}
+.logo{width:68px;height:68px;border-radius:22px;margin:0 auto 14px;display:grid;place-items:center;font-size:34px;font-weight:900;color:var(--ac-ink);
+  background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 10px 34px #f0b4293d,inset 0 1px 0 #fff5}
+.brand h1{font-size:21px;font-weight:800}
+.brand p{color:var(--mu);font-size:13px;margin-top:2px}
+.card{
+  background:linear-gradient(180deg,#121b24f2,#0f1821f2);border:1px solid var(--line);border-radius:22px;padding:24px 20px 20px;
+  box-shadow:0 18px 50px #0009;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
+.f{position:relative;margin-bottom:14px}
+.f label{display:block;font-size:12px;color:var(--mu);margin:0 2px 6px}
+.f .ic{position:absolute;inset-inline-start:14px;bottom:14px;width:20px;height:20px;stroke:var(--mu);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;pointer-events:none;transition:stroke .15s}
+.f:focus-within .ic{stroke:var(--ac)}
+input[type=text],input[type=password]{
+  width:100%;min-height:50px;background:var(--bg);border:1px solid var(--line);border-radius:14px;color:var(--tx);font:inherit;font-size:15px;
+  padding:10px 44px;direction:ltr;text-align:left;transition:border-color .15s,box-shadow .15s;
+}
+input::placeholder{color:#55677a}
+input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
+.eye{position:absolute;inset-inline-end:6px;bottom:6px;width:38px;height:38px;border:0;background:none;border-radius:10px;cursor:pointer;display:grid;place-items:center;color:var(--mu)}
+.eye:hover{color:var(--tx);background:var(--s2)}
+.eye svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.opts{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 16px;font-size:13px;color:var(--mu)}
+.chk{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+.chk input{appearance:none;-webkit-appearance:none;width:20px;height:20px;border-radius:7px;border:1px solid var(--line);background:var(--bg);display:grid;place-items:center;cursor:pointer;transition:all .15s;margin:0}
+.chk input:checked{background:linear-gradient(135deg,var(--ac),var(--ac2));border-color:transparent}
+.chk input:checked::after{content:"";width:5px;height:10px;border:solid var(--ac-ink);border-width:0 2.4px 2.4px 0;transform:rotate(45deg) translate(-1px,-1px)}
+.chk input:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.btn{
+  width:100%;min-height:50px;border:0;border-radius:14px;font:inherit;font-size:15px;font-weight:800;cursor:pointer;color:var(--ac-ink);
+  background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 6px 22px #f0b42940;display:flex;align-items:center;justify-content:center;gap:10px;
+  transition:transform .08s,filter .15s,opacity .15s;
+}
+.btn:hover{filter:brightness(1.07)}.btn:active{transform:scale(.98)}
+.btn:disabled{opacity:.7;cursor:wait}
+.spin{width:18px;height:18px;border-radius:50%;border:2.5px solid #1c150355;border-top-color:var(--ac-ink);animation:r .7s linear infinite;display:none}
+.btn.load .spin{display:block}
+@keyframes r{to{transform:rotate(360deg)}}
+.err{display:none;align-items:center;gap:8px;background:#f2706b14;border:1px solid #f2706b55;color:var(--bad);border-radius:12px;padding:9px 12px;font-size:13px;margin-bottom:14px}
+.err.show{display:flex}
+.err svg{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.card.shake{animation:sh .38s}
+@keyframes sh{20%,60%{transform:translateX(-7px)}40%,80%{transform:translateX(7px)}}
+.foot{text-align:center;color:var(--mu);font-size:12px;margin-top:16px;display:flex;align-items:center;justify-content:center;gap:6px}
+.foot svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.foot.ok{color:var(--ok)}
+@media (prefers-reduced-motion:no-preference){.wrap{animation:in .45s ease-out both}@keyframes in{from{opacity:0;transform:translateY(14px)}}}
+@media (prefers-reduced-motion:reduce){.card.shake{animation:none}.spin{animation-duration:1.6s}}
+</style>
+</head>
+<body>
+<div class="orb a"></div><div class="orb b"></div>
+<main class="wrap">
+  <div class="brand">
+    <div class="logo">R</div>
+    <h1>پنل مدیریت ربکا</h1>
+    <p>برای ادامه وارد شوید</p>
+  </div>
+  <form class="card" id="card" autocomplete="on" novalidate>
+    <div class="err" id="err" role="alert"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16.2v.1"/></svg><span id="errt"></span></div>
+    <div class="f">
+      <label for="u">نام کاربری</label>
+      <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c0-3.6 3.4-6 7.5-6s7.5 2.4 7.5 6"/></svg>
+      <input id="u" name="username" type="text" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="username" required autofocus>
+    </div>
+    <div class="f">
+      <label for="p">رمز عبور</label>
+      <svg class="ic" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>
+      <input id="p" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required>
+      <button type="button" class="eye" id="eye" aria-label="نمایش رمز">
+        <svg viewBox="0 0 24 24" id="eyei"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>
+      </button>
+    </div>
+    <div class="opts">
+      <label class="chk"><input type="checkbox" id="rem"> مرا ۳۰ روز به خاطر بسپار</label>
+    </div>
+    <button class="btn" id="go" type="submit"><span class="spin"></span><span id="gt">ورود به پنل</span></button>
+  </form>
+  <div class="foot" id="foot"></div>
+</main>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const card = $('#card'), err = $('#err'), btn = $('#go'), u = $('#u'), p = $('#p');
+const OPEN = '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>';
+const SHUT = '<path d="M3 3l18 18M10.6 5.7A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-3.2 3.9M6.4 6.9C3.8 8.7 2.5 12 2.5 12S6 18.5 12 18.5c1.6 0 3-.4 4.3-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/>';
+$('#eye').onclick = () => { const show = p.type === 'password'; p.type = show ? 'text' : 'password'; $('#eyei').innerHTML = show ? SHUT : OPEN; p.focus(); };
+if (location.protocol === 'https:') { const f = $('#foot'); f.classList.add('ok'); f.innerHTML = '<svg viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>اتصال امن (HTTPS)'; }
+function fail(msg) {
+  $('#errt').textContent = msg; err.classList.add('show');
+  card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+}
+[u, p].forEach(x => x.addEventListener('input', () => err.classList.remove('show')));
+card.addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!u.value.trim() || !p.value) return fail('نام کاربری و رمز عبور را وارد کنید.');
+  btn.disabled = true; btn.classList.add('load'); $('#gt').textContent = 'در حال ورود…';
+  try {
+    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' }, body: JSON.stringify({ user: u.value.trim(), password: p.value, remember: $('#rem').checked }) });
+    let d = {}; try { d = await r.json(); } catch {}
+    if (r.ok) { $('#gt').textContent = 'ورود موفق ✓'; location.replace('/'); return; }
+    fail(typeof d.detail === 'string' ? d.detail : 'ورود ناموفق بود.');
+    p.select();
+  } catch { fail('ارتباط با سرور برقرار نشد.'); }
+  btn.disabled = false; btn.classList.remove('load'); $('#gt').textContent = 'ورود به پنل';
+});
+</script>
+</body>
+</html>
