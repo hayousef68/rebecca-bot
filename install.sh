@@ -3,14 +3,14 @@
 #
 #   نصب:      bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh)
 #   حذف:      bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh) uninstall -y
-#   بعد از نصب دستور  rebecca-bot  در دسترس است:  rebecca-bot {update|restart|status|logs|passwd|info|uninstall}
+#   بعد از نصب دستور  rebecca-bot  در دسترس است:  rebecca-bot {update|restart|status|logs|passwd|info|ssl|uninstall}
 #
-# نصب بدون سؤال:  BOT_TOKEN=123:ABC ADMIN_ID=111,222 WEB_PORT=8686 bash <(curl -Ls ...)
+# نصب بدون سؤال:  BOT_TOKEN=123:ABC ADMIN_ID=111,222 WEB_USER=admin WEB_PASSWORD=mypass1234 WEB_PORT=8686 bash <(curl -Ls ...)
 set -euo pipefail
 
 REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/hayousef68/rebecca-bot/main}"
 DIR="/opt/rebecca-bot"
-FILES="common.py sales.py ops.py bot.py webapp.py index.html requirements.txt"
+FILES="common.py sales.py ops.py tlsutil.py bot.py webapp.py run_web.py index.html login.html requirements.txt"
 BOT_UNIT="/etc/systemd/system/rebecca-bot.service"
 WEB_UNIT="/etc/systemd/system/rebecca-webapp.service"
 BIN="/usr/local/bin/rebecca-bot"
@@ -21,11 +21,13 @@ info() { echo "${C}➜${N} $*"; }
 warn() { echo "${Y}!${N} $*"; }
 die()  { echo "${R}✘ $*${N}" >&2; exit 1; }
 
+have_tty() { [ -r /dev/tty ] && { : </dev/tty; } 2>/dev/null; }
+
 need_root() { [ "${EUID:-$(id -u)}" -eq 0 ] || die "با کاربر root اجرا کنید (sudo -i)."; }
 
 ask() { # ask VAR "متن"  — اگر مقدار از env آمده باشد سؤال نمی‌پرسد
   local var="$1" prompt="$2" cur="${!1:-}"
-  if [ -z "$cur" ] && [ -r /dev/tty ]; then read -r -p "$prompt" cur </dev/tty || true; fi
+  if [ -z "$cur" ] && have_tty; then read -r -p "$prompt" cur </dev/tty || true; fi
   printf -v "$var" '%s' "$cur"
 }
 
@@ -60,22 +62,47 @@ setup_venv() {
   "$DIR/venv/bin/pip" install -q --disable-pip-version-check -r "$DIR/requirements.txt"
 }
 
+ask_web() { # نام کاربری، رمز و پورت وب‌پنل (فقط نصب تازه)
+  if [ -z "$IN_USER" ] && have_tty; then read -r -p "نام کاربری وب‌پنل [admin]: " IN_USER </dev/tty || true; fi
+  IN_USER="${IN_USER:-admin}"
+  [[ "$IN_USER" =~ ^[A-Za-z0-9_.@-]{3,32}$ ]] || die "نام کاربری فقط حروف انگلیسی/عدد/_.-@ و ۳ تا ۳۲ کاراکتر باشد."
+  if [ -z "$IN_PASS" ] && have_tty; then
+    local p1="" p2=""
+    while true; do
+      read -rs -p "رمز وب‌پنل (حداقل ۸ کاراکتر؛ Enter = رمز تصادفی): " p1 </dev/tty || true; echo
+      [ -z "$p1" ] && break
+      if [ "${#p1}" -lt 8 ]; then warn "رمز کوتاه است (حداقل ۸ کاراکتر)."; continue; fi
+      read -rs -p "تکرار رمز: " p2 </dev/tty || true; echo
+      if [ "$p1" = "$p2" ]; then IN_PASS="$p1"; break; fi
+      warn "رمزها یکسان نیستند."
+    done
+  fi
+  if [ -n "$IN_PASS" ] && [ "${#IN_PASS}" -lt 8 ]; then die "رمز باید حداقل ۸ کاراکتر باشد."; fi
+  if [ -z "$IN_PORT" ] && have_tty; then read -r -p "پورت وب‌پنل [8686]: " IN_PORT </dev/tty || true; fi
+  IN_PORT="${IN_PORT:-8686}"
+  if ! [[ "$IN_PORT" =~ ^[0-9]+$ ]] || [ "$IN_PORT" -lt 1 ] || [ "$IN_PORT" -gt 65535 ]; then die "پورت نامعتبر است (1 تا 65535)."; fi
+}
+
 init_config() {
   local token="${BOT_TOKEN:-}" admin="${ADMIN_ID:-}" args=() line
+  IN_USER="${WEB_USER:-}"; IN_PASS="${WEB_PASSWORD:-}"; IN_PORT="${WEB_PORT:-}"
   local have_cfg=0; [ -f "$DIR/config.json" ] && have_cfg=1
   if [ "$have_cfg" -eq 0 ] || [ -n "$token$admin" ]; then
     ask token "توکن ربات تلگرام (از @BotFather، برای رد کردن Enter): "
     ask admin "شناسه عددی ادمین(ها) (با کاما): "
   fi
+  if [ "$have_cfg" -eq 0 ]; then ask_web; fi
   if [ -n "$token" ] && ! [[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{30,}$ ]]; then die "فرمت توکن صحیح نیست."; fi
   if [ -n "$admin" ] && ! [[ "$admin" =~ ^-?[0-9]+(,[[:space:]]*-?[0-9]+)*$ ]]; then die "شناسه ادمین باید عدد باشد (چندتا با کاما)."; fi
   [ -n "$token" ] && args+=(--token "$token")
   [ -n "$admin" ] && args+=(--admin "$admin")
-  [ -n "${WEB_PORT:-}" ] && args+=(--port "$WEB_PORT")
-  WEB_PASSWORD=""; WEB_USER="admin"; PORT="8686"
+  [ -n "$IN_PORT" ] && args+=(--port "$IN_PORT")
+  [ -n "$IN_USER" ] && args+=(--user "$IN_USER")
+  WEB_PASSWORD=""; WEB_USER="admin"; PORT="8686"; PASS_GIVEN=0; [ -n "$IN_PASS" ] && PASS_GIVEN=1
   while IFS='=' read -r k v; do
     case "$k" in WEB_PASSWORD) WEB_PASSWORD="$v";; WEB_USER) WEB_USER="$v";; WEB_PORT) PORT="$v";; esac
-  done < <(cd "$DIR" && "$DIR/venv/bin/python" common.py init ${args[@]+"${args[@]}"})
+  done < <(cd "$DIR" && REBECCA_INIT_PASSWORD="$IN_PASS" "$DIR/venv/bin/python" common.py init ${args[@]+"${args[@]}"})
+  [ -f "$DIR/config.json" ] || die "ساخت config.json ناموفق بود."
   chmod 600 "$DIR/config.json"
 }
 
@@ -109,7 +136,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$DIR
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$DIR/venv/bin/python -m uvicorn webapp:app --host 0.0.0.0 --port $PORT --no-access-log --proxy-headers
+ExecStart=$DIR/venv/bin/python $DIR/run_web.py
 Restart=always
 RestartSec=3
 PrivateTmp=true
@@ -138,17 +165,19 @@ start_services() {
 server_ip() { curl -s4 --max-time 4 https://api.ipify.org 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'; }
 
 show_info() {
-  local port ip
-  port=$(cd "$DIR" && "$DIR/venv/bin/python" -c 'import common;print(common.load_config()["web_port"])')
-  ip=$(server_ip)
+  local port scheme dom wuser ip host
+  read -r port scheme dom wuser < <(cd "$DIR" && "$DIR/venv/bin/python" -c 'import common;c=common.load_config();s=c["ssl"];print(c["web_port"],"https" if s["enabled"] else "http",s["domain"] or "-",c["web"].get("user") or "admin")')
+  ip=$(server_ip); host="${ip:-IP}"
+  if [ "$scheme" = "https" ] && [ "$dom" != "-" ]; then host="$dom"; fi
   echo
   echo "${C}════════════════════════════════════════════${N}"
-  echo " 🌐 وب‌پنل:  http://${ip:-IP}:${port}"
-  echo " 👤 کاربر:   ${WEB_USER:-admin}"
+  echo " 🌐 وب‌پنل:  ${scheme}://${host}:${port}"
+  echo " 👤 کاربر:   ${wuser:-admin}"
   if [ -n "${WEB_PASSWORD:-}" ]; then echo " 🔑 رمز:     ${WEB_PASSWORD}   ${Y}(همین حالا ذخیره کنید)${N}"
+  elif [ "${PASS_GIVEN:-0}" = "1" ]; then echo " 🔑 رمز:     (همانی که وارد کردید)"
   else echo " 🔑 رمز:     (قبلاً ساخته شده؛ برای رمز جدید: rebecca-bot passwd)"; fi
-  echo " ⚠  برای امنیت، وب‌پنل را پشت HTTPS (Nginx/Caddy) بگذارید یا پورت را فقط برای IP خودتان باز کنید."
-  echo " 🛠 دستورها: rebecca-bot {update|restart|status|logs|passwd|info|uninstall}"
+  if [ "$scheme" = "http" ]; then echo " 🔒 برای فعال‌سازی SSL: وب‌پنل > تنظیمات > SSL (از گواهی پنل ربکا استفاده می‌شود)"; fi
+  echo " 🛠 دستورها: rebecca-bot {update|restart|status|logs|passwd|info|ssl|uninstall}"
   echo "${C}════════════════════════════════════════════${N}"
 }
 
@@ -160,7 +189,6 @@ do_install() {
 do_update() {
   need_root; [ -d "$DIR" ] || die "ابتدا نصب کنید."
   download; setup_venv
-  PORT=$(cd "$DIR" && "$DIR/venv/bin/python" -c 'import common;print(common.load_config()["web_port"])')
   write_units; start_services; ok "به‌روزرسانی انجام شد (config.json حفظ شد)."
 }
 
@@ -190,6 +218,15 @@ do_passwd() {
   echo "$out" | sed -n 's/^WEB_PASSWORD=/🔑 رمز جدید وب‌پنل: /p'
 }
 
+do_ssl() {
+  need_root
+  case "${1:-status}" in
+    off)    (cd "$DIR" && "$DIR/venv/bin/python" common.py ssl off) >/dev/null; systemctl restart rebecca-webapp; ok "SSL خاموش شد؛ وب‌پنل روی http بالا آمد."; show_info ;;
+    status) (cd "$DIR" && "$DIR/venv/bin/python" common.py ssl status) ;;
+    *)      echo "استفاده: $0 ssl {off|status}"; exit 1 ;;
+  esac
+}
+
 main() {
   local cmd="${1:-install}"; shift || true
   case "$cmd" in
@@ -201,7 +238,8 @@ main() {
     logs)      journalctl -u rebecca-bot -u rebecca-webapp -f -n 80 --no-hostname -o cat ;;
     passwd)    do_passwd "$@" ;;
     info)      show_info ;;
-    *)         echo "استفاده: $0 {install|update|uninstall [-y] [--keep-config]|restart|status|logs|passwd|info}"; exit 1 ;;
+    ssl)       do_ssl "$@" ;;
+    *)         echo "استفاده: $0 {install|update|uninstall [-y] [--keep-config]|restart|status|logs|passwd|info|ssl}"; exit 1 ;;
   esac
 }
 main "$@"
