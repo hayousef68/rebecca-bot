@@ -1284,7 +1284,7 @@ def _prices_text() -> str:
     sc = load_config()["sales"]
     lines = ["⚙️ <b>تنظیمات فروش</b>", "",
              f"🤝 همکاری: هر گیگ <b>{sales._t(sc['hamkari_per_gb'])}</b> تومان",
-             f"🧾 خرید: هر ترابایت <b>{sales._t(sc.get('buy_per_tb', 750000))}</b> تومان | ضریب مصرف همکاری: <b>{sc.get('hamkari_usage_multiplier', 1.5)}</b>",
+             f"🧾 خرید: هر ترابایت <b>{sales._t(sc.get('buy_per_tb', 750000))}</b> تومان | ضریب مصرف همکاری: <b>{sc.get('hamkari_usage_multiplier', 1.5)}</b> ({'🟢 روشن' if sc.get('hamkari_multiplier_enabled', True) else '⚪ خاموش'})",
              "", "👤 لیست قیمت تکی:"]
     for x in sorted(sc["single_prices"], key=lambda x: (x["months"], x["gb"])):
         lines.append(f"  {x['gb']} گیگ {x['months']} ماهه = {sales._t(x['price'])}")
@@ -1293,7 +1293,7 @@ def _prices_text() -> str:
               "<code>/setplan 60 1 250000</code> — افزودن/ویرایش پلن (گیگ، ماه، قیمت)",
               "<code>/delplan 60 1</code> — حذف پلن",
               "<code>/setcost 750000</code> — قیمت خرید هر ترابایت",
-              "<code>/setmult 1.5</code> — ضریب مصرف همکاری",
+              "<code>/setmult 1.5</code> — ضریب مصرف همکاری | <code>/setmult off</code> خاموش | <code>/setmult on</code> روشن",
               "<code>/setdb host port user pass dbname</code> — اتصال MySQL (فقط خواندن)",
               "<code>/dbcheck</code> — بررسی اتصال و ساختار جدول‌ها",
               "<code>/events</code> یا <code>/events yesterday</code> — فهرست تک‌تک ساخت/تمدیدها"]
@@ -1365,11 +1365,17 @@ async def setcost_cmd(update, context):
 
 @admin_only
 async def setmult_cmd(update, context):
-    try:
-        v = float(context.args[0])
-    except (IndexError, ValueError):
-        return await _arg_err(update, "/setmult 1.5")
-    update_config(lambda c: c["sales"].__setitem__("hamkari_usage_multiplier", v))
+    arg = (context.args[0].lower() if context.args else "")
+    if arg in ("on", "off"):
+        update_config(lambda c: c["sales"].__setitem__("hamkari_multiplier_enabled", arg == "on"))
+    else:
+        try:
+            v = float(arg)
+            if v <= 0:
+                raise ValueError
+        except ValueError:
+            return await _arg_err(update, "/setmult 1.5  یا  /setmult off  یا  /setmult on")
+        update_config(lambda c: c["sales"].update(hamkari_usage_multiplier=v, hamkari_multiplier_enabled=True))
     await update.message.reply_html("✅ ذخیره شد.\n\n" + _prices_text())
 
 
