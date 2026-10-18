@@ -103,6 +103,63 @@ def _bounds_db(day: str, partial: bool):
     return conv(s), conv(e)
 
 
+# ───────────────────────────── ثبت پیوست‌ها ─────────────────────────────
+# پیوست (افزودن حجم/زمان به اکانت) در دیتابیس ربکا اثری ندارد (ریست نیست)؛ پس خود ربات ثبتش می‌کند.
+import json
+import os
+import threading
+import time as _time
+
+_ATTACH_LOCK = threading.Lock()
+_ATTACH_KEEP_DAYS = 400
+
+
+def _attach_file() -> str:
+    from common import CONFIG_FILE
+    return os.path.join(os.path.dirname(CONFIG_FILE), "attach_log.json")
+
+
+def _load_attach() -> list[dict]:
+    try:
+        with open(_attach_file(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def record_attach(username: str, service_id, gb: float, days: int = 0, ts: float | None = None) -> None:
+    """یک پیوست (حجم gb + مدت days) را برای محاسبه‌ی فروش ثبت می‌کند. حجم صفر ثبت نمی‌شود."""
+    if not gb or gb <= 0:
+        return
+    now = ts or _time.time()
+    with _ATTACH_LOCK:
+        items = [x for x in _load_attach() if now - float(x.get("ts", 0)) < _ATTACH_KEEP_DAYS * 86400]
+        items.append({"ts": now, "u": str(username), "sid": service_id, "gb": float(gb), "days": int(days or 0)})
+        path = _attach_file()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False)
+        os.replace(tmp, path)
+
+
+def _attach_rows(a, b, off: int, svc: dict) -> list[dict]:
+    """پیوست‌های بازه‌ی [a, b) (datetime ساده در منطقه‌ی دیتابیس) به‌شکل ردیف رویداد."""
+    out = []
+    for x in _load_attach():
+        try:
+            at = datetime.fromtimestamp(float(x["ts"]), tz=timezone.utc).replace(tzinfo=None) + timedelta(minutes=off)
+        except (KeyError, TypeError, ValueError, OSError):
+            continue
+        if not (a <= at < b):
+            continue
+        sid = x.get("sid")
+        out.append({"kind": "attach", "at": at, "username": x.get("u", ""), "data_limit": float(x.get("gb", 0)) * GB, "expire": None,
+                    "hold": None, "service_id": sid, "service_name": svc.get(sid, ""), "created_at": None, "_off": off,
+                    "months": 2 if int(x.get("days") or 0) > 45 else 1, "days": int(x.get("days") or 0)})
+    return out
+
+
 # ───────────────────────────── دیتابیس ─────────────────────────────
 def _connect():
     import pymysql
@@ -222,6 +279,10 @@ def _fetch(a, b) -> list[dict]:
     for r in rows:
         r["service_name"] = svc.get(r["service_id"], "")
         r["_off"] = off
+    try:
+        rows += _attach_rows(a, b, off, svc)
+    except Exception:  # noqa: BLE001
+        log.exception("attach rows")
     # ریستی که بلافاصله (≤ ۲ دقیقه) بعد از ساخت همان کاربر ثبت شده، فروش جدا حساب نمی‌شود
     created = {r["username"]: r["at"] for r in rows if r["kind"] == "new" and isinstance(r["at"], datetime)}
     rows = [r for r in rows if not (r["kind"] == "renew" and r["username"] in created and isinstance(r["at"], datetime)
@@ -297,23 +358,29 @@ def price_for(service_name: str, gb: float, months: int, cfg: dict | None = None
 
 
 def classify(rows: list[dict], cfg: dict) -> dict:
-    ham, single, extra, ignored = Counter(), Counter(), Counter(), Counter()
+    ham, single, extra, ignored, skipped = Counter(), Counter(), Counter(), Counter(), Counter()
     plans = cfg["single_prices"]
+    skip_extra = cfg.get("attach_extra_mode", "skip") == "skip"
     for r in rows:
         gb = round((r["data_limit"] or 0) / GB)
         if gb <= 0:
             continue
-        key = ("new" if r["kind"] == "new" else "renew")
+        key = r["kind"] if r["kind"] in ("new", "attach") else "renew"
         if _is_hamkari(r, cfg):          # همکاری: همیشه گیگی (حتی خارج از لیست)
             ham[(gb, key)] += 1
             continue
         if _is_ignored(r, cfg):          # تست و سرویس‌های غیرفروشی
             ignored[(gb, key)] += 1
             continue
-        m = _months(r)
+        m = int(r["months"]) if r.get("months") else _months(r)
         match = next((p for p in plans if int(p["gb"]) == gb and int(p["months"]) == m), None)
-        (single if match else extra)[(gb, m, key)] += 1   # ms خارج از لیست: به‌نرخ گیگی
-    return {"ham": ham, "single": single, "extra": extra, "ignored": ignored}
+        if match:
+            single[(gb, m, key)] += 1
+        elif key == "attach" and skip_extra:
+            skipped[(gb, m)] += 1        # پیوست خارج از لیست: نه فروش حساب می‌شود نه هزینه
+        else:
+            extra[(gb, m, key)] += 1     # ms خارج از لیست: به‌نرخ گیگی
+    return {"ham": ham, "single": single, "extra": extra, "ignored": ignored, "skipped": skipped}
 
 
 def compute(day: str, partial: bool) -> dict:
@@ -350,6 +417,9 @@ def _t(n) -> str:
     return f"{int(round(n)):,}".replace(",", "٬")
 
 
+_KIND_FA = {"new": "ساخت", "renew": "تمدید/ریست", "attach": "پیوست"}
+
+
 def _render(title: str, d: dict, html: bool) -> str:
     cl, L = d["cl"], []
     L.append(title)
@@ -358,14 +428,14 @@ def _render(title: str, d: dict, html: bool) -> str:
     if not cl["ham"]:
         L.append("  — فروشی نبود")
     for (gb, k), n in sorted(cl["ham"].items()):
-        L.append(f"  {n} تا {gb} گیگ — {'ساخت' if k == 'new' else 'تمدید/ریست'}")
+        L.append(f"  {n} تا {gb} گیگ — {_KIND_FA.get(k, k)}")
     L.append(f"  جمع: {_t(d['ham_gb'])} گیگ ← {_t(d['ham_income'])} تومان")
     L.append("")
     L.append("👤 فروش تکی (MS)")
     if not cl["single"]:
         L.append("  — فروشی نبود")
     for (gb, m, k), n in sorted(cl["single"].items()):
-        L.append(f"  {n} تا {gb} گیگ {'یک' if m == 1 else 'دو'}ماهه — {'ساخت' if k == 'new' else 'تمدید/ریست'}")
+        L.append(f"  {n} تا {gb} گیگ {'یک' if m == 1 else 'دو'}ماهه — {_KIND_FA.get(k, k)}")
     L.append(f"  جمع لیست: {_t(d['single_income'])} تومان")
     if cl["extra"]:
         L.append("")
@@ -373,6 +443,11 @@ def _render(title: str, d: dict, html: bool) -> str:
         for (gb, m, k), n in sorted(cl["extra"].items()):
             L.append(f"  {n} تا {gb} گیگ {m} ماهه ← {_t(gb * n * d['rate'])}")
         L.append(f"  جمع: {_t(d['extra_income'])} تومان")
+    if cl.get("skipped"):
+        L.append("")
+        L.append(f"📎 پیوست خارج از لیست (محاسبه نشد): {sum(cl['skipped'].values())} مورد")
+        for (gb, m), n in sorted(cl["skipped"].items()):
+            L.append(f"  {n} تا {gb} گیگ {m} ماهه")
     if cl["ignored"]:
         L.append("")
         L.append(f"🚫 نادیده‌گرفته (تست/غیرفروشی): {sum(cl['ignored'].values())} مورد")
@@ -464,8 +539,9 @@ def summary(kind: str = "today") -> dict:
     for (gb, m, _k), n in cl["extra"].items():
         agg[(gb, m)] = agg.get((gb, m), 0) + n
     extra = [{"gb": gb, "months": m, "count": n, "suggest": int(round(gb * d["rate"]))} for (gb, m), n in sorted(agg.items())]
+    att = sum(n for c, i in ((cl["ham"], 1), (cl["single"], 2), (cl["extra"], 2)) for k, n in c.items() if k[i] == "attach")
     return {"income": int(round(d["income"])), "cost": int(round(d["cost"])), "profit": int(round(d["income"] - d["cost"])),
-            "new": news, "renew": total - news, "ham_gb": d["ham_gb"], "ignored": sum(cl["ignored"].values()), "extra": extra}
+            "new": news, "renew": total - news, "attach": att, "skipped": sum(cl["skipped"].values()), "ham_gb": d["ham_gb"], "ignored": sum(cl["ignored"].values()), "extra": extra}
 
 
 def set_plan(gb: int, months: int, price: int) -> None:
@@ -568,10 +644,10 @@ def build_events(day: str, html: bool = True, partial: bool = False, limit: int 
         elif _is_ignored(r, cfg):
             typ = f"نادیده ({r.get('service_name')})"
         else:
-            m = _months(r)
+            m = int(r["months"]) if r.get("months") else _months(r)
             inlist = any(int(p["gb"]) == gb and int(p["months"]) == m for p in cfg["single_prices"])
-            typ = f"تکی {m}ماهه" + ("" if inlist else " (خارج لیست)")
-        L.append(f"{at} | {'ساخت' if r['kind'] == 'new' else 'تمدید'} | {r['username']} | {gb}GB | {typ}")
+            typ = f"تکی {m}ماهه" + ("" if inlist else (" (خارج لیست — محاسبه نمی‌شود)" if r["kind"] == "attach" and cfg.get("attach_extra_mode", "skip") == "skip" else " (خارج لیست)"))
+        L.append(f"{at} | {_KIND_FA.get(r['kind'], r['kind'])} | {r['username']} | {gb}GB | {typ}")
     if len(rows) > limit:
         L.append(f"… و {len(rows) - limit} مورد دیگر")
     text = "\n".join(L)
