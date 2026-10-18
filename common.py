@@ -28,8 +28,8 @@ GB = 1024 ** 3
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 
 DEFAULT_TEMPLATES = {
-    "پیش‌فرض (30 گیگ - 30 روز)": {"gb": 30, "days": 30, "mode": "on_hold"},
-    "تست (5 گیگ - 3 روز)": {"gb": 5, "days": 3, "mode": "active"},
+    "پیش‌فرض (30 گیگ - 30 روز)": {"gb": 30, "days": 30, "mode": "on_hold", "kind": "single"},
+    "تست (5 گیگ - 3 روز)": {"gb": 5, "days": 3, "mode": "active", "kind": "single"},
 }
 DEFAULT_SERVICES = [{"id": 6, "name": "Hamkari"}, {"id": 1, "name": "ms"}, {"id": 5, "name": "Tes"}]
 
@@ -124,7 +124,10 @@ def _normalize(data: dict) -> dict:
     for name, t in (cfg.get("templates") or {}).items():
         try:
             mode = t.get("mode") if t.get("mode") in ("on_hold", "active") else "on_hold"
-            tpls[str(name)] = {"gb": max(0, _num(t.get("gb", 0))), "days": max(0, int(t.get("days", 0))), "mode": mode}
+            kind = t.get("kind")
+            if kind not in ("single", "group"):   # مهاجرت: نام‌های همکاری ← گروهی، بقیه ← تکی
+                kind = "group" if re.search(r"hamkari|همکار", str(name), re.I) else "single"
+            tpls[str(name)] = {"gb": max(0, _num(t.get("gb", 0))), "days": max(0, int(t.get("days", 0))), "mode": mode, "kind": kind}
         except (TypeError, ValueError, AttributeError):
             continue
     if not tpls:
@@ -132,6 +135,8 @@ def _normalize(data: dict) -> dict:
     cfg["templates"] = tpls
     if cfg.get("active_template") not in tpls:
         cfg["active_template"] = next(iter(tpls))
+    if cfg.get("active_group_template") not in tpls:
+        cfg["active_group_template"] = next((n for n, t in tpls.items() if t["kind"] == "group"), "")
     ids = []
     for x in cfg.get("admin_ids") or []:
         try:
@@ -320,6 +325,26 @@ def fmt_expire(exp, status, on_hold_dur=None) -> str:
         return "نامحدود"
     rem = int(exp) - int(time.time())
     return "منقضی شده" if rem <= 0 else f"{rem // 86400} روز و {(rem % 86400) // 3600} ساعت"
+
+
+KIND_LABEL = {"single": "👤 تکی (ms)", "group": "👥 همکاری (hamkari)"}
+
+
+def tpl_kind(t: dict) -> str:
+    return "group" if t.get("kind") == "group" else "single"
+
+
+def templates_of(cfg: dict, kind: str) -> dict:
+    """تمپلت‌های یک نوع؛ اگر هیچ‌کدام نبود همه را برمی‌گرداند (تا فرم خالی نماند)."""
+    sel = {n: t for n, t in cfg["templates"].items() if tpl_kind(t) == kind}
+    return sel or dict(cfg["templates"])
+
+
+def default_template(cfg: dict, kind: str) -> str:
+    """تمپلت فعال هر نوع: تکی ← active_template ، گروهی ← active_group_template."""
+    pool = templates_of(cfg, kind)
+    key = "active_group_template" if kind == "group" else "active_template"
+    return cfg.get(key) if cfg.get(key) in pool else next(iter(pool))
 
 
 def tpl_summary(t: dict) -> str:
@@ -743,13 +768,37 @@ async def _retry(fn):
     return await fn()
 
 
-async def send_results(bot, chat_id, results: list[dict], header: str, max_qr: int = 100):
-    """QR هر کاربر را جداگانه و پشت‌سرهم می‌فرستد + فایل متنی لینک‌ها."""
+def build_info(panel: str, tpl: dict, service: str) -> dict:
+    """مشخصات ساخت برای پیام تلگرام."""
+    return {"panel": panel, "gb": tpl["gb"], "days": tpl["days"], "mode": tpl.get("mode", "on_hold"), "service": str(service)}
+
+
+def _info_lines(info) -> list[str]:
+    if isinstance(info, str):            # سازگاری با فراخوانی قدیمی
+        return [esc(info)]
+    gb = "نامحدود" if not info["gb"] else f"{info['gb']} گیگابایت"
+    days = "نامحدود" if not info["days"] else f"{info['days']} روز"
+    start = "از اولین اتصال" if info["mode"] == "on_hold" else "از همین حالا"
+    rows = [("🖥", "پنل", info["panel"]), ("📂", "سرویس", info["service"]), ("💾", "حجم", gb), ("📅", "اعتبار", days), ("⏳", "شروع", start)]
+    rows = [r for r in rows if r[2]]
+    return [f"{'└' if i == len(rows) - 1 else '├'} {ic} {lb}: <b>{esc(v)}</b>" for i, (ic, lb, v) in enumerate(rows)]
+
+
+async def send_results(bot, chat_id, results: list[dict], header, max_qr: int = 100):
+    """QR هر کاربر را با مشخصات مرتب و لینک قابل‌کپی جداگانه می‌فرستد + فایل متنی لینک‌ها."""
     from telegram.constants import ParseMode
     from telegram.error import TelegramError
 
+    lines = _info_lines(header)
+
     def caption(r):
-        return f"✅ <b>{esc(r['username'])}</b>\n{esc(header)}\n\n🔗 <code>{esc(r['sub'])}</code>"
+        return (f"✅ <b>{esc(r['username'])}</b>\n\n" + "\n".join(lines)
+                + f"\n\n🔗 <b>لینک اشتراک</b> (لمس کنید تا کپی شود):\n<code>{esc(r['sub'])}</code>")
+
+    if len(results) > 1:   # خلاصه‌ی ساخت گروهی قبل از QRها
+        rng = f"{results[0]['username']} … {results[-1]['username']}"
+        await _retry(lambda: bot.send_message(
+            chat_id, f"📦 <b>{len(results)} اکانت ساخته شد</b>\n<code>{esc(rng)}</code>\n\n" + "\n".join(lines), parse_mode=ParseMode.HTML))
 
     with_qr = [r for r in results if r["sub"]][:max_qr]
     pngs = await asyncio.gather(*(asyncio.to_thread(make_qr_png, r["sub"]) for r in with_qr))
@@ -759,7 +808,7 @@ async def send_results(bot, chat_id, results: list[dict], header: str, max_qr: i
             await _retry(lambda: bot.send_photo(chat_id, png, caption=caption(r), parse_mode=ParseMode.HTML))
         except TelegramError as e:
             log.warning("send_photo failed for %s: %s", r["username"], e)
-            await _retry(lambda: bot.send_message(chat_id, f"{r['username']}\n{r['sub']}"))
+            await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML))
         await asyncio.sleep(0.5)  # رعایت محدودیت نرخ تلگرام
     if len(results) > 1 or len(results) > len(with_qr):
         txt = "\n".join(f"{r['username']} | {r['sub']}" for r in results)
