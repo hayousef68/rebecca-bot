@@ -144,6 +144,7 @@ mark{background:#f0b42940;color:var(--ac);border-radius:4px;padding:0 2px}
 .plan{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:7px 10px;margin-bottom:6px}
 .plan .n{width:22px;height:22px;border-radius:50%;background:var(--s2);display:grid;place-items:center;font-size:11px;color:var(--mu);flex:none}
 .plan .v{flex:1;font-weight:700;font-size:13px}.plan .v small{font-weight:400;color:var(--mu);font-size:11px}
+.plan .x.fix{background:#f5a5241a;color:var(--warn)}
 .plan .x{border:0;background:#f2706b1a;color:var(--bad);width:30px;height:30px;border-radius:9px;cursor:pointer}
 .tech{margin-top:10px}.tech summary{font-size:11.5px;color:var(--mu);cursor:pointer}.tech code{font-size:11px;margin:6px 0 0;white-space:pre-wrap}
 
@@ -497,9 +498,11 @@ function userItem(u, parent, tab) {
     await sendPlans([...plans, { idx: null, gb: nG.value, days: nD.value, add_remaining: nRem.checked }], '✅ پلن بعدی اضافه شد'); });
   const planRow = (p, i) => { const x = h('button', { class: 'x', type: 'button', 'aria-label': 'حذف' }, '✕');
     x.onclick = () => { if (!confirm('این پلن بعدی حذف شود؟')) return; run(x, () => sendPlans(plans.filter((_, j) => j !== i), 'پلن حذف شد')); };
-    return h('div', { class: 'plan' }, h('span', { class: 'n' }, i + 1), h('span', { class: 'v' }, `${fmtG(p.gb)} + ${fmtD(p.days)}`, p.add_remaining ? h('small', {}, ' · باقی‌مانده هم منتقل می‌شود') : null), x); };
+    const fix = p.broken ? h('button', { class: 'x fix', type: 'button', title: 'اصلاح تاریخ پایان' }, '🔧') : null;
+    if (fix) fix.onclick = () => run(fix, () => sendPlans(plans, '✅ پلن اصلاح شد'));
+    return h('div', { class: 'plan' }, h('span', { class: 'n' }, i + 1), h('span', { class: 'v' }, `${fmtG(p.gb)} + ${fmtD(p.days)}`, p.add_remaining ? h('small', {}, ' · باقی‌مانده هم منتقل می‌شود') : null, p.broken ? h('small', { style: 'color:var(--warn)' }, ' · ⚠️ تاریخ پایان اشتباه (۱۹۷۰) — 🔧 را بزنید') : null), fix, x); };
   const paneNext = h('div', {},
-    h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'وقتی حجم یا زمان کاربر تمام شود، پلن اول «یک‌بار» خودکار به او اضافه می‌شود؛ بعد نوبت پلن بعدی.'),
+    h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'وقتی حجم یا زمان کاربر تمام شود، پلن اول «یک‌بار» خودکار به او اضافه می‌شود؛ بعد نوبت پلن بعدی. تاریخ پایان هر پلن = پایان پلن قبلی (یا انقضای فعلی) + روزهای همان پلن.'),
     plans.length ? h('div', {}, plans.map(planRow)) : h('div', { class: 'banner' }, '⚪ پلن بعدی تعریف نشده'),
     h('div', { class: 'psec' }, h('b', {}, '➕ پلن جدید')),
     h('div', { class: 'attach' }, nG, nD, nAdd), nTpl,
@@ -572,7 +575,7 @@ async function vHome() {
       const mini = (l, v, c) => h('div', {}, h('span', {}, l), h('strong', { dir: 'ltr', style: c ? `color:${c}` : '' }, v));
       saleBox.replaceChildren(h('div', { class: 'hero' }, h('div', { class: 'lb' }, '💰 فروش امروز'),
         h('div', { class: 'big', dir: 'ltr', style: 'text-align:right' }, fa(r.income), h('small', {}, 'تومان')),
-        h('div', { class: 'mini' }, mini('✅ سود تخمینی', fa(r.profit), 'var(--ok)'), mini('➕ ساخت', fa(r.new)), mini('🔄 تمدید', fa(r.renew)))));
+        h('div', { class: 'mini' }, mini('✅ سود تخمینی', fa(r.profit), 'var(--ok)'), mini('➕ ساخت', fa(r.new)), mini('🔄 تمدید/پیوست', fa(r.renew)))));
       extraBox.replaceChildren(...(r.extra.length ? [h('div', { class: 'card' }, h('h2', {}, '📐 حجم‌های خارج از لیست قیمت'),
         h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'با ثبت قیمت، از گزارش بعدی جزو فروش‌های لیست حساب می‌شود.'),
         ...r.extra.map(x => { const b = h('button', { class: 'btn sm pri', type: 'button', style: 'flex:none' }, '➕ ثبت قیمت');
