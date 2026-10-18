@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import logging
 import os
@@ -455,7 +456,8 @@ def _slim(u: dict, api) -> dict:
         "expire_text": C.fmt_expire(u.get("expire"), st, u.get("on_hold_expire_duration")),
         "sub": api.full_sub(u.get("subscription_url", "")),
         "service_id": u.get("service_id"), "note": u.get("note") or "",
-        "next_plan": C.next_plan_view(u),
+        "next_plans": C.next_plans_view(u),
+        "np_raw": json.dumps(C._raw_plans(u), ensure_ascii=False)[:1500] if C._raw_plans(u) else "",
     }
 
 
@@ -527,11 +529,15 @@ class SaveReq(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
-class NextPlanReq(BaseModel):
-    enabled: bool = True
+class PlanItem(BaseModel):
+    idx: int | None = Field(default=None, ge=0, le=50)
     gb: float = Field(default=0, ge=0, le=100000)
     days: int = Field(default=0, ge=0, le=36500)
     add_remaining: bool = False
+
+
+class NextPlansReq(BaseModel):
+    plans: list[PlanItem] = Field(default_factory=list, max_length=10)
 
 
 @app.post("/api/user/{uname}/save", dependencies=[Depends(guard)])
@@ -540,9 +546,9 @@ async def user_save(uname: str, r: SaveReq, api: RebeccaClient = Depends(P)):
     return _slim(await api.request("GET", api.upath(uname)), api)
 
 
-@app.post("/api/user/{uname}/next-plan", dependencies=[Depends(guard)])
-async def user_next_plan(uname: str, r: NextPlanReq, api: RebeccaClient = Depends(P)):
-    return _slim(await C.set_next_plan(api, uname, r.enabled, r.gb, r.days, r.add_remaining), api)
+@app.post("/api/user/{uname}/next-plans", dependencies=[Depends(guard)])
+async def user_next_plans(uname: str, r: NextPlansReq, api: RebeccaClient = Depends(P)):
+    return _slim(await C.set_next_plans(api, uname, [p.model_dump() for p in r.plans]), api)
 
 
 @app.post("/api/user/{uname}/{action}", dependencies=[Depends(guard)])
