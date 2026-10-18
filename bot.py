@@ -91,7 +91,8 @@ def main_kb() -> M:
     pid = cfg["active_panel"]
     pn = get_panel(cfg, pid)
     return M([
-        [B("⚡ ساخت سریع", callback_data="c:quick"), B("🎯 ساخت با انتخاب تمپلت", callback_data="c:pick")],
+        [B("⚡ ساخت تکی (ms)", callback_data="c:quick"), B("👥 ساخت همکاری", callback_data="c:qg")],
+        [B("🎯 ساخت با انتخاب تمپلت", callback_data="c:pick")],
         [B("🔍 جستجو و مدیریت کاربر", callback_data="search"), B("📋 لیست کاربران", callback_data="l:all:0")],
         [B("👥 عملیات گروهی", callback_data="bk:start"), B("⏰ نزدیک انقضا", callback_data="soon")],
         [B("⚙️ تمپلت‌ها", callback_data="t:menu"), B("📊 وضعیت سرور", callback_data="stats")],
@@ -104,11 +105,12 @@ def main_kb() -> M:
 
 def home_text() -> str:
     cfg = load_config()
-    t = cfg["templates"][cfg["active_template"]]
+    ns, ng = C.default_template(cfg, "single"), C.default_template(cfg, "group")
     pn = get_panel(cfg, cfg["active_panel"])
     st = "🟢 متصل" if get_api().is_configured() else "🔴 تنظیم نشده"
     return (f"🚀 <b>ربات مدیریت پنل ربکا</b>\n🖥 پنل فعال: <b>{esc(pn['name']) if pn else '—'}</b> ({st})\n\n"
-            f"📌 تمپلت فعال: <b>{esc(cfg['active_template'])}</b>\n{esc(C.tpl_summary(t))}")
+            f"👤 تکی (ms): <b>{esc(ns)}</b>\n    {esc(C.tpl_summary(cfg['templates'][ns]))}\n"
+            f"👥 همکاری (hamkari): <b>{esc(ng)}</b>\n    {esc(C.tpl_summary(cfg['templates'][ng]))}")
 
 
 async def home(update, context, prefix: str = ""):
@@ -152,12 +154,17 @@ async def create_entry(update, context):
     context.user_data.clear()
     if q.data == "c:pick":
         rows = []
-        for i, (n, t) in enumerate(cfg["templates"].items()):
-            mark = "✅ " if n == cfg["active_template"] else ""
-            rows.append([B(f"{mark}{n} ({t['gb']}GB/{t['days']}d)", callback_data=f"c:t:{i}")])
-        await show(update, context, "🎯 تمپلت ساخت را انتخاب کنید:", cancel_kb(rows))
+        for kind in ("single", "group"):
+            ids = [(i, n, t) for i, (n, t) in enumerate(cfg["templates"].items()) if C.tpl_kind(t) == kind]
+            if not ids:
+                continue
+            rows.append([B(C.KIND_LABEL[kind], callback_data="noop")])
+            for i, n, t in ids:
+                mark = "✅ " if n == C.default_template(cfg, kind) else ""
+                rows.append([B(f"{mark}{n} ({t['gb']}GB/{t['days']}d)", callback_data=f"c:t:{i}")])
+        await show(update, context, "🎯 تمپلت ساخت را انتخاب کنید:\n<i>سرویس از روی نوع تمپلت تعیین می‌شود.</i>", cancel_kb(rows))
         return C_TPL
-    context.user_data["cr"] = {"tpl": cfg["active_template"]}
+    context.user_data["cr"] = {"tpl": C.default_template(cfg, "group" if q.data == "c:qg" else "single")}
     return await ask_panel(update, context)
 
 
@@ -333,7 +340,7 @@ async def validate_and_pick_service(update, context):
         cr["service_id"] = services[0]["id"]
         return await confirm_step(update, context)
     # تکی ← ms ، گروهی ← hamkari (در مرحله‌ی تأیید قابل تغییر است)
-    auto = C.pick_default_service(services, group=len(cr["names"]) > 1)
+    auto = C.pick_default_service(services, group=C.tpl_kind(load_config()["templates"][cr["tpl"]]) == "group")
     if auto is not None:
         cr["service_id"] = auto
         return await confirm_step(update, context)
@@ -352,6 +359,11 @@ async def ask_service(update, context):
         rows.append(row)
     await context.bot.send_message(update.effective_chat.id, "📂 <b>سرویس</b> را انتخاب کنید:", reply_markup=cancel_kb(rows), parse_mode=HTML)
     return C_SERVICE
+
+
+async def noop_cb(update, context):
+    """دکمه‌های عنوان (جداکننده) — فقط loading را می‌بندد."""
+    await update.callback_query.answer()
 
 
 @admin_only
@@ -417,7 +429,7 @@ async def create_go(update, context):
         return END
 
     pname = (get_panel(cfg, cr["pid"]) or {}).get("name", "")
-    header = f"🖥 {pname} | 💾 {tpl['gb'] or 'نامحدود'} GB | 📅 {tpl['days'] or 'نامحدود'} روز ({tpl['mode']}) | 📂 {cr['services'].get(cr['service_id'], cr['service_id'])}"
+    header = C.build_info(pname, tpl, cr["services"].get(cr["service_id"], cr["service_id"]))
     try:
         await C.send_results(context.bot, chat_id, results, header, cfg["max_qr"])
     except Exception as e:  # noqa: BLE001
@@ -443,12 +455,16 @@ async def tpl_menu(update, context):
 async def render_tpl_menu(update, context, prefix=""):
     cfg = load_config()
     rows = []
-    for i, (n, t) in enumerate(cfg["templates"].items()):
-        mark = "✅" if n == cfg["active_template"] else "📁"
-        rows.append([B(f"{mark} {n} ({t['gb']}GB/{t['days']}d)", callback_data=f"t:sel:{i}")])
-        rows.append([B("✏️ ویرایش", callback_data=f"t:edit:{i}"), B("🗑 حذف", callback_data=f"t:del:{i}")])
+    for kind in ("single", "group"):
+        rows.append([B(C.KIND_LABEL[kind], callback_data="noop")])
+        for i, (n, t) in enumerate(cfg["templates"].items()):
+            if C.tpl_kind(t) != kind:
+                continue
+            mark = "✅" if n == C.default_template(cfg, kind) else "📁"
+            rows.append([B(f"{mark} {n} ({t['gb']}GB/{t['days']}d)", callback_data=f"t:sel:{i}")])
+            rows.append([B("✏️ ویرایش", callback_data=f"t:edit:{i}"), B("🗑 حذف", callback_data=f"t:del:{i}")])
     rows += [[B("➕ تمپلت جدید", callback_data="t:new")], [B("🔙 منوی اصلی", callback_data="back")]]
-    await show(update, context, prefix + "⚙️ <b>مدیریت تمپلت‌ها</b>\nروی نام بزنید تا فعال شود:", M(rows))
+    await show(update, context, prefix + "⚙️ <b>مدیریت تمپلت‌ها</b>\nروی نام بزنید تا پیش‌فرض همان نوع شود:", M(rows))
 
 
 @nav
@@ -460,7 +476,9 @@ async def tpl_action(update, context):
         await q.answer("تمپلت پیدا نشد", show_alert=True)
         return await render_tpl_menu(update, context)
     if act == "sel":
-        update_config(lambda c: c.__setitem__("active_template", name))
+        def sel(c):
+            c["active_group_template" if C.tpl_kind(c["templates"][name]) == "group" else "active_template"] = name
+        update_config(sel)
         await q.answer("✅ فعال شد")
         await render_tpl_menu(update, context)
     elif act == "del":
@@ -474,6 +492,13 @@ async def tpl_action(update, context):
         update_config(rm)
         await q.answer("🗑 حذف شد")
         await render_tpl_menu(update, context)
+    elif act == "kind":
+        def tk(c):
+            t = c["templates"][name]
+            t["kind"] = "single" if C.tpl_kind(t) == "group" else "group"
+        update_config(tk)
+        await q.answer("نوع تغییر کرد")
+        await tpl_edit_view(update, context, int(idx))
     elif act == "mode":
         def tg(c):
             t = c["templates"][name]
@@ -492,6 +517,7 @@ async def tpl_edit_view(update, context, idx):
     kb = M([
         [B("✏️ نام", callback_data=f"te:name:{idx}"), B("📊 حجم", callback_data=f"te:gb:{idx}"), B("📅 روز", callback_data=f"te:days:{idx}")],
         [B(f"⏳ حالت: {t['mode']} ← تغییر", callback_data=f"t:mode:{idx}")],
+        [B(f"{C.KIND_LABEL[C.tpl_kind(t)]} ← تغییر نوع", callback_data=f"t:kind:{idx}")],
         [B("🔙 بازگشت", callback_data="t:menu")],
     ])
     await show(update, context, f"✏️ <b>{esc(name)}</b>\n{esc(C.tpl_summary(t))}\n\nکدام مورد ویرایش شود؟", kb)
@@ -545,10 +571,9 @@ async def tpl_new_days(update, context):
     nt = context.user_data.pop("nt")
 
     def add(c):
-        c["templates"][nt["name"]] = {"gb": nt["gb"], "days": days, "mode": "on_hold"}
-        c["active_template"] = nt["name"]
+        c["templates"][nt["name"]] = {"gb": nt["gb"], "days": days, "mode": "on_hold", "kind": "single"}
     update_config(add)
-    await render_tpl_menu(update, context, f"✅ تمپلت «{esc(nt['name'])}» ساخته و فعال شد.\n\n")
+    await render_tpl_menu(update, context, f"✅ تمپلت «{esc(nt['name'])}» ساخته شد (نوع: تکی؛ از «✏️ ویرایش» می‌توانید همکاری‌اش کنید).\n\n")
     return END
 
 
@@ -1459,13 +1484,13 @@ def build_app() -> Application:
             cb(back_cb, pattern=r"^back$"), cb(report_cb, pattern=r"^rp:(today|yday|week|month|lmonth)(:r)?$"),
             CommandHandler("soon", soon_cb), cb(soon_cb, pattern=r"^soon$"),
             cb(bulk_start, pattern=r"^bk:start$"), cb(note_start, pattern=r"^u:note:"),
-            cb(create_entry, pattern=r"^c:(quick|pick)$"),
+            cb(create_entry, pattern=r"^c:(quick|qg|pick)$"),
             cb(tpl_new, pattern=r"^t:new$"), cb(tpl_edit_field, pattern=r"^te:(name|gb|days):\d+$"),
             cb(setup_start, pattern=r"^pn:(new|edit:\w+)$"), cb(search_start, pattern=r"^search$"),
             cb(edit_start, pattern=r"^u:edit:"),
             cb(panel_list, pattern=r"^pn:list$"), cb(panel_action, pattern=r"^pn:(set|del|delok):\w+$"),
             # مستقل‌ها: هرکدام گفتگوی باز را می‌بندند
-            cb(tpl_menu, pattern=r"^t:menu$"), cb(tpl_action, pattern=r"^t:(sel|del|mode|edit):\d+$"),
+            cb(tpl_menu, pattern=r"^t:menu$"), cb(tpl_action, pattern=r"^t:(sel|del|mode|kind|edit):\d+$"),
             cb(list_users, pattern=r"^l:"), cb(stats, pattern=r"^stats$"), cb(core_cb, pattern=r"^core:(ask|go):\w+$"),
             cb(clean_cb, pattern=r"^clean:(ask|go):\w+$"), cb(export_cb, pattern=r"^export$"),
             cb(user_action, pattern=r"^u:(view|qr|rst|rev|tg|del|delok|svc|renew):"),
@@ -1494,7 +1519,7 @@ def build_app() -> Application:
             B_PICK: [cb(bulk_pick, pattern=r"^bk:(s|t):\d+$")],
             B_CONFIRM: [cb(bulk_go, pattern=r"^bk:go$")],
         },
-        fallbacks=[CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), cb(back_cb, pattern=r"^back$")],
+        fallbacks=[CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), cb(back_cb, pattern=r"^back$"), cb(noop_cb, pattern=r"^noop$")],
         allow_reentry=True,
     )
     for name, fn in (("prices", prices_cmd), ("events", events_cmd), ("setham", setham_cmd), ("setplan", setplan_cmd), ("delplan", delplan_cmd),
@@ -1502,6 +1527,7 @@ def build_app() -> Application:
                      ("remind", remind_cmd), ("monitor", monitor_cmd), ("backup", backup_cmd), ("autobackup", autobackup_cmd), ("help", help_cmd)):
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(conv)
+    app.add_handler(CallbackQueryHandler(noop_cb, pattern=r"^noop$"))
     app.add_error_handler(on_error)
     return app
 
