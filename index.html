@@ -151,6 +151,15 @@ mark{background:#f0b42940;color:var(--ac);border-radius:4px;padding:0 2px}
 .acts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:2px}.acts .btn{width:100%;padding:0 4px;white-space:nowrap}
 .chips.tight .chip{padding:1px 9px;font-size:11px}
 .chips.tight{flex-wrap:nowrap;gap:3px}
+
+/* کشوهای تنظیمات */
+.acc>summary{min-height:56px}
+.acc>summary .ic{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:var(--s2);font-size:17px;flex:none}
+.acc>summary .nm{font-size:14px;margin-inline-start:2px}
+.acc[open]>summary .ic{background:linear-gradient(135deg,var(--ac),var(--ac2))}
+.acc-body{padding-top:12px!important}
+.acc-in{display:block}.acc-in>:first-child{margin-top:0}
+.acc-body .card{box-shadow:none;background:var(--bg)}
 </style>
 </head>
 <body>
@@ -723,9 +732,9 @@ async function vSet() {
       field('سرویس‌های نادیده (تست؛ با کاما)', ign), h('div', { class: 'btns' }, saveS));
   }
   // SSL و پورت وب‌پنل
-  let sslCard = h('div', { class: 'card' }, h('h2', {}, '🔒 SSL و پورت وب‌پنل'), h('p', { class: 'err' }, 'خطا در دریافت تنظیمات SSL'));
+  let sslCard = h('div', { class: 'card' }, h('h2', {}, '🔒 SSL و پورت وب‌پنل'), h('p', { class: 'err' }, 'خطا در دریافت تنظیمات SSL')), sslSub = '—';
   try {
-    const sc2 = await api('/ssl');
+    const sc2 = await api('/ssl'); sslSub = sc2.active ? '🔒 HTTPS فعال' : (sc2.enabled ? '⚠️ SSL روشن ولی اجرا نشده' : 'HTTP');
     const dom = i(sc2.domain, 'panel.example.com'), crt = i(sc2.cert, '/var/lib/rebecca/certs/panel.example.com/fullchain.pem'), key = i(sc2.key, '/var/lib/rebecca/certs/panel.example.com/key.pem'), prt = i(c.web_port, '8686', 'number');
     const on = h('input', { type: 'checkbox', id: 'sslOn', checked: sc2.enabled });
     const found = h('div');
@@ -781,14 +790,25 @@ async function vSet() {
     h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, 'بازیابی از فایل بکاپ'), fileI,
     h('p', { class: 'hint' }, 'فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
     h('div', { class: 'btns' }, rsB));
+  // کشوها (آکاردئون): بالای هر کشو نام بخش نوشته شده؛ فقط یکی باز می‌ماند و بعد از ذخیره هم باز می‌ماند
+  const strip = card => { const t = card.querySelector(':scope > h2'); if (t) t.remove(); card.className = 'acc-in'; return card; };
+  const drawers = [];
+  const drawer = (key, icon, title, sub, ...nodes) => {
+    const d = h('details', { class: 'item acc', 'data-k': key }, h('summary', {}, h('span', { class: 'ic' }, icon), h('span', { class: 'nm' }, title), h('span', { class: 'sub' }, sub)), h('div', { class: 'body acc-body' }, ...nodes));
+    d.open = S.setOpen === key;
+    d.addEventListener('toggle', () => { if (d.open) { S.setOpen = key; drawers.forEach(x => { if (x !== d) x.open = false; }); } else if (S.setOpen === key) S.setOpen = null; });
+    drawers.push(d); return d;
+  };
   mount(
-    sslCard, priceCard, backupCard,
-    h('h2', { style: 'font-size:13px;margin:0 2px 8px' }, `پنل‌های ربکا (${c.panels.length})`), ...list,
+    drawer('panels', '🖥', 'پنل‌های ربکا', `${c.panels.length} پنل`, ...list,
     h('div', { class: 'card' }, ptitle, field('نام پنل', nm), field('آدرس پنل', url), field('دامنه سابسکریپشن', sub), field('نام کاربری ادمین', user), field('رمز عبور', pass),
       h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
-      h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)'))),
-    h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)),
-    h('div', { class: 'card' }, h('h2', {}, `رمز وب‌پنل (کاربر: ${c.web_user})`), field('رمز جدید', wp), h('div', { class: 'btns' }, saveW)));
+      h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)')))),
+    drawer('bot', '🤖', 'ربات تلگرام', tok.value ? 'تنظیم شده' : 'تنظیم نشده', strip(h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)))),
+    drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
+    drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن' : 'خودکار خاموش', strip(backupCard)),
+    drawer('ssl', '🔒', 'SSL و پورت وب‌پنل', sslSub, strip(sslCard)),
+    drawer('pw', '🔑', 'رمز وب‌پنل', `کاربر: ${c.web_user}`, strip(h('div', { class: 'card' }, h('h2', {}, `رمز وب‌پنل (کاربر: ${c.web_user})`), field('رمز جدید', wp), h('div', { class: 'btns' }, saveW)))));
 }
 
 (async () => {
