@@ -271,6 +271,17 @@ def fallback_rate(cfg: dict) -> float:
     return (int(p["price"]) / max(1, int(p["gb"]))) if p else 0.0
 
 
+def ham_mult(cfg: dict) -> float:
+    """ضریب مصرف همکاری. اگر خاموش باشد یا نامعتبر، ۱ (یعنی بدون ضریب)."""
+    if not cfg.get("hamkari_multiplier_enabled", True):
+        return 1.0
+    try:
+        m = float(cfg.get("hamkari_usage_multiplier", 1.5))
+    except (TypeError, ValueError):
+        return 1.0
+    return m if m > 0 else 1.0
+
+
 def price_for(service_name: str, gb: float, months: int, cfg: dict | None = None):
     """قیمت فروش یک اکانت → (قیمت، نوع). نوع: ham | list | extra | ignored"""
     cfg = cfg or load_config()["sales"]
@@ -324,11 +335,14 @@ def compute_rows(rows: list[dict]) -> dict:
     single_gb = sum(gb * n for (gb, _m, _k), n in cl["single"].items())
     extra_gb = sum(gb * n for (gb, _m, _k), n in cl["extra"].items())
     extra_income = extra_gb * rate
-    mult = float(cfg.get("hamkari_usage_multiplier", 1.5))
+    # مصرف ۱ گیگ واقعی همکاری، ضریب‌برابر از سهمیه‌ی مشتری کم می‌کند ولی ۱ گیگ از حجم خرید ما.
+    # پس ترافیک واقعی = گیگ فروخته‌شده ÷ ضریب
+    mult = ham_mult(cfg)
     per_gb_cost = int(cfg.get("buy_per_tb", 750000)) / float(cfg.get("tb_gb", 1000))
-    cost = (ham_gb * mult + single_gb + extra_gb) * per_gb_cost
+    ham_real_gb = ham_gb / mult
+    cost = (ham_real_gb + single_gb + extra_gb) * per_gb_cost
     return {"cl": cl, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
-            "single_gb": single_gb, "extra_gb": extra_gb, "extra_income": extra_income, "rate": rate, "cost": cost,
+            "single_gb": single_gb, "extra_gb": extra_gb, "ham_real_gb": ham_real_gb, "mult": mult, "extra_income": extra_income, "rate": rate, "cost": cost,
             "income": ham_income + single_income + extra_income}
 
 
@@ -364,6 +378,8 @@ def _render(title: str, d: dict, html: bool) -> str:
         L.append(f"🚫 نادیده‌گرفته (تست/غیرفروشی): {sum(cl['ignored'].values())} مورد")
     L.append("")
     L.append(f"💰 جمع کل فروش: {_t(d['income'])} تومان")
+    if d.get("mult", 1) != 1:
+        L.append(f"🔢 ترافیک واقعی همکاری: {_t(d['ham_real_gb'])} گیگ (÷ ضریب {d['mult']:g})")
     L.append(f"🧾 هزینه‌ی خرید حجم: {_t(d['cost'])} تومان")
     L.append(f"✅ سود تخمینی: {_t(d['income'] - d['cost'])} تومان")
     text = "\n".join(L)
