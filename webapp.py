@@ -519,7 +519,13 @@ async def user_renew(uname: str, r: RenewReq, api: RebeccaClient = Depends(P)):
     else:
         raise HTTPException(400, "تمپلت یا حجم و روز را مشخص کنید.")
     await C.renew_user(api, uname, tpl, reset_usage=r.reset_usage)
-    return _slim(await api.request("GET", api.upath(uname)), api)
+    res = await api.request("GET", api.upath(uname))
+    if not r.reset_usage:      # بدون ریست در دیتابیس ربکا ردی نمی‌ماند؛ برای گزارش فروش خودمان ثبت می‌کنیم
+        try:
+            await asyncio.to_thread(sales.record_attach, uname, res.get("service_id"), tpl.get("gb"), int(tpl.get("days") or 0))
+        except Exception:  # noqa: BLE001
+            log.exception("record_attach")
+    return _slim(res, api)
 
 
 class SaveReq(BaseModel):
@@ -565,7 +571,14 @@ async def user_action(uname: str, action: str, body: EditReq | None = None, api:
         return _slim(await api.request("PUT", p, json={"status": new}), api)
     if action == "edit":
         b = body or EditReq()
-        return _slim(await C.apply_user_edit(api, uname, b.gb, b.days, b.add_gb, b.add_days), api)
+        before = await api.request("GET", p) if b.add_gb else None
+        res = await C.apply_user_edit(api, uname, b.gb, b.days, b.add_gb, b.add_days)
+        if before is not None and int(res.get("data_limit") or 0) > int(before.get("data_limit") or 0):   # فقط وقتی حجم واقعاً اضافه شد
+            try:
+                await asyncio.to_thread(sales.record_attach, uname, res.get("service_id"), b.add_gb, b.add_days or 0)
+            except Exception:  # noqa: BLE001
+                log.exception("record_attach")
+        return _slim(res, api)
     if action == "delete":
         await api.request("DELETE", p)
         return {"ok": True}
