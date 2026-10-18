@@ -14,7 +14,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 
 import common as C
-import ops
 import sales
 import tlsutil
 from sales import price_for
@@ -441,12 +440,22 @@ async def _safe_send(cfg, results, header):
 # ───────────────────────────── کاربران ─────────────────────────────
 def _slim(u: dict, api) -> dict:
     st = u.get("status")
+    exp, hold = int(u.get("expire") or 0), int(u.get("on_hold_expire_duration") or 0)
+    if st == "on_hold":
+        days_left = hold // 86400
+    elif exp:
+        days_left = max(0, -(-(exp - int(time.time())) // 86400))      # گرد به بالا
+    else:
+        days_left = 0
     return {
         "username": u.get("username"), "status": st,
         "used": u.get("used_traffic") or 0, "limit": u.get("data_limit") or 0,
+        "limit_gb": round((u.get("data_limit") or 0) / C.GB, 2),
+        "days_left": days_left, "unlimited_days": st != "on_hold" and not exp,
         "expire_text": C.fmt_expire(u.get("expire"), st, u.get("on_hold_expire_duration")),
         "sub": api.full_sub(u.get("subscription_url", "")),
         "service_id": u.get("service_id"), "note": u.get("note") or "",
+        "next_plan": C.next_plan_view(u),
     }
 
 
@@ -511,12 +520,29 @@ async def user_renew(uname: str, r: RenewReq, api: RebeccaClient = Depends(P)):
     return _slim(await api.request("GET", api.upath(uname)), api)
 
 
-@app.get("/api/soon", dependencies=[Depends(guard)])
-async def soon(api: RebeccaClient = Depends(P)):
-    rc = load_config()["reminders"]
-    items = await ops.find_soon(api, rc["days"], rc["low_pct"])
-    return {"days": rc["days"], "low_pct": rc["low_pct"], "total": len(items),
-            "items": [{"username": i["username"], "reason": i["reason"], "user": _slim(i["user"], api)} for i in items[:100]]}
+class SaveReq(BaseModel):
+    gb: float | None = Field(default=None, ge=0, le=100000)
+    days: int | None = Field(default=None, ge=0, le=36500)
+    service_id: int | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class NextPlanReq(BaseModel):
+    enabled: bool = True
+    gb: float = Field(default=0, ge=0, le=100000)
+    days: int = Field(default=0, ge=0, le=36500)
+    add_remaining: bool = False
+
+
+@app.post("/api/user/{uname}/save", dependencies=[Depends(guard)])
+async def user_save(uname: str, r: SaveReq, api: RebeccaClient = Depends(P)):
+    await C.apply_user_save(api, uname, r.gb, r.days, r.service_id, r.note)
+    return _slim(await api.request("GET", api.upath(uname)), api)
+
+
+@app.post("/api/user/{uname}/next-plan", dependencies=[Depends(guard)])
+async def user_next_plan(uname: str, r: NextPlanReq, api: RebeccaClient = Depends(P)):
+    return _slim(await C.set_next_plan(api, uname, r.enabled, r.gb, r.days, r.add_remaining), api)
 
 
 @app.post("/api/user/{uname}/{action}", dependencies=[Depends(guard)])
