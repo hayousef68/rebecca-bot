@@ -48,7 +48,7 @@ input[type=checkbox]{width:20px;height:20px;min-height:0;accent-color:var(--ac)}
 .btn.pri:hover{filter:brightness(1.07)}
 .btn.bad{color:var(--bad)}.btn.sm{min-height:36px;padding:0 12px;font-size:12px;width:auto}
 .btn:disabled{opacity:.5;cursor:wait}
-.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.btns .btn{flex:1}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.btns .btn{flex:1;white-space:nowrap}
 .hint{font-size:12px;color:var(--mu);margin-top:8px}
 .sec{display:flex;justify-content:space-between;align-items:center;margin:4px 2px 10px}
 .sec h2{font-size:14px;font-weight:800;margin:0;display:flex;align-items:center;gap:8px}
@@ -104,6 +104,33 @@ img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:1
   main>*{animation:fade .28s ease-out both}@keyframes fade{from{transform:translateY(6px);opacity:0}}
   main>*:nth-child(2){animation-delay:.04s}main>*:nth-child(3){animation-delay:.08s}main>*:nth-child(4){animation-delay:.12s}
 }
+
+[hidden]{display:none!important}
+.sbox{position:relative;margin-bottom:10px}
+.sbox input{padding-right:44px}
+.sbox .clr{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:34px;height:34px;border-radius:50%;border:0;background:var(--s2);color:var(--mu);font-size:13px;cursor:pointer}
+input[type=search]::-webkit-search-cancel-button{display:none}
+mark{background:#f0b42940;color:var(--ac);border-radius:4px;padding:0 2px}
+.chips.wrap{flex-wrap:wrap;overflow:visible;padding:2px 0 8px}
+.ustat{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+.badge{font-size:11px;font-weight:700;padding:2px 10px;border-radius:99px;background:var(--s2);color:var(--mu);border:1px solid var(--line)}
+.badge.s-active{color:var(--ok);border-color:#3ecf8e55;background:#3ecf8e14}.badge.s-on_hold{color:var(--info);border-color:#5aa9ff55;background:#5aa9ff14}
+.badge.s-expired,.badge.s-limited{color:var(--bad);border-color:#f2706b55;background:#f2706b14}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:4px 0 6px}
+.tiles div{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:8px 6px;text-align:center;min-width:0}
+.tiles span{display:block;font-size:11px;color:var(--mu)}.tiles b{display:block;font-size:12.5px;font-weight:700;overflow-wrap:anywhere}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:3px;background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:3px;margin:14px 0 12px}
+.seg button{border:0;background:none;color:var(--mu);font:inherit;font-size:12px;font-weight:700;padding:9px 2px;border-radius:11px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.seg button.on{background:linear-gradient(135deg,var(--ac),var(--ac2));color:var(--ac-ink)}
+.seg.sm{margin:0 0 10px}.seg.sm button{padding:7px 2px}
+.pane{animation:fade .2s ease-out both}
+.psec{display:flex;justify-content:space-between;align-items:baseline;margin:14px 0 6px;font-size:12px;color:var(--mu)}.psec b{color:var(--tx)}
+.prev{background:var(--bg);border:1px dashed #3a5166;border-radius:12px;padding:10px 12px;margin:10px 0;font-size:13px;line-height:1.9}
+.diff{background:var(--bg);border:1px dashed #3a5166;border-radius:12px;padding:10px 12px;font-size:13px;line-height:1.9;margin-bottom:4px}
+.diff b{color:var(--ac)}
+.banner{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:10px 12px;font-size:13px}
+.banner.ok{border-color:#3ecf8e55;background:#3ecf8e12;color:var(--ok)}
+.btn:disabled{filter:grayscale(.6)}
 </style>
 </head>
 <body>
@@ -149,7 +176,7 @@ async function copy(text) {
   catch { const a = h('textarea', { value: text, style: 'position:fixed;opacity:0' }); document.body.append(a); a.select(); document.execCommand('copy'); a.remove(); }
   toast('کپی شد');
 }
-const gb = b => !b ? 'نامحدود' : (b / 1073741824).toFixed(2) + ' GB';
+const gb = b => !b ? 'نامحدود' : '\u2066' + (b / 1073741824).toFixed(2) + ' GB\u2069';
 function toggleQR(box, sub, name) {
   if (box.firstChild) return box.replaceChildren();
   box.replaceChildren(h('img', { class: 'qr', loading: 'lazy', alt: 'QR ' + name, src: '/api/qr?text=' + encodeURIComponent(sub) }));
@@ -305,133 +332,173 @@ function showResults(box, r) {
 }
 
 /* ───────── کاربران ───────── */
+const faDigits = s => String(s).replace(/[۰-۹]/g, c => '۰۱۲۳۴۵۶۷۸۹'.indexOf(c)).replace(/[٠-٩]/g, c => '٠١٢٣٤٥٦٧٨٩'.indexOf(c));
+const normQ = s => faDigits(s).replace(/^[@\s]+/, '').trim().replace(/\s+/g, ' ');   // اعداد فارسی→انگلیسی، حذف @ و فاصله‌های اضافه
+const STATUS_FA = { active: 'فعال', on_hold: 'منتظر اتصال', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
+const gbr = b => !b ? '∞' : (b / 1073741824).toFixed(2) + ' GB';
+const usage = u => '\u2066' + gbr(u.used) + ' / ' + gbr(u.limit) + '\u2069';   // «مصرف / کل» همیشه چپ‌به‌راست
+const fmtG = n => (+n || 0) === 0 ? 'نامحدود' : '\u2066' + (+(+n).toFixed(2)) + ' GB\u2069';
+const fmtD = n => (+n || 0) === 0 ? 'نامحدود' : (+n) + ' روز';
+
 async function vUsers() {
   if (!hasPanel()) return vCreate();
-  const U = S.users; const list = h('div'); const more = h('button', { class: 'btn', hidden: true }, 'بیشتر'); const info = h('p', { class: 'hint' });
-  const search = h('input', { type: 'search', placeholder: 'جستجوی نام کاربری…', value: U.q, dir: 'ltr', autocomplete: 'off' });
+  const U = S.users; let seq = 0;
+  const list = h('div'), more = h('button', { class: 'btn', hidden: true }, 'بیشتر'), info = h('p', { class: 'hint' });
+  const search = h('input', { type: 'search', placeholder: 'جستجو: نام کاربری (مثلاً MS_150 یا 150)…', value: U.q, dir: 'ltr', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
+  const clear = h('button', { class: 'clr', type: 'button', 'aria-label': 'پاک کردن', hidden: !U.q }, '✕');
   const chips = h('div', { class: 'chips' }, [['', 'همه'], ['active', 'فعال'], ['on_hold', 'On-Hold'], ['expired', 'منقضی'], ['limited', 'محدود'], ['disabled', 'غیرفعال']].map(([k, t]) =>
     h('button', { class: 'chip' + (U.status === k ? ' on' : ''), onclick: () => { U.status = k; vUsers(); } }, t)));
   async function load(reset) {
-    if (reset) { U.off = 0; list.replaceChildren(); }
+    const my = ++seq;                                           // جلوگیری از نمایش نتیجه‌ی قدیمی وقتی سریع تایپ می‌کنید
+    if (reset) { U.off = 0; list.style.opacity = .45; info.className = 'hint'; info.textContent = 'در حال جستجو…'; }
     try {
       const r = await api(`/users?offset=${U.off}&limit=20&search=${encodeURIComponent(U.q)}&status=${U.status}`);
+      if (my !== seq) return;
+      if (reset) list.replaceChildren();
       r.users.forEach(u => list.append(userItem(u, list)));
-      U.off += r.users.length; more.hidden = U.off >= r.total; info.textContent = r.total ? `${r.total} کاربر` : 'کاربری پیدا نشد.';
-    } catch (e) { info.textContent = e.message; info.className = 'err'; }
+      U.off += r.users.length; more.hidden = U.off >= r.total;
+      info.className = 'hint';
+      info.textContent = r.total ? (U.q ? `${r.total} نتیجه برای «${U.q}»` : `${r.total} کاربر`) : (U.q ? `برای «${U.q}» کاربری پیدا نشد.` : 'کاربری پیدا نشد.');
+    } catch (e) { if (my !== seq) return; info.textContent = e.message; info.className = 'err'; }
+    list.style.opacity = 1;
   }
-  search.addEventListener('input', debounce(() => { U.q = search.value.trim(); load(true); }, 350));
+  const apply = () => { const q = normQ(search.value); clear.hidden = !search.value; if (q === U.q && list.childElementCount) return; U.q = q; load(true); };
+  search.addEventListener('input', debounce(apply, 300));
+  search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); apply(); search.blur(); } });
+  clear.onclick = () => { search.value = ''; U.q = ''; clear.hidden = true; load(true); search.focus(); };
   more.onclick = () => run(more, () => load(false));
   try { S.svcs = (await api('/services')).services; } catch { S.svcs = []; }
-  mount(soonCard(), h('div', { style: 'height:10px' }), search, h('div', { style: 'height:10px' }), chips, info, list, more); load(true);
+  mount(h('div', { class: 'sbox' }, search, clear), chips, info, list, more); load(true);
 }
-function soonCard() {
-  const box = h('div', { class: 'body' }), out = h('div');
-  const det = h('details', { class: 'item' }, h('summary', {}, h('span', { class: 'nm' }, '⏰ در آستانه پایان'), h('span', { class: 'sub' }, 'انقضا نزدیک / حجم کم')), box);
-  async function load() {
-    out.replaceChildren(h('p', { class: 'hint' }, 'در حال بررسی…'));
-    try {
-      const r = await api('/soon');
-      out.replaceChildren(h('p', { class: 'hint' }, r.items.length ? `${r.total} کاربر (تا ${r.days} روز به انقضا یا کمتر از ${r.low_pct}٪ حجم) — برای تمدید روی کاربر بزنید` : '✅ همه‌چیز مرتب است؛ موردی نیست.'),
-        ...r.items.map(i => h('div', {}, h('p', { class: 'sub', style: 'margin:8px 2px 4px' }, i.reason), userItem(i.user, out))));
-    } catch (e) { out.replaceChildren(h('p', { class: 'err' }, e.message)); }
-  }
-  const re = h('button', { class: 'btn sm', type: 'button' }, '🔄 بروزرسانی'); re.onclick = () => run(re, load);
-  box.append(h('div', { class: 'btns', style: 'margin-top:10px' }, re), out);
-  let first = true; det.addEventListener('toggle', () => { if (det.open && first) { first = false; load(); } });
-  return det;
-}
-function userItem(u, parent) {
-  const pct = u.limit ? Math.min(100, u.used * 100 / u.limit) : 0;
+
+function userItem(u, parent, tab) {
+  let curTab = tab || 'renew';
   const d = h('details', { class: 'item s-' + u.status });
   const body = h('div', { class: 'body' });
   const P = `/user/${encodeURIComponent(u.username)}/`;
-  const swap = n => { d.replaceWith(n); n.open = true; };
-  const sec = t => h('h2', { style: 'font-size:12px;margin:16px 0 8px;color:var(--mu)' }, t);
-  const act = (label, path, ok, cls = '') => {
-    const b = h('button', { class: 'btn sm ' + cls }, label);
-    b.onclick = () => run(b, async () => { const r = await api(path, 'POST', undefined); toast(ok); if (r.username) swap(userItem(r, parent)); else if (ok === 'حذف شد') d.remove(); });
-    return b;
-  };
-  const q = h('div');
+  const swap = (r, t) => { const n = userItem(r, parent, t || curTab); d.replaceWith(n); n.open = true; };
   const svcName = ((S.svcs || []).find(s => s.id === u.service_id) || {}).name || (u.service_id != null ? '#' + u.service_id : '—');
   const left = u.limit ? gb(Math.max(0, u.limit - u.used)) : 'نامحدود';
-
-  // پیام آماده برای ارسال به مشتری
+  const pct = u.limit ? Math.min(100, u.used * 100 / u.limit) : 0;
+  const hamN = ((S.st && S.st.ham_names) || ['hamkari']).map(x => x.toLowerCase());
+  const isHamUser = hamN.some(n => n && svcName.toLowerCase().includes(n));
+  const q = h('div');
   const msg = () => ['👤 نام کاربری: ' + u.username, '📦 حجم: ' + gb(u.limit) + ' (باقی‌مانده: ' + left + ')', '⏳ اعتبار: ' + u.expire_text, '🔗 لینک اشتراک:', u.sub].join('\n');
-
-  // افزودن سریع (به مقدار فعلی اضافه می‌شود، مصرف صفر نمی‌شود)
-  const quick = (label, payload) => {
-    const b = h('button', { class: 'chip', type: 'button' }, label);
-    b.onclick = () => run(b, async () => { const r = await api(P + 'edit', 'POST', payload); toast('انجام شد'); swap(userItem(r, parent)); });
+  const sec = (t, s) => h('div', { class: 'psec' }, h('b', {}, t), s ? h('span', {}, s) : null);
+  const act = (label, path, ok, cls = '') => {
+    const b = h('button', { class: 'btn sm ' + cls }, label);
+    b.onclick = () => run(b, async () => { const r = await api(path, 'POST', undefined); toast(ok); if (r.username) swap(r, 'more'); else if (ok === 'حذف شد') d.remove(); });
     return b;
   };
-  const addG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'حجم اضافه GB', dir: 'ltr' });
-  const addD = h('input', { type: 'number', min: 0, placeholder: 'روز اضافه', dir: 'ltr' });
-  const addB = h('button', { class: 'btn sm' }, '➕ افزودن');
-  addB.onclick = () => run(addB, async () => {
-    if (!+addG.value && !+addD.value) throw new Error('حجم یا روز اضافه را وارد کنید.');
-    const r = await api(P + 'edit', 'POST', { add_gb: +addG.value || null, add_days: +addD.value || null }); toast('اضافه شد'); swap(userItem(r, parent));
-  });
+  const tile = (l, v) => h('div', {}, h('span', {}, l), h('b', {}, v));
 
-  // تمدید با تمپلت (با گزینه‌ی حفظ مصرف)
-  const tplSel = h('select', {}, Object.entries(S.st.templates).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB/${t.days || '∞'}d`)));
+  /* ─── تب تمدید: انتخاب ← پیش‌نمایش ← اعمال ─── */
+  const entries = Object.entries(S.st.templates);
+  const optsOf = k => entries.filter(([, t]) => (t.kind || 'single') === k).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`));
+  const tplSel = h('select', {}, h('optgroup', { label: '👤 تکی (ms)' }, optsOf('single')), h('optgroup', { label: '👥 همکاری (hamkari)' }, optsOf('group')));
+  const defT = isHamUser ? S.st.active_group : S.st.active; if (defT && S.st.templates[defT]) tplSel.value = defT;
+  const cG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'مثلاً 30', dir: 'ltr', inputmode: 'decimal' });
+  const cD = h('input', { type: 'number', min: 0, placeholder: 'مثلاً 30', dir: 'ltr', inputmode: 'numeric' });
   const rid = 'rs' + Math.random().toString(36).slice(2, 8);
   const rst = h('input', { type: 'checkbox', id: rid, checked: true });
-  const rnBtn = h('button', { class: 'btn sm pri', title: 'سرویس فعلی کاربر حفظ می‌شود' }, '⚡ تمدید با تمپلت');
-  rnBtn.onclick = () => {
-    if (!confirm(`«${u.username}» با تمپلت «${tplSel.value}» تمدید شود؟ (${rst.checked ? 'مصرف صفر می‌شود' : 'مصرف فعلی حفظ می‌شود'})`)) return;
-    run(rnBtn, async () => { const r = await api(P + 'renew', 'POST', { template: tplSel.value, reset_usage: rst.checked }); toast('تمدید شد'); swap(userItem(r, parent)); });
+  let rmode = 'tpl';
+  const tplBox = field('تمپلت', tplSel), cusBox = h('div', { class: 'row', hidden: true }, field('حجم جدید (GB)', cG), field('مدت جدید (روز)', cD));
+  const prev = h('div', { class: 'prev' }), goR = h('button', { class: 'btn pri' }, '⚡ اعمال تمدید');
+  const rseg = h('div', { class: 'seg sm' }, [['tpl', 'با تمپلت'], ['custom', 'دلخواه']].map(([k, t]) => h('button', { type: 'button', class: k === rmode ? 'on' : '', 'data-k': k, onclick: () => { rmode = k; rseg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); tplBox.hidden = k !== 'tpl'; cusBox.hidden = k !== 'custom'; updR(); } }, t)));
+  const rVals = () => rmode === 'tpl' ? (S.st.templates[tplSel.value] || null) : (cG.value !== '' && cD.value !== '' ? { gb: +cG.value, days: +cD.value } : null);
+  const updR = () => {
+    const v = rVals(); goR.disabled = !v;
+    prev.replaceChildren(!v ? h('span', { class: 'sub' }, 'حجم و مدت را وارد کنید.') : h('div', {},
+      h('div', {}, '📦 حجم نهایی: ', h('b', {}, fmtG(v.gb)), h('span', { class: 'sub' }, `  (الان: ${usage(u)})`)),
+      h('div', {}, '📅 اعتبار نهایی: ', h('b', {}, fmtD(v.days)), h('span', { class: 'sub' }, `  (الان: ${u.expire_text})`)),
+      h('div', {}, '🔄 مصرف: ', h('b', {}, rst.checked ? 'صفر می‌شود' : 'حفظ می‌شود'))));
   };
+  [tplSel, cG, cD, rst].forEach(i => i.addEventListener('input', updR)); rst.addEventListener('change', updR);
+  goR.onclick = () => { const v = rVals(); if (!v) return;
+    run(goR, async () => { const r = await api(P + 'renew', 'POST', rmode === 'tpl' ? { template: tplSel.value, reset_usage: rst.checked } : { gb: v.gb, days: v.days, reset_usage: rst.checked }); toast('✅ تمدید شد'); swap(r, 'renew'); }); };
+  const paneRenew = h('div', {}, rseg, tplBox, cusBox, h('label', { class: 'chk', for: rid }, rst, 'مصرف فعلی صفر شود'),
+    h('p', { class: 'hint', style: 'margin:4px 0' }, 'تمدید، حجم و مدت را «جایگزین» می‌کند (نه اینکه اضافه کند). سرویس کاربر تغییر نمی‌کند.'), prev, goR);
 
-  // تمدید دلخواه (حجم و روز دستی، بدون تمپلت)
-  const cG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'حجم GB', dir: 'ltr' });
-  const cD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr' });
-  const cB = h('button', { class: 'btn sm' }, '⚡ تمدید دلخواه');
-  cB.onclick = () => {
-    if (cG.value === '' || cD.value === '') return toast('حجم و روز هر دو لازم است.', true);
-    if (!confirm(`«${u.username}» با ${cG.value} گیگ / ${cD.value} روز تمدید شود؟ (${rst.checked ? 'مصرف صفر می‌شود' : 'مصرف فعلی حفظ می‌شود'})`)) return;
-    run(cB, async () => { const r = await api(P + 'renew', 'POST', { gb: +cG.value, days: +cD.value, reset_usage: rst.checked }); toast('تمدید شد'); swap(userItem(r, parent)); });
-  };
-
+  /* ─── تب ویرایش: تغییرات اول پیش‌نویس می‌شوند، با «ذخیره» اعمال می‌شوند ─── */
+  const gI = h('input', { type: 'number', min: 0, step: 'any', value: u.limit_gb, dir: 'ltr', inputmode: 'decimal' });
+  const dI = h('input', { type: 'number', min: 0, value: u.days_left, dir: 'ltr', inputmode: 'numeric' });
   const svcSel = h('select', {}, (S.svcs || []).map(s => h('option', { value: s.id, selected: s.id === u.service_id }, s.name)));
-  const svcBtn = h('button', { class: 'btn sm' }, '🔀 تغییر سرویس');
-  svcBtn.onclick = () => run(svcBtn, async () => { if (!svcSel.value) throw new Error('سرویسی موجود نیست.'); const r = await api(P + 'service', 'POST', { service_id: +svcSel.value }); toast('سرویس تغییر کرد'); swap(userItem(r, parent)); });
   const noteI = h('input', { value: u.note || '', placeholder: 'یادداشت (نام مشتری، شماره…)', maxlength: 500 });
-  const noteB = h('button', { class: 'btn sm' }, '📝 ذخیره یادداشت');
-  noteB.onclick = () => run(noteB, async () => { const r = await api(P + 'note', 'POST', { note: noteI.value }); toast('یادداشت ذخیره شد'); swap(userItem(r, parent)); });
+  const diffBox = h('div', { class: 'diff' }), saveB = h('button', { class: 'btn pri' }, '💾 ذخیره تغییرات'), cancelB = h('button', { class: 'btn', type: 'button' }, '↺ انصراف');
+  const bump = (inp, n) => { inp.value = +((+inp.value || 0) + n).toFixed(2); updE(); };
+  const chipsOf = (inp, arr, unit) => h('div', { class: 'chips wrap' }, arr.map(n => h('button', { class: 'chip', type: 'button', dir: 'ltr', onclick: () => bump(inp, n) }, `+${n} ${unit}`)),
+    h('button', { class: 'chip', type: 'button', onclick: () => { inp.value = 0; updE(); } }, '∞'));
+  const changes = () => {
+    const c = [];
+    if (gI.value !== '' && +gI.value !== +u.limit_gb) c.push(['gb', `📦 حجم کل: ${fmtG(u.limit_gb)} ← <b>${fmtG(gI.value)}</b>` + (+gI.value && +u.limit_gb ? ` (${+gI.value > +u.limit_gb ? '+' : ''}${+(+gI.value - +u.limit_gb).toFixed(2)})` : '')]);
+    if (dI.value !== '' && +dI.value !== +u.days_left) c.push(['days', `📅 ${u.status === 'on_hold' ? 'مدت' : 'اعتبار از امروز'}: ${u.unlimited_days ? 'نامحدود' : fmtD(u.days_left)} ← <b>${fmtD(dI.value)}</b>`]);
+    if (svcSel.value && +svcSel.value !== u.service_id) c.push(['svc', `📂 سرویس: ${svcName} ← <b>${svcSel.selectedOptions[0].textContent}</b>`]);
+    if (noteI.value !== (u.note || '')) c.push(['note', '📝 یادداشت تغییر کرد']);
+    return c;
+  };
+  const updE = () => { const c = changes(); saveB.disabled = !c.length; cancelB.hidden = !c.length; saveB.textContent = c.length ? `💾 ذخیره (${c.length} تغییر)` : '💾 ذخیره تغییرات';
+    diffBox.replaceChildren(...(c.length ? c.map(([, t]) => { const p = h('div', {}); p.innerHTML = t; return p; }) : [h('span', { class: 'sub' }, 'هنوز چیزی تغییر نکرده است.')])); };
+  [gI, dI, svcSel, noteI].forEach(i => { i.addEventListener('input', updE); i.addEventListener('change', updE); });
+  cancelB.onclick = () => { gI.value = u.limit_gb; dI.value = u.days_left; svcSel.value = u.service_id; noteI.value = u.note || ''; updE(); };
+  saveB.onclick = () => { const has = Object.fromEntries(changes());
+    run(saveB, async () => { const r = await api(P + 'save', 'POST', { gb: has.gb ? +gI.value : null, days: has.days ? +dI.value : null, service_id: has.svc ? +svcSel.value : null, note: has.note ? noteI.value : null }); toast('✅ ذخیره شد'); swap(r, 'edit'); }); };
+  const paneEdit = h('div', {},
+    h('p', { class: 'hint', style: 'margin:0 0 4px' }, 'مقدار نهایی را وارد کنید (نه مقدار افزودنی). دکمه‌های + فقط عدد را در کادر تغییر می‌دهند و تا «ذخیره» نزنید چیزی اعمال نمی‌شود.'),
+    field(`حجم کل (GB) — الان: ${fmtG(u.limit_gb)}`, gI), chipsOf(gI, [5, 10, 30, 50], 'GB'),
+    field(u.status === 'on_hold' ? `مدت (روز) پس از اولین اتصال — الان: ${fmtD(u.days_left)}` : `اعتبار از امروز (روز) — الان: ${u.unlimited_days ? 'نامحدود' : fmtD(u.days_left)}`, dI), chipsOf(dI, [7, 15, 30, 60], 'روز'),
+    h('div', { class: 'row', style: 'margin-top:4px' }, field('سرویس', svcSel), field('یادداشت', noteI)),
+    sec('تغییرات در انتظار ذخیره'), diffBox, h('div', { class: 'btns' }, saveB, cancelB));
 
-  // تنظیم مقدار مطلق
-  const gbI = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'حجم کل GB (0=∞)', dir: 'ltr' });
-  const dI = h('input', { type: 'number', min: 0, placeholder: 'روز از الان (0=∞)', dir: 'ltr' });
-  const save = h('button', { class: 'btn sm' }, 'ذخیره مقدار جدید');
-  save.onclick = () => run(save, async () => {
-    if (gbI.value === '' && dI.value === '') throw new Error('حداقل یکی را وارد کنید.');
-    const r = await api(P + 'edit', 'POST', { gb: gbI.value === '' ? null : +gbI.value, days: dI.value === '' ? null : +dI.value });
-    toast('ذخیره شد'); swap(userItem(r, parent));
-  });
-  const del = h('button', { class: 'btn sm bad' }, '🗑 حذف');
+  /* ─── تب پلن بعدی (شارژ خودکار): بعد از اتمام، یک‌بار اضافه می‌شود ─── */
+  const np = u.next_plan;
+  const nG = h('input', { type: 'number', min: 0, step: 'any', value: np ? np.gb : '', placeholder: 'مثلاً 30', dir: 'ltr', inputmode: 'decimal' });
+  const nD = h('input', { type: 'number', min: 0, value: np ? np.days : '', placeholder: 'مثلاً 30', dir: 'ltr', inputmode: 'numeric' });
+  const nrid = 'nr' + Math.random().toString(36).slice(2, 8);
+  const nRem = h('input', { type: 'checkbox', id: nrid, checked: !!(np && np.add_remaining) });
+  const nTpl = h('select', {}, h('option', { value: '' }, '— پر کردن از تمپلت —'), entries.map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
+  nTpl.onchange = () => { const t = S.st.templates[nTpl.value]; if (t) { nG.value = t.gb; nD.value = t.days; } };
+  const nSave = h('button', { class: 'btn pri' }, np ? '💾 بروزرسانی پلن بعدی' : '💾 فعال‌سازی پلن بعدی');
+  nSave.onclick = () => run(nSave, async () => {
+    if (!+nG.value && !+nD.value) throw new Error('حجم یا مدت پلن بعدی را وارد کنید.');
+    const r = await api(P + 'next-plan', 'POST', { enabled: true, gb: +nG.value || 0, days: +nD.value || 0, add_remaining: nRem.checked }); toast('✅ پلن بعدی ذخیره شد'); swap(r, 'next'); });
+  const nDel = h('button', { class: 'btn bad', hidden: !np }, '🗑 حذف پلن بعدی');
+  nDel.onclick = () => { if (!confirm('پلن بعدی این کاربر حذف شود؟')) return; run(nDel, async () => { const r = await api(P + 'next-plan', 'POST', { enabled: false }); toast('پلن بعدی حذف شد'); swap(r, 'next'); }); };
+  const paneNext = h('div', {},
+    h('div', { class: 'banner ' + (np ? 'ok' : '') }, np ? `🔁 فعال: ${fmtG(np.gb)} + ${fmtD(np.days)}${np.add_remaining ? ' · باقی‌مانده حجم هم منتقل می‌شود' : ''}` : '⚪ پلن بعدی تعریف نشده'),
+    h('p', { class: 'hint', style: 'margin:6px 0' }, 'وقتی حجم یا زمان کاربر تمام شود، همین حجم و مدت «فقط یک‌بار» خودکار به او اضافه می‌شود (همان «شارژ خودکار» در ربکا).'),
+    field('پر کردن سریع از تمپلت', nTpl), h('div', { class: 'row' }, field('حجم پلن بعدی (GB)', nG), field('مدت پلن بعدی (روز)', nD)),
+    h('label', { class: 'chk', for: nrid }, nRem, 'حجم باقی‌مانده فعلی هم به پلن بعدی اضافه شود'),
+    h('div', { class: 'btns' }, nSave, nDel));
+
+  /* ─── تب بیشتر ─── */
+  const del = h('button', { class: 'btn sm bad' }, '🗑 حذف کاربر');
   del.onclick = () => { if (!confirm(`کاربر ${u.username} حذف شود؟`)) return; run(del, async () => { await api(P + 'delete', 'POST'); toast('حذف شد'); d.remove(); }); };
+  const paneMore = h('div', {}, h('div', { class: 'btns', style: 'margin-top:0' },
+    act('🔄 صفر کردن مصرف', P + 'reset', 'مصرف صفر شد'), act('🔗 لینک جدید', P + 'revoke', 'لینک جدید ساخته شد'),
+    act(u.status === 'disabled' ? '✅ فعال‌سازی' : '⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد'), del),
+    h('p', { class: 'hint' }, '«لینک جدید» لینک اشتراک قبلی را از کار می‌اندازد.'));
 
-  body.append(h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
-    h('p', { class: 'sub' }, `سرویس: ${svcName} · مصرف: ${gb(u.used)} / ${gb(u.limit)} · باقی: ${left} · اعتبار: ${u.expire_text}`),
+  /* ─── چیدمان ─── */
+  const panes = { renew: paneRenew, edit: paneEdit, next: paneNext, more: paneMore };
+  const TABS = [['renew', '⚡ تمدید'], ['edit', '✏️ ویرایش'], ['next', '🔁 پلن بعدی'], ['more', '⋯ بیشتر']];
+  const tabBar = h('div', { class: 'seg' }, TABS.map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === curTab ? 'on' : '', onclick: () => showTab(k) }, t + (k === 'next' && np ? ' •' : ''))));
+  const showTab = k => { curTab = k; tabBar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); Object.entries(panes).forEach(([n, p]) => { p.hidden = n !== k; }); };
+  Object.values(panes).forEach(p => p.classList.add('pane'));
+
+  body.append(
+    h('div', { class: 'ustat' }, h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status), h('span', { class: 'sub' }, `سرویس: ${svcName}`)),
+    h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
+    h('div', { class: 'tiles' }, tile('مصرف', gb(u.used)), tile('باقی‌مانده', left), tile('اعتبار', u.expire_text)),
     h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
-    h('div', { class: 'btns' },
+    h('div', { class: 'btns', style: 'margin-top:0' },
       h('button', { class: 'btn sm', onclick: () => toggleQR(q, u.sub, u.username) }, '🖼 QR'),
       h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 کپی لینک'),
-      h('button', { class: 'btn sm', onclick: () => copy(msg()) }, '💬 کپی پیام مشتری'),
-      act('🔄 صفر کردن مصرف', P + 'reset', 'مصرف صفر شد'), act('🔗 لینک جدید', P + 'revoke', 'لینک جدید ساخته شد'),
-      act(u.status === 'disabled' ? '✅ فعال‌سازی' : '⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد')),
-    sec('➕ افزودن سریع (به مقدار فعلی اضافه می‌شود)'),
-    h('div', { class: 'chips', style: 'flex-wrap:wrap;padding-bottom:6px' }, [5, 10, 30, 50].map(g => quick(`+${g} گیگ`, { add_gb: g })), [7, 15, 30, 60].map(n => quick(`+${n} روز`, { add_days: n }))),
-    h('div', { class: 'row' }, addG, addD), h('div', { class: 'btns' }, addB),
-    sec('⚡ تمدید'),
-    h('label', { class: 'chk', for: rid, style: 'margin-top:0' }, rst, 'صفر کردن مصرف هنگام تمدید'),
-    h('div', { class: 'row', style: 'margin-top:8px' }, tplSel, rnBtn),
-    h('div', { class: 'row', style: 'margin-top:8px' }, cG, cD), h('div', { class: 'btns' }, cB),
-    sec('⚙️ تنظیمات کاربر'),
-    h('div', { class: 'row' }, svcSel, svcBtn), h('div', { class: 'row', style: 'margin-top:8px' }, noteI, noteB),
-    h('div', { class: 'row', style: 'margin-top:12px' }, gbI, dI), h('div', { class: 'btns' }, save, del));
-  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username), h('span', { class: 'sub' }, `${svcName} · ${gb(u.used)} / ${gb(u.limit)}`)), body);
+      h('button', { class: 'btn sm', onclick: () => copy(msg()) }, '💬 پیام')),
+    tabBar, paneRenew, paneEdit, paneNext, paneMore);
+  showTab(curTab); updR(); updE();
+  const hq = (S.users && S.users.q || '').toLowerCase(), ix = hq ? u.username.toLowerCase().indexOf(hq) : -1;
+  const nm = ix < 0 ? [u.username] : [u.username.slice(0, ix), h('mark', {}, u.username.slice(ix, ix + hq.length)), u.username.slice(ix + hq.length)];
+  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), nm), h('span', { class: 'sub' }, `${svcName} · ${usage(u)}`)), body);
   return d;
 }
 
@@ -508,12 +575,7 @@ async function vHome() {
     const r = await api('/cleanup?dry=false', 'POST'); toast(`${r.deleted} کاربر حذف شد`);
   });
   core.onclick = () => { if (confirm('هسته Xray ریستارت شود؟')) run(core, async () => { await api('/core/restart', 'POST'); toast('ریستارت شد'); }); };
-  const soonOut = h('div'), soonBtn = h('button', { class: 'btn' }, '⏰ نزدیک انقضا / کم‌حجم');
-  soonBtn.onclick = () => run(soonBtn, async () => {
-    const r = await api('/soon');
-    soonOut.replaceChildren(h('p', { class: 'hint' }, r.items.length ? `${r.items.length} کاربر (تا ${r.days} روز یا کمتر از ${r.low_pct}٪ حجم)` : '✅ موردی نیست'), ...r.items.map(i => h('p', { class: 'sub' }, `${i.username} — ${i.reason}`)));
-  });
-  res.replaceChildren(h('h2', {}, 'عملیات'), h('div', { class: 'btns' }, clean, core, soonBtn), soonOut);
+  res.replaceChildren(h('h2', {}, 'عملیات'), h('div', { class: 'btns' }, clean, core));
 }
 
 /* ───────── تمپلت ───────── */
