@@ -51,6 +51,7 @@ DEFAULT_CFG = {
         "buy_per_tb": 750000,
         "tb_gb": 1000,
         "hamkari_usage_multiplier": 1.5,
+        "hamkari_multiplier_enabled": True,
         "db_tz_offset_minutes": 0,
         "db": {},
         "schema": {},
