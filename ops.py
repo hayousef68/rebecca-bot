@@ -44,7 +44,7 @@ async def find_soon(api, days: int, low_pct: int) -> list[dict]:
             reasons.append(f"📉 {max(0, lim - used) / C.GB:.1f}GB باقی")
             rank = min(rank, 10 ** 9)
         if reasons:
-            out.append({"username": u["username"], "reason": " | ".join(reasons), "rank": rank})
+            out.append({"username": u["username"], "reason": " | ".join(reasons), "rank": rank, "user": u})
     out.sort(key=lambda x: x["rank"])
     return out
 
