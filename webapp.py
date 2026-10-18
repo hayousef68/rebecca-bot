@@ -181,6 +181,7 @@ class SalesReq(BaseModel):
     hamkari_per_gb: int = Field(ge=0, le=10**8)
     buy_per_tb: int = Field(ge=0, le=10**10)
     hamkari_usage_multiplier: float = Field(ge=0.1, le=100)
+    hamkari_multiplier_enabled: bool = True
     hamkari_service_names: str = Field(default="hamkari", max_length=200)
     ignore_service_names: str = Field(default="", max_length=200)
     single_prices: list[PlanReq] = Field(max_length=50)
@@ -191,6 +192,7 @@ async def sales_settings_get():
     sc = load_config()["sales"]
     return {"hamkari_per_gb": sc["hamkari_per_gb"], "buy_per_tb": sc.get("buy_per_tb", 750000),
             "hamkari_usage_multiplier": sc.get("hamkari_usage_multiplier", 1.5),
+            "hamkari_multiplier_enabled": sc.get("hamkari_multiplier_enabled", True),
             "hamkari_service_names": ", ".join(sc.get("hamkari_service_names", [])),
             "ignore_service_names": ", ".join(sc.get("ignore_service_names", [])),
             "fallback_rate": round(sales.fallback_rate(sc)),
@@ -210,6 +212,7 @@ async def sales_settings_save(r: SalesReq):
     def mut(c):
         c["sales"].update(hamkari_per_gb=r.hamkari_per_gb, buy_per_tb=r.buy_per_tb,
                           hamkari_usage_multiplier=r.hamkari_usage_multiplier,
+                          hamkari_multiplier_enabled=r.hamkari_multiplier_enabled,
                           hamkari_service_names=names or ["hamkari"],
                           ignore_service_names=[n.strip().lower() for n in r.ignore_service_names.split(",") if n.strip()],
                           single_prices=plans)
