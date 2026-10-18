@@ -554,7 +554,14 @@ async def user_save(uname: str, r: SaveReq, api: RebeccaClient = Depends(P)):
 
 @app.post("/api/user/{uname}/next-plans", dependencies=[Depends(guard)])
 async def user_next_plans(uname: str, r: NextPlansReq, api: RebeccaClient = Depends(P)):
-    return _slim(await C.set_next_plans(api, uname, [p.model_dump() for p in r.plans]), api)
+    res = await C.set_next_plans(api, uname, [p.model_dump() for p in r.plans])
+    for pl in r.plans:                      # هر پلنِ تازه‌اضافه‌شده همان روز در فروش ثبت می‌شود
+        if pl.idx is None and pl.gb > 0:
+            try:
+                await asyncio.to_thread(sales.record_attach, uname, res.get("service_id"), pl.gb, pl.days, None, "next")
+            except Exception:  # noqa: BLE001
+                log.exception("record next plan")
+    return _slim(res, api)
 
 
 @app.post("/api/user/{uname}/{action}", dependencies=[Depends(guard)])
