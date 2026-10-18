@@ -94,7 +94,7 @@ def main_kb() -> M:
         [B("⚡ ساخت تکی (ms)", callback_data="c:quick"), B("👥 ساخت همکاری", callback_data="c:qg")],
         [B("🎯 ساخت با انتخاب تمپلت", callback_data="c:pick")],
         [B("🔍 جستجو و مدیریت کاربر", callback_data="search"), B("📋 لیست کاربران", callback_data="l:all:0")],
-        [B("👥 عملیات گروهی", callback_data="bk:start"), B("⏰ نزدیک انقضا", callback_data="soon")],
+        [B("👥 عملیات گروهی", callback_data="bk:start")],
         [B("⚙️ تمپلت‌ها", callback_data="t:menu"), B("📊 وضعیت سرور", callback_data="stats")],
         [B("🧹 پاکسازی منقضی‌ها", callback_data=f"clean:ask:{pid}"), B("📥 خروجی لینک‌ها", callback_data="export")],
         [B("📤 فروش امروز", callback_data="rp:today"), B("📈 دیروز", callback_data="rp:yday"),
@@ -1073,23 +1073,6 @@ async def bulk_go(update, context):
     return END
 
 
-# ───────────────────────────── نزدیک انقضا ─────────────────────────────
-@nav
-async def soon_cb(update, context):
-    if update.callback_query:
-        await update.callback_query.answer("در حال بررسی…")
-    api, rc = get_api(), load_config()["reminders"]
-    try:
-        items = await ops.find_soon(api, rc["days"], rc["low_pct"])
-    except Exception as e:  # noqa: BLE001
-        return await show(update, context, err_text(e), main_kb())
-    if not items:
-        return await show(update, context, f"✅ در پنل «{esc(api.name)}» کاربری نزدیک انقضا یا اتمام حجم نیست.", main_kb())
-    rows = [[B(f"{i['username']} — {i['reason']}"[:60], callback_data=f"u:view:{api.pid}:{i['username']}")] for i in items[:20]]
-    rows.append([B("🔙 منوی اصلی", callback_data="back")])
-    await show(update, context, f"⏰ پنل «{esc(api.name)}»: <b>{len(items)}</b> کاربر تا {rc['days']} روز دیگر منقضی می‌شوند یا کمتر از {rc['low_pct']}٪ حجم دارند.\nروی هر کدام بزنید تا تمدیدش کنید:", M(rows))
-
-
 @admin_only
 async def edit_start(update, context):
     q = update.callback_query
@@ -1403,23 +1386,6 @@ async def dbcheck_cmd(update, context):
 
 # ───────────────────────────── هشدار، مانیتور، پشتیبان، راهنما ─────────────────────────────
 @admin_only
-async def remind_cmd(update, context):
-    a = context.args
-
-    def status() -> str:
-        rc = load_config()["reminders"]
-        return (f"⏰ هشدار انقضا: <b>{'روشن' if rc['enabled'] else 'خاموش'}</b> — هر روز ساعت {rc['hour']} (تهران) | "
-                f"تا {rc['days']} روز مانده یا کمتر از {rc['low_pct']}٪ حجم")
-    if a and a[0] in ("on", "off"):
-        update_config(lambda c: c["reminders"].__setitem__("enabled", a[0] == "on"))
-    elif len(a) == 3 and all(x.isdigit() for x in a) and 1 <= int(a[0]) <= 23:
-        update_config(lambda c: c["reminders"].update(hour=int(a[0]), days=max(1, int(a[1])), low_pct=max(1, int(a[2]))))
-    elif a:
-        return await _arg_err(update, "/remind on | off | 10 3 10  (ساعت، روز، درصد حجم)")
-    await update.message.reply_html(status() + "\n\nفهرست لحظه‌ای: /soon")
-
-
-@admin_only
 async def monitor_cmd(update, context):
     a = context.args
     if a and a[0] in ("on", "off"):
@@ -1453,7 +1419,7 @@ async def help_cmd(update, context):
     await update.message.reply_html(
         "📖 <b>راهنمای دستورها</b>\n\n"
         "/start — منوی اصلی\n/report [yesterday|week|month|lmonth] — گزارش فروش\n/events — جزئیات ساخت/تمدیدها\n"
-        "/soon — کاربران نزدیک انقضا/اتمام حجم\n/remind — هشدار روزانه انقضا\n/monitor — مانیتور سلامت پنل‌ها\n"
+        "/monitor — مانیتور سلامت پنل‌ها\n"
         "/prices — قیمت‌ها و تنظیمات فروش\n/dbcheck — بررسی اتصال دیتابیس\n/backup — پشتیبان تنظیمات\n/autobackup — بکاپ خودکار شبانه\n/cancel — لغو")
 
 
@@ -1469,11 +1435,11 @@ async def on_error(update, context):
 
 async def post_init(app: Application):
     await app.bot.set_my_commands([
-        BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش (امروز/week/month)"), BotCommand("soon", "نزدیک انقضا"),
+        BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش (امروز/week/month)"),
         BotCommand("prices", "قیمت‌ها و تنظیمات فروش"), BotCommand("help", "راهنما"), BotCommand("cancel", "لغو عملیات جاری")])
     # ردیاب فروش و گزارش روزانه ۰۰:۰۰ (به وقت ایران)
     app.bot_data["bg"] = [asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot)),
-                          asyncio.create_task(ops.monitor_loop(app.bot)), asyncio.create_task(ops.reminder_loop(app.bot))]
+                          asyncio.create_task(ops.monitor_loop(app.bot))]
 
 
 def build_app() -> Application:
@@ -1488,7 +1454,7 @@ def build_app() -> Application:
         entry_points=[
             CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), CommandHandler("report", report_cmd),
             cb(back_cb, pattern=r"^back$"), cb(report_cb, pattern=r"^rp:(today|yday|week|month|lmonth)(:r)?$"),
-            CommandHandler("soon", soon_cb), cb(soon_cb, pattern=r"^soon$"),
+            
             cb(bulk_start, pattern=r"^bk:start$"), cb(note_start, pattern=r"^u:note:"),
             cb(create_entry, pattern=r"^c:(quick|qg|pick)$"),
             cb(tpl_new, pattern=r"^t:new$"), cb(tpl_edit_field, pattern=r"^te:(name|gb|days):\d+$"),
@@ -1530,7 +1496,7 @@ def build_app() -> Application:
     )
     for name, fn in (("prices", prices_cmd), ("events", events_cmd), ("setham", setham_cmd), ("setplan", setplan_cmd), ("delplan", delplan_cmd),
                      ("setcost", setcost_cmd), ("setmult", setmult_cmd), ("setdb", setdb_cmd), ("dbcheck", dbcheck_cmd),
-                     ("remind", remind_cmd), ("monitor", monitor_cmd), ("backup", backup_cmd), ("autobackup", autobackup_cmd), ("help", help_cmd)):
+                     ("monitor", monitor_cmd), ("backup", backup_cmd), ("autobackup", autobackup_cmd), ("help", help_cmd)):
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(noop_cb, pattern=r"^noop$"))
