@@ -102,7 +102,7 @@ async def state():
     return {
         "panels": _panels_view(cfg), "active_panel": cfg["active_panel"],
         "bot": bool(cfg["bot_token"] and cfg["admin_ids"]),
-        "templates": cfg["templates"], "active": cfg["active_template"], "max_batch": cfg["max_batch"],
+        "templates": cfg["templates"], "active": cfg["active_template"], "active_group": cfg.get("active_group_template", ""), "max_batch": cfg["max_batch"],
         "default_prefix": cfg["default_prefix"], "multi_panel": len(cfg["panels"]) > 1,
         "ham_names": cfg.get("sales", {}).get("hamkari_service_names", ["hamkari"]),
     }
@@ -299,7 +299,7 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
     if req.telegram and results:
         if cfg["bot_token"] and cfg["admin_ids"]:
             svc = next((s["name"] for s in await api.list_services() if s["id"] == req.service_id), req.service_id)
-            header = f"🖥 {api.name} | 💾 {tpl['gb'] or 'نامحدود'} GB | 📅 {tpl['days'] or 'نامحدود'} روز ({tpl['mode']}) | 📂 {svc}"
+            header = C.build_info(api.name, tpl, svc)
             t = asyncio.create_task(_safe_send(cfg, results, header))
             _bg.add(t)
             t.add_done_callback(_bg.discard)
@@ -457,6 +457,7 @@ class TplReq(BaseModel):
     gb: float = Field(ge=0, le=100000)
     days: int = Field(ge=0, le=36500)
     mode: str = Field(pattern="^(on_hold|active)$")
+    kind: str = Field(default="single", pattern="^(single|group)$")
 
 
 @app.post("/api/templates", dependencies=[Depends(guard)])
@@ -471,10 +472,12 @@ async def tpl_save(r: TplReq):
             raise ValueError("نام تمپلت تکراری است.")
         items = [(r.name if k == old else k, v) for k, v in c["templates"].items()]
         d = dict(items)
-        d[r.name] = {"gb": gb, "days": r.days, "mode": r.mode}
+        d[r.name] = {"gb": gb, "days": r.days, "mode": r.mode, "kind": r.kind}
         c["templates"] = d
         if c["active_template"] == old or c["active_template"] not in d:
             c["active_template"] = r.name
+        if c.get("active_group_template") == old:
+            c["active_group_template"] = r.name if r.kind == "group" else ""
     update_config(mut)
     return {"ok": True}
 
@@ -488,7 +491,10 @@ async def tpl_active(r: NameReq):
     def mut(c):
         if r.name not in c["templates"]:
             raise ValueError("تمپلت پیدا نشد.")
-        c["active_template"] = r.name
+        if c["templates"][r.name].get("kind") == "group":
+            c["active_group_template"] = r.name
+        else:
+            c["active_template"] = r.name
     update_config(mut)
     return {"ok": True}
 
