@@ -131,6 +131,25 @@ mark{background:#f0b42940;color:var(--ac);border-radius:4px;padding:0 2px}
 .banner{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:10px 12px;font-size:13px}
 .banner.ok{border-color:#3ecf8e55;background:#3ecf8e12;color:var(--ok)}
 .btn:disabled{filter:grayscale(.6)}
+
+/* فشرده‌سازی فرم‌های داخل کاربر */
+.item input,.item select{min-height:38px;padding:5px 10px;font-size:13px;border-radius:10px}
+.item .btn{min-height:40px;font-size:13px}.item .btn.sm{min-height:36px}
+.item label{margin:8px 0 3px;font-size:11.5px}
+.item .chip{padding:2px 10px;font-size:11.5px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:8px}.cols>div{min-width:0}
+.chips.tight{gap:4px;padding:5px 0 4px;flex-wrap:wrap;overflow:visible}
+.attach{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center}.attach .btn{width:auto;padding:0 14px}
+.item .btns:has(.btn.sm){gap:6px}
+.plan{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:7px 10px;margin-bottom:6px}
+.plan .n{width:22px;height:22px;border-radius:50%;background:var(--s2);display:grid;place-items:center;font-size:11px;color:var(--mu);flex:none}
+.plan .v{flex:1;font-weight:700;font-size:13px}.plan .v small{font-weight:400;color:var(--mu);font-size:11px}
+.plan .x{border:0;background:#f2706b1a;color:var(--bad);width:30px;height:30px;border-radius:9px;cursor:pointer}
+.tech{margin-top:10px}.tech summary{font-size:11.5px;color:var(--mu);cursor:pointer}.tech code{font-size:11px;margin:6px 0 0;white-space:pre-wrap}
+
+.acts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:2px}.acts .btn{width:100%;padding:0 4px;white-space:nowrap}
+.chips.tight .chip{padding:1px 9px;font-size:11px}
+.chips.tight{flex-wrap:nowrap;gap:3px}
 </style>
 </head>
 <body>
@@ -392,13 +411,13 @@ function userItem(u, parent, tab) {
   };
   const tile = (l, v) => h('div', {}, h('span', {}, l), h('b', {}, v));
 
-  /* ─── تب تمدید: انتخاب ← پیش‌نمایش ← اعمال ─── */
+  /* ─── تب تمدید: انتخاب ← پیش‌نمایش ← اعمال (سرویس کاربر هیچ‌وقت تغییر نمی‌کند) ─── */
   const entries = Object.entries(S.st.templates);
-  const optsOf = k => entries.filter(([, t]) => (t.kind || 'single') === k).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`));
-  const tplSel = h('select', {}, h('optgroup', { label: '👤 تکی (ms)' }, optsOf('single')), h('optgroup', { label: '👥 همکاری (hamkari)' }, optsOf('group')));
-  const defT = isHamUser ? S.st.active_group : S.st.active; if (defT && S.st.templates[defT]) tplSel.value = defT;
-  const cG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'مثلاً 30', dir: 'ltr', inputmode: 'decimal' });
-  const cD = h('input', { type: 'number', min: 0, placeholder: 'مثلاً 30', dir: 'ltr', inputmode: 'numeric' });
+  const own = entries.filter(([, t]) => (t.kind || 'single') !== 'group');            // فقط تمپلت‌های عادی (نه همکاری)
+  const tplSel = h('select', {}, (own.length ? own : entries).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
+  if (S.st.active && S.st.templates[S.st.active] && [...tplSel.options].some(o => o.value === S.st.active)) tplSel.value = S.st.active;
+  const cG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
+  const cD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
   const rid = 'rs' + Math.random().toString(36).slice(2, 8);
   const rst = h('input', { type: 'checkbox', id: rid, checked: true });
   let rmode = 'tpl';
@@ -411,77 +430,94 @@ function userItem(u, parent, tab) {
     prev.replaceChildren(!v ? h('span', { class: 'sub' }, 'حجم و مدت را وارد کنید.') : h('div', {},
       h('div', {}, '📦 حجم نهایی: ', h('b', {}, fmtG(v.gb)), h('span', { class: 'sub' }, `  (الان: ${usage(u)})`)),
       h('div', {}, '📅 اعتبار نهایی: ', h('b', {}, fmtD(v.days)), h('span', { class: 'sub' }, `  (الان: ${u.expire_text})`)),
-      h('div', {}, '🔄 مصرف: ', h('b', {}, rst.checked ? 'صفر می‌شود' : 'حفظ می‌شود'))));
+      h('div', {}, '🔄 مصرف: ', h('b', {}, rst.checked ? 'صفر می‌شود' : 'حفظ می‌شود')),
+      h('div', {}, '📂 سرویس: ', h('b', {}, svcName), h('span', { class: 'sub' }, '  (بدون تغییر)'))));
   };
   [tplSel, cG, cD, rst].forEach(i => i.addEventListener('input', updR)); rst.addEventListener('change', updR);
   goR.onclick = () => { const v = rVals(); if (!v) return;
     run(goR, async () => { const r = await api(P + 'renew', 'POST', rmode === 'tpl' ? { template: tplSel.value, reset_usage: rst.checked } : { gb: v.gb, days: v.days, reset_usage: rst.checked }); toast('✅ تمدید شد'); swap(r, 'renew'); }); };
-  const paneRenew = h('div', {}, rseg, tplBox, cusBox, h('label', { class: 'chk', for: rid }, rst, 'مصرف فعلی صفر شود'),
-    h('p', { class: 'hint', style: 'margin:4px 0' }, 'تمدید، حجم و مدت را «جایگزین» می‌کند (نه اینکه اضافه کند). سرویس کاربر تغییر نمی‌کند.'), prev, goR);
 
-  /* ─── تب ویرایش: تغییرات اول پیش‌نویس می‌شوند، با «ذخیره» اعمال می‌شوند ─── */
+  // پیوست حجم/زمان: به مقدار فعلی «اضافه» می‌شود (مصرف و سرویس دست‌نخورده)
+  const aG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
+  const aD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
+  const aB = h('button', { class: 'btn sm pri', type: 'button' }, '➕ پیوست');
+  aB.onclick = () => run(aB, async () => {
+    if (!+aG.value && !+aD.value) throw new Error('حجم یا روز را وارد کنید.');
+    const r = await api(P + 'edit', 'POST', { add_gb: +aG.value || null, add_days: +aD.value || null });
+    toast(`✅ پیوست شد: ${+aG.value ? '+' + aG.value + ' GB ' : ''}${+aD.value ? '+' + aD.value + ' روز' : ''}`); swap(r, 'renew'); });
+  const paneRenew = h('div', {}, rseg, tplBox, cusBox, h('label', { class: 'chk', for: rid }, rst, 'مصرف فعلی صفر شود'),
+    prev, goR,
+    h('div', { class: 'psec' }, h('b', {}, '➕ پیوست حجم / زمان'), h('span', {}, 'به مقدار فعلی اضافه می‌شود')),
+    h('div', { class: 'attach' }, aG, aD, aB));
+
+  /* ─── تب ویرایش (فشرده): تغییرات اول پیش‌نویس می‌شوند، با «ذخیره» اعمال می‌شوند ─── */
   const gI = h('input', { type: 'number', min: 0, step: 'any', value: u.limit_gb, dir: 'ltr', inputmode: 'decimal' });
   const dI = h('input', { type: 'number', min: 0, value: u.days_left, dir: 'ltr', inputmode: 'numeric' });
   const svcSel = h('select', {}, (S.svcs || []).map(s => h('option', { value: s.id, selected: s.id === u.service_id }, s.name)));
-  const noteI = h('input', { value: u.note || '', placeholder: 'یادداشت (نام مشتری، شماره…)', maxlength: 500 });
-  const diffBox = h('div', { class: 'diff' }), saveB = h('button', { class: 'btn pri' }, '💾 ذخیره تغییرات'), cancelB = h('button', { class: 'btn', type: 'button' }, '↺ انصراف');
+  const noteI = h('input', { value: u.note || '', placeholder: 'یادداشت…', maxlength: 500 });
+  const diffBox = h('div', { class: 'diff' }), saveB = h('button', { class: 'btn pri' }, '💾 ذخیره'), cancelB = h('button', { class: 'btn', type: 'button' }, '↺ انصراف');
   const bump = (inp, n) => { inp.value = +((+inp.value || 0) + n).toFixed(2); updE(); };
-  const chipsOf = (inp, arr, unit) => h('div', { class: 'chips wrap' }, arr.map(n => h('button', { class: 'chip', type: 'button', dir: 'ltr', onclick: () => bump(inp, n) }, `+${n} ${unit}`)),
+  const mini = (inp, arr) => h('div', { class: 'chips wrap tight' }, arr.map(n => h('button', { class: 'chip', type: 'button', dir: 'ltr', onclick: () => bump(inp, n) }, `+${n}`)),
     h('button', { class: 'chip', type: 'button', onclick: () => { inp.value = 0; updE(); } }, '∞'));
   const changes = () => {
     const c = [];
-    if (gI.value !== '' && +gI.value !== +u.limit_gb) c.push(['gb', `📦 حجم کل: ${fmtG(u.limit_gb)} ← <b>${fmtG(gI.value)}</b>` + (+gI.value && +u.limit_gb ? ` (${+gI.value > +u.limit_gb ? '+' : ''}${+(+gI.value - +u.limit_gb).toFixed(2)})` : '')]);
-    if (dI.value !== '' && +dI.value !== +u.days_left) c.push(['days', `📅 ${u.status === 'on_hold' ? 'مدت' : 'اعتبار از امروز'}: ${u.unlimited_days ? 'نامحدود' : fmtD(u.days_left)} ← <b>${fmtD(dI.value)}</b>`]);
-    if (svcSel.value && +svcSel.value !== u.service_id) c.push(['svc', `📂 سرویس: ${svcName} ← <b>${svcSel.selectedOptions[0].textContent}</b>`]);
-    if (noteI.value !== (u.note || '')) c.push(['note', '📝 یادداشت تغییر کرد']);
+    if (gI.value !== '' && +gI.value !== +u.limit_gb) c.push(`📦 حجم: ${fmtG(u.limit_gb)} ← <b>${fmtG(gI.value)}</b>` + (+gI.value && +u.limit_gb ? ` (${+gI.value > +u.limit_gb ? '+' : ''}${+(+gI.value - +u.limit_gb).toFixed(2)})` : ''));
+    if (dI.value !== '' && +dI.value !== +u.days_left) c.push(`📅 ${u.status === 'on_hold' ? 'مدت' : 'اعتبار'}: ${u.unlimited_days ? 'نامحدود' : fmtD(u.days_left)} ← <b>${fmtD(dI.value)}</b>`);
+    if (svcSel.value && +svcSel.value !== u.service_id) c.push(`📂 سرویس: ${svcName} ← <b>${svcSel.selectedOptions[0].textContent}</b>`);
+    if (noteI.value !== (u.note || '')) c.push('📝 یادداشت تغییر کرد');
     return c;
   };
-  const updE = () => { const c = changes(); saveB.disabled = !c.length; cancelB.hidden = !c.length; saveB.textContent = c.length ? `💾 ذخیره (${c.length} تغییر)` : '💾 ذخیره تغییرات';
-    diffBox.replaceChildren(...(c.length ? c.map(([, t]) => { const p = h('div', {}); p.innerHTML = t; return p; }) : [h('span', { class: 'sub' }, 'هنوز چیزی تغییر نکرده است.')])); };
+  const dirty = () => ({ gb: gI.value !== '' && +gI.value !== +u.limit_gb, days: dI.value !== '' && +dI.value !== +u.days_left, svc: svcSel.value && +svcSel.value !== u.service_id, note: noteI.value !== (u.note || '') });
+  const updE = () => { const c = changes(); saveB.disabled = !c.length; cancelB.hidden = !c.length; saveB.textContent = c.length ? `💾 ذخیره (${c.length})` : '💾 ذخیره'; diffBox.hidden = !c.length;
+    diffBox.replaceChildren(...c.map(t => { const p = h('div', {}); p.innerHTML = t; return p; })); };
   [gI, dI, svcSel, noteI].forEach(i => { i.addEventListener('input', updE); i.addEventListener('change', updE); });
   cancelB.onclick = () => { gI.value = u.limit_gb; dI.value = u.days_left; svcSel.value = u.service_id; noteI.value = u.note || ''; updE(); };
-  saveB.onclick = () => { const has = Object.fromEntries(changes());
-    run(saveB, async () => { const r = await api(P + 'save', 'POST', { gb: has.gb ? +gI.value : null, days: has.days ? +dI.value : null, service_id: has.svc ? +svcSel.value : null, note: has.note ? noteI.value : null }); toast('✅ ذخیره شد'); swap(r, 'edit'); }); };
+  saveB.onclick = () => { const x = dirty();
+    run(saveB, async () => { const r = await api(P + 'save', 'POST', { gb: x.gb ? +gI.value : null, days: x.days ? +dI.value : null, service_id: x.svc ? +svcSel.value : null, note: x.note ? noteI.value : null }); toast('✅ ذخیره شد'); swap(r, 'edit'); }); };
   const paneEdit = h('div', {},
-    h('p', { class: 'hint', style: 'margin:0 0 4px' }, 'مقدار نهایی را وارد کنید (نه مقدار افزودنی). دکمه‌های + فقط عدد را در کادر تغییر می‌دهند و تا «ذخیره» نزنید چیزی اعمال نمی‌شود.'),
-    field(`حجم کل (GB) — الان: ${fmtG(u.limit_gb)}`, gI), chipsOf(gI, [5, 10, 30, 50], 'GB'),
-    field(u.status === 'on_hold' ? `مدت (روز) پس از اولین اتصال — الان: ${fmtD(u.days_left)}` : `اعتبار از امروز (روز) — الان: ${u.unlimited_days ? 'نامحدود' : fmtD(u.days_left)}`, dI), chipsOf(dI, [7, 15, 30, 60], 'روز'),
-    h('div', { class: 'row', style: 'margin-top:4px' }, field('سرویس', svcSel), field('یادداشت', noteI)),
-    sec('تغییرات در انتظار ذخیره'), diffBox, h('div', { class: 'btns' }, saveB, cancelB));
+    h('div', { class: 'cols' },
+      h('div', {}, h('label', {}, `حجم کل GB (الان ${fmtG(u.limit_gb)})`), gI, mini(gI, [5, 10, 30])),
+      h('div', {}, h('label', {}, `${u.status === 'on_hold' ? 'مدت' : 'اعتبار'} روز (الان ${u.unlimited_days ? 'نامحدود' : fmtD(u.days_left)})`), dI, mini(dI, [7, 15, 30]))),
+    h('div', { class: 'cols' }, h('div', {}, h('label', {}, 'سرویس'), svcSel), h('div', {}, h('label', {}, 'یادداشت'), noteI)),
+    h('p', { class: 'hint', style: 'margin:8px 0 4px' }, 'عدد نهایی را بنویسید. دکمه‌های + فقط عدد کادر را عوض می‌کنند؛ تا «ذخیره» نزنید اعمال نمی‌شود. ∞ = نامحدود'),
+    diffBox, h('div', { class: 'btns', style: 'margin-top:8px' }, saveB, cancelB));
 
-  /* ─── تب پلن بعدی (شارژ خودکار): بعد از اتمام، یک‌بار اضافه می‌شود ─── */
-  const np = u.next_plan;
-  const nG = h('input', { type: 'number', min: 0, step: 'any', value: np ? np.gb : '', placeholder: 'مثلاً 30', dir: 'ltr', inputmode: 'decimal' });
-  const nD = h('input', { type: 'number', min: 0, value: np ? np.days : '', placeholder: 'مثلاً 30', dir: 'ltr', inputmode: 'numeric' });
+  /* ─── تب پلن بعدی (شارژ خودکار): فهرست پلن‌ها؛ هر کدام بعد از اتمام، یک‌بار اضافه می‌شود ─── */
+  const plans = u.next_plans || [];
+  const sendPlans = (list, okMsg) => api(P + 'next-plans', 'POST', { plans: list.map(p => ({ idx: p.idx == null ? null : p.idx, gb: +p.gb || 0, days: +p.days || 0, add_remaining: !!p.add_remaining })) }).then(r => { toast(okMsg); swap(r, 'next'); });
+  const nG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
+  const nD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
   const nrid = 'nr' + Math.random().toString(36).slice(2, 8);
-  const nRem = h('input', { type: 'checkbox', id: nrid, checked: !!(np && np.add_remaining) });
-  const nTpl = h('select', {}, h('option', { value: '' }, '— پر کردن از تمپلت —'), entries.map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
+  const nRem = h('input', { type: 'checkbox', id: nrid });
+  const nTpl = h('select', {}, h('option', { value: '' }, 'پر کردن از تمپلت…'), entries.map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
   nTpl.onchange = () => { const t = S.st.templates[nTpl.value]; if (t) { nG.value = t.gb; nD.value = t.days; } };
-  const nSave = h('button', { class: 'btn pri' }, np ? '💾 بروزرسانی پلن بعدی' : '💾 فعال‌سازی پلن بعدی');
-  nSave.onclick = () => run(nSave, async () => {
-    if (!+nG.value && !+nD.value) throw new Error('حجم یا مدت پلن بعدی را وارد کنید.');
-    const r = await api(P + 'next-plan', 'POST', { enabled: true, gb: +nG.value || 0, days: +nD.value || 0, add_remaining: nRem.checked }); toast('✅ پلن بعدی ذخیره شد'); swap(r, 'next'); });
-  const nDel = h('button', { class: 'btn bad', hidden: !np }, '🗑 حذف پلن بعدی');
-  nDel.onclick = () => { if (!confirm('پلن بعدی این کاربر حذف شود؟')) return; run(nDel, async () => { const r = await api(P + 'next-plan', 'POST', { enabled: false }); toast('پلن بعدی حذف شد'); swap(r, 'next'); }); };
+  const nAdd = h('button', { class: 'btn sm pri', type: 'button' }, '➕ افزودن پلن');
+  nAdd.onclick = () => run(nAdd, async () => {
+    if (!+nG.value && !+nD.value) throw new Error('حجم یا مدت را وارد کنید.');
+    await sendPlans([...plans, { idx: null, gb: nG.value, days: nD.value, add_remaining: nRem.checked }], '✅ پلن بعدی اضافه شد'); });
+  const planRow = (p, i) => { const x = h('button', { class: 'x', type: 'button', 'aria-label': 'حذف' }, '✕');
+    x.onclick = () => { if (!confirm('این پلن بعدی حذف شود؟')) return; run(x, () => sendPlans(plans.filter((_, j) => j !== i), 'پلن حذف شد')); };
+    return h('div', { class: 'plan' }, h('span', { class: 'n' }, i + 1), h('span', { class: 'v' }, `${fmtG(p.gb)} + ${fmtD(p.days)}`, p.add_remaining ? h('small', {}, ' · باقی‌مانده هم منتقل می‌شود') : null), x); };
   const paneNext = h('div', {},
-    h('div', { class: 'banner ' + (np ? 'ok' : '') }, np ? `🔁 فعال: ${fmtG(np.gb)} + ${fmtD(np.days)}${np.add_remaining ? ' · باقی‌مانده حجم هم منتقل می‌شود' : ''}` : '⚪ پلن بعدی تعریف نشده'),
-    h('p', { class: 'hint', style: 'margin:6px 0' }, 'وقتی حجم یا زمان کاربر تمام شود، همین حجم و مدت «فقط یک‌بار» خودکار به او اضافه می‌شود (همان «شارژ خودکار» در ربکا).'),
-    field('پر کردن سریع از تمپلت', nTpl), h('div', { class: 'row' }, field('حجم پلن بعدی (GB)', nG), field('مدت پلن بعدی (روز)', nD)),
-    h('label', { class: 'chk', for: nrid }, nRem, 'حجم باقی‌مانده فعلی هم به پلن بعدی اضافه شود'),
-    h('div', { class: 'btns' }, nSave, nDel));
+    h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'وقتی حجم یا زمان کاربر تمام شود، پلن اول «یک‌بار» خودکار به او اضافه می‌شود؛ بعد نوبت پلن بعدی.'),
+    plans.length ? h('div', {}, plans.map(planRow)) : h('div', { class: 'banner' }, '⚪ پلن بعدی تعریف نشده'),
+    h('div', { class: 'psec' }, h('b', {}, '➕ پلن جدید')),
+    h('div', { class: 'attach' }, nG, nD, nAdd), nTpl,
+    h('label', { class: 'chk', for: nrid }, nRem, 'حجم باقی‌مانده فعلی هم منتقل شود'),
+    u.np_raw ? h('details', { class: 'tech' }, h('summary', {}, 'جزئیات فنی (JSON پنل)'), h('code', {}, u.np_raw)) : null);
 
   /* ─── تب بیشتر ─── */
   const del = h('button', { class: 'btn sm bad' }, '🗑 حذف کاربر');
   del.onclick = () => { if (!confirm(`کاربر ${u.username} حذف شود؟`)) return; run(del, async () => { await api(P + 'delete', 'POST'); toast('حذف شد'); d.remove(); }); };
   const paneMore = h('div', {}, h('div', { class: 'btns', style: 'margin-top:0' },
-    act('🔄 صفر کردن مصرف', P + 'reset', 'مصرف صفر شد'), act('🔗 لینک جدید', P + 'revoke', 'لینک جدید ساخته شد'),
+    act('🔗 لینک جدید', P + 'revoke', 'لینک جدید ساخته شد'),
     act(u.status === 'disabled' ? '✅ فعال‌سازی' : '⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد'), del),
     h('p', { class: 'hint' }, '«لینک جدید» لینک اشتراک قبلی را از کار می‌اندازد.'));
 
   /* ─── چیدمان ─── */
   const panes = { renew: paneRenew, edit: paneEdit, next: paneNext, more: paneMore };
   const TABS = [['renew', '⚡ تمدید'], ['edit', '✏️ ویرایش'], ['next', '🔁 پلن بعدی'], ['more', '⋯ بیشتر']];
-  const tabBar = h('div', { class: 'seg' }, TABS.map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === curTab ? 'on' : '', onclick: () => showTab(k) }, t + (k === 'next' && np ? ' •' : ''))));
+  const tabBar = h('div', { class: 'seg' }, TABS.map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === curTab ? 'on' : '', onclick: () => showTab(k) }, t + (k === 'next' && (u.next_plans || []).length ? ' •' : ''))));
   const showTab = k => { curTab = k; tabBar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); Object.entries(panes).forEach(([n, p]) => { p.hidden = n !== k; }); };
   Object.values(panes).forEach(p => p.classList.add('pane'));
 
@@ -490,10 +526,11 @@ function userItem(u, parent, tab) {
     h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
     h('div', { class: 'tiles' }, tile('مصرف', gb(u.used)), tile('باقی‌مانده', left), tile('اعتبار', u.expire_text)),
     h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
-    h('div', { class: 'btns', style: 'margin-top:0' },
+    h('div', { class: 'acts' },
       h('button', { class: 'btn sm', onclick: () => toggleQR(q, u.sub, u.username) }, '🖼 QR'),
-      h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 کپی لینک'),
-      h('button', { class: 'btn sm', onclick: () => copy(msg()) }, '💬 پیام')),
+      h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 لینک'),
+      h('button', { class: 'btn sm', onclick: () => copy(msg()) }, '💬 پیام'),
+      (() => { const b = h('button', { class: 'btn sm bad', type: 'button' }, '🔄 ریست'); b.onclick = () => { if (!confirm(`مصرف «${u.username}» صفر شود؟`)) return; run(b, async () => { const r = await api(P + 'reset', 'POST'); toast('مصرف صفر شد'); swap(r.username ? r : { ...u, used: 0 }, curTab); }); }; return b; })()),
     tabBar, paneRenew, paneEdit, paneNext, paneMore);
   showTab(curTab); updR(); updE();
   const hq = (S.users && S.users.q || '').toLowerCase(), ix = hq ? u.username.toLowerCase().indexOf(hq) : -1;
