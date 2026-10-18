@@ -52,6 +52,7 @@ DEFAULT_CFG = {
         "tb_gb": 1000,
         "hamkari_usage_multiplier": 1.5,
         "hamkari_multiplier_enabled": True,
+        "attach_extra_mode": "skip",
         "db_tz_offset_minutes": 0,
         "db": {},
         "schema": {},
@@ -740,7 +741,10 @@ async def apply_user_edit(api, username: str, gb, days, add_gb=None, add_days=No
         return u
     if u.get("status") in ("expired", "limited"):
         p["status"] = "active"
-    return await api.request("PUT", api.upath(username), json=p)
+    res = await api.request("PUT", api.upath(username), json=p)
+    if "expire" in p or "on_hold_expire_duration" in p:
+        res = await rebase_plans(api, username, u) or res
+    return res
 
 
 async def apply_user_save(api, username: str, gb=None, days=None, service_id=None, note=None):
@@ -765,6 +769,8 @@ async def apply_user_save(api, username: str, gb=None, days=None, service_id=Non
     if ("data_limit" in p or "expire" in p) and u.get("status") in ("expired", "limited"):
         p["status"] = "active"
     res = await api.request("PUT", ph, json=p)
+    if "expire" in p or "on_hold_expire_duration" in p:
+        res = await rebase_plans(api, username, u) or res
     if "service_id" in p:
         got = (res if isinstance(res, dict) and "service_id" in res else await api.request("GET", ph)).get("service_id")
         if got is not None and int(got) != p["service_id"]:
@@ -785,45 +791,107 @@ def _raw_plans(u: dict) -> list[dict]:
     return [old] if isinstance(old, dict) and (old.get("data_limit") or old.get("expire")) else []
 
 
+def _is_dur(p: dict, legacy: bool = False) -> bool:
+    """expire این پلن «مدت به ثانیه» است (نه تاریخ مطلق)؟ — نسخه‌ی قدیمی یا شروع از اولین اتصال."""
+    return bool(legacy or p.get("start_on_first_connect"))
+
+
+def _is_broken(p: dict, legacy: bool = False) -> bool:
+    """پلن تاریخ‌مطلق با expire کوچک (مثل 2592000 = «۳۰ روز» که اشتباهاً به‌جای تاریخ ذخیره شده)."""
+    ex = int(p.get("expire") or 0)
+    return (not _is_dur(p, legacy)) and 0 < ex < 10 ** 9
+
+
+def _plan_base(u: dict) -> float:
+    """نقطه‌ی شروع زنجیره‌ی پلن‌ها: انقضای فعلی (اگر در آینده است) وگرنه همین الان."""
+    now = time.time()
+    if u.get("status") == "on_hold":
+        return now + int(u.get("on_hold_expire_duration") or 0)
+    exp = int(u.get("expire") or 0)
+    return max(float(exp), now) if exp else now
+
+
 def next_plans_view(u: dict) -> list[dict]:
-    """پلن‌های بعدی برای نمایش: [{idx, gb, days, add_remaining}] به ترتیب اجرا."""
-    out = []
+    """پلن‌های بعدی برای نمایش: [{idx, gb, days, add_remaining}] به ترتیب اجرا.
+    در ربکا ≥0.2 مقدار expire یک «تاریخ مطلق» است؛ روز = فاصله‌ی آن تا پلن قبلی (یا انقضای فعلی)."""
+    legacy = "next_plans" not in u
+    base, out = _plan_base(u), []
     for i, p in enumerate(_raw_plans(u)):
         dl, ex = int(p.get("data_limit") or 0), int(p.get("expire") or 0)
-        out.append({"idx": i, "gb": round(dl / GB, 2), "days": ex // 86400, "add_remaining": bool(p.get("add_remaining_traffic"))})
+        if _is_dur(p, legacy) or _is_broken(p, legacy):
+            days = ex // 86400
+        elif ex:
+            days = max(0, round((ex - base) / 86400))
+            base = float(ex)
+        else:
+            days = 0
+        out.append({"idx": i, "gb": round(dl / GB, 2), "days": days, "add_remaining": bool(p.get("add_remaining_traffic")),
+                    "broken": _is_broken(p, legacy)})
     return out
 
 
 async def set_next_plans(api, username: str, plans: list[dict]):
     """جایگزینی کامل فهرست «پلن بعدی» (شارژ خودکار). هر پلن: {idx|None, gb, days, add_remaining}.
-    idx = شماره‌ی پلن موجود (برای حفظ سایر فیلدهای آن)؛ None = پلن جدید.
+    idx = شماره‌ی پلن موجود. پلنِ بدون تغییر دست‌نخورده می‌ماند؛ تاریخ پایان پلن جدید = پایان پلن قبلی (یا انقضای فعلی) + روزها.
     بعد از نوشتن دوباره می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
     ph = api.upath(username)
     u = await api.request("GET", ph)
-    raw = _raw_plans(u)
+    raw, view = _raw_plans(u), next_plans_view(u)
     legacy = "next_plans" not in u and "next_plan" in u          # ربکای قدیمی
-    built = []
+    base, built = _plan_base(u), []
     for i, pl in enumerate(plans):
-        gb, days = float(pl.get("gb") or 0), int(pl.get("days") or 0)
+        gb, days, rem = float(pl.get("gb") or 0), int(pl.get("days") or 0), bool(pl.get("add_remaining"))
         if gb <= 0 and days <= 0:
             raise RebeccaError("حجم یا مدت پلن بعدی را وارد کنید.")
         idx = pl.get("idx")
-        base = dict(raw[idx]) if isinstance(idx, int) and 0 <= idx < len(raw) else {**_PLAN_DEFAULTS, **{k: v for k, v in (raw[0] if raw else {}).items() if k not in ("data_limit", "expire")}}
+        known = isinstance(idx, int) and 0 <= idx < len(raw)
+        if known and not view[idx]["broken"] and abs(view[idx]["gb"] - gb) < 0.01 and view[idx]["days"] == days and view[idx]["add_remaining"] == rem:
+            q = dict(raw[idx])                                    # بدون تغییر: همان‌طور که هست
+            if not _is_dur(q, legacy) and int(q.get("expire") or 0):
+                base = float(q["expire"])
+        else:
+            q = dict(raw[idx]) if known else {**_PLAN_DEFAULTS, **{k: v for k, v in (raw[0] if raw else {}).items() if k not in ("data_limit", "expire")}}
+            q["data_limit"] = int(gb * GB) if gb > 0 else 0
+            q["add_remaining_traffic"] = rem
+            if _is_dur(q, legacy):
+                q["expire"] = days * 86400 if days > 0 else 0
+            else:
+                q["expire"] = int(base) + days * 86400 if days > 0 else 0
+                if days > 0:
+                    base = float(q["expire"])
         for k in _PLAN_DROP:
-            base.pop(k, None)
-        base.update(data_limit=int(gb * GB) if gb > 0 else 0, expire=days * 86400 if days > 0 else 0, add_remaining_traffic=bool(pl.get("add_remaining")))
-        if "position" in base:
-            base["position"] = i
-        built.append(base)
-    if legacy:
-        body = {"next_plan": built[0] if built else None}
-    else:
-        body = {"next_plans": built}
+            q.pop(k, None)
+        if "position" in q:
+            q["position"] = i
+        built.append(q)
+    body = {"next_plan": built[0] if built else None} if legacy else {"next_plans": built}
     await api.request("PUT", ph, json=body)
     after = await api.request("GET", ph)
     if len(next_plans_view(after)) != len(built):
         raise RebeccaError("پنل پلن بعدی را ذخیره نکرد (نسخه‌ی ربکا یا فیلدها سازگار نیست). جزئیات فنی را بفرستید.")
     return after
+
+
+async def rebase_plans(api, username: str, before: dict):
+    """بعد از تغییر انقضای کاربر، تاریخ پایان پلن‌های بعدی (که تاریخ مطلق‌اند) را به‌اندازه‌ی جابه‌جایی انقضا هم جابه‌جا می‌کند
+    تا بعد از تمدید/تغییر، پلن بعدی عقب‌تر از انقضای جدید نیفتد. اگر چیزی عوض نشد None برمی‌گرداند."""
+    raw = _raw_plans(before)
+    legacy = "next_plans" not in before
+    if legacy or not any(not _is_dur(p) and int(p.get("expire") or 0) >= 10 ** 9 for p in raw):
+        return None
+    ph = api.upath(username)
+    after = await api.request("GET", ph)
+    delta = int(_plan_base(after) - _plan_base(before))
+    if abs(delta) < 3600:
+        return None
+    new = []
+    for i, p in enumerate(_raw_plans(after)):
+        q = {k: v for k, v in p.items() if k not in _PLAN_DROP}
+        if not _is_dur(q) and int(q.get("expire") or 0) >= 10 ** 9:
+            q["expire"] = int(q["expire"]) + delta
+        new.append(q)
+    await api.request("PUT", ph, json={"next_plans": new})
+    return await api.request("GET", ph)
 
 
 async def set_service(api, username: str, service_id: int):
@@ -840,9 +908,11 @@ async def set_service(api, username: str, service_id: int):
 async def renew_user(api, username: str, tpl: dict, reset_usage: bool = True):
     """حجم/مدت جدید طبق تمپلت. با reset_usage مصرف صفر می‌شود (ابتدا ریست، بعد وضعیت تا On-Hold خراب نشود)."""
     p = api.upath(username)
+    before = await api.request("GET", p)
     if reset_usage:
         await api.request("POST", p + "/reset")
-    return await api.request("PUT", p, json=build_renew_payload(tpl))
+    res = await api.request("PUT", p, json=build_renew_payload(tpl))
+    return await rebase_plans(api, username, before) or res
 
 
 async def set_note(api, username: str, note: str):
