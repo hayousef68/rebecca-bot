@@ -70,7 +70,8 @@ DEFAULT_CFG = {
     "backup": {"enabled": True},
     "monitor": {"enabled": True, "interval": 300},
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
-    "web": {"user": "admin", "salt": "", "hash": ""},
+    "web": {"user": "admin", "salt": "", "hash": "", "secret": ""},
+    "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
 
 
@@ -155,6 +156,13 @@ def _normalize(data: dict) -> dict:
         cfg["web"] = {}
     for k, v in DEFAULT_CFG["web"].items():
         cfg["web"].setdefault(k, v)
+    ssl_cfg = copy.deepcopy(DEFAULT_CFG["ssl"])
+    if isinstance(cfg.get("ssl"), dict):
+        ssl_cfg.update({k: v for k, v in cfg["ssl"].items() if k in ssl_cfg})
+    ssl_cfg["enabled"] = bool(ssl_cfg["enabled"])
+    for k in ("cert", "key", "domain", "error"):
+        ssl_cfg[k] = str(ssl_cfg.get(k) or "").strip()
+    cfg["ssl"] = ssl_cfg
     sales = copy.deepcopy(DEFAULT_CFG["sales"])
     if isinstance(cfg.get("sales"), dict):
         sales.update(cfg["sales"])
@@ -276,6 +284,54 @@ def check_web_login(user: str, pw: str) -> bool:
         _auth_ok[key] = now + 300
         return True
     return False
+
+
+# ─────────────────────── نشست ورود (کوکی امضاشده) ───────────────────────
+SESSION_SHORT = 12 * 3600
+SESSION_LONG = 30 * 86400
+
+
+def _session_key() -> bytes | None:
+    """کلید امضا = راز تصادفی + هش رمز؛ با عوض شدن رمز همه‌ی نشست‌های قبلی باطل می‌شوند."""
+    cfg = load_config()
+    w = cfg["web"]
+    if not w.get("hash"):
+        return None
+    if not w.get("secret"):
+        def mut(c):
+            if not c["web"].get("secret"):
+                c["web"]["secret"] = secrets.token_hex(32)
+        cfg = update_config(mut)
+        w = cfg["web"]
+    return f"{w['secret']}|{w['hash']}".encode()
+
+
+def make_session(user: str, long: bool = False) -> tuple[str, int]:
+    key = _session_key()
+    if key is None:
+        raise ValueError("رمز وب‌پنل تنظیم نشده است.")
+    ttl = SESSION_LONG if long else SESSION_SHORT
+    exp = int(time.time()) + ttl
+    body = f"{user}|{exp}"
+    import hmac
+    sig = hmac.new(key, body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}|{sig}", ttl
+
+
+def check_session(token: str) -> str | None:
+    """نام کاربر را برمی‌گرداند اگر نشست معتبر باشد."""
+    import hmac
+    try:
+        user, exp, sig = token.rsplit("|", 2)
+        key = _session_key()
+        if key is None or int(exp) < time.time():
+            return None
+        good = hmac.new(key, f"{user}|{exp}".encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(sig, good) and secrets.compare_digest(user.encode(), str(load_config()["web"].get("user", "admin")).encode()):
+            return user
+    except (ValueError, AttributeError):
+        pass
+    return None
 
 
 # ───────────────────────────── کمکی‌ها ─────────────────────────────
@@ -657,17 +713,31 @@ async def create_users(api, names, tpl, service_id, *, concurrency=5, on_progres
     return [ok[n] for n in names if n in ok], [(n, failed[n]) for n in names if n in failed]
 
 
-async def apply_user_edit(api, username: str, gb, days):
-    """gb/days = None یعنی بدون تغییر. مصرف کاربر صفر نمی‌شود."""
+async def apply_user_edit(api, username: str, gb, days, add_gb=None, add_days=None):
+    """gb/days = مقدار جدید (None = بدون تغییر). add_gb/add_days = افزودن به مقدار فعلی (بدون صفر شدن مصرف)."""
     u = await api.request("GET", api.upath(username))
     p = {}
-    if gb is not None:
+    if add_gb:
+        cur = int(u.get("data_limit") or 0)
+        if cur > 0:                      # نامحدود همان نامحدود می‌ماند
+            p["data_limit"] = max(0, cur + int(add_gb * GB))
+    elif gb is not None:
         p["data_limit"] = int(gb * GB) if gb > 0 else 0
-    if days is not None:
+    if add_days:
+        if u.get("status") == "on_hold":
+            cur = int(u.get("on_hold_expire_duration") or 0)
+            p["on_hold_expire_duration"] = max(86400, cur + int(add_days) * 86400)
+        else:
+            exp = int(u.get("expire") or 0)
+            if exp > 0:                  # منقضی‌شده از همین الان حساب می‌شود، فعال از تاریخ انقضای فعلی
+                p["expire"] = max(exp, int(time.time())) + int(add_days) * 86400
+    elif days is not None:
         if u.get("status") == "on_hold":
             p["on_hold_expire_duration"] = days * 86400 if days > 0 else 30 * 86400
         else:
             p["expire"] = int(time.time()) + days * 86400 if days > 0 else 0
+    if not p:
+        return u
     if u.get("status") in ("expired", "limited"):
         p["status"] = "active"
     return await api.request("PUT", api.upath(username), json=p)
@@ -684,10 +754,11 @@ async def set_service(api, username: str, service_id: int):
     return after
 
 
-async def renew_user(api, username: str, tpl: dict):
-    """ریست مصرف + حجم/مدت جدید طبق تمپلت. ابتدا ریست، بعد وضعیت (تا ریست وضعیت On-Hold را خراب نکند)."""
+async def renew_user(api, username: str, tpl: dict, reset_usage: bool = True):
+    """حجم/مدت جدید طبق تمپلت. با reset_usage مصرف صفر می‌شود (ابتدا ریست، بعد وضعیت تا On-Hold خراب نشود)."""
     p = api.upath(username)
-    await api.request("POST", p + "/reset")
+    if reset_usage:
+        await api.request("POST", p + "/reset")
     return await api.request("PUT", p, json=build_renew_payload(tpl))
 
 
@@ -828,12 +899,26 @@ def _cli(argv):
     i.add_argument("--token", default="")
     i.add_argument("--admin", default="")
     i.add_argument("--port", type=int, default=0)
+    i.add_argument("--user", default="")
     w = sp.add_parser("passwd")
     w.add_argument("--password", default="")
+    s_ = sp.add_parser("ssl")
+    s_.add_argument("action", choices=["off", "status"])
     a = p.parse_args(argv)
 
     cfg = load_config()
     out = {}
+    if a.cmd == "ssl":
+        if a.action == "off":
+            cfg["ssl"]["enabled"] = False
+            save_config(cfg)
+            print("SSL=off")
+        else:
+            ss = cfg["ssl"]
+            print(f"SSL={'on' if ss['enabled'] else 'off'}\nCERT={ss['cert']}\nKEY={ss['key']}\nERROR={ss['error']}")
+        return
+    # رمز از متغیر محیطی خوانده می‌شود تا در لیست پروسه‌ها (ps) دیده نشود
+    env_pw = os.environ.get("REBECCA_INIT_PASSWORD", "")
     if a.cmd == "init":
         if a.token:
             cfg["bot_token"] = a.token.strip()
@@ -842,15 +927,27 @@ def _cli(argv):
             if ids:
                 cfg["admin_ids"] = ids
         if a.port:
+            if not 1 <= a.port <= 65535:
+                sys.exit("پورت باید بین 1 تا 65535 باشد.")
             cfg["web_port"] = a.port
-        if not cfg["web"].get("hash"):
-            pw = secrets.token_urlsafe(12)
+        if a.user:
+            if not re.fullmatch(r"[A-Za-z0-9_.@-]{3,32}", a.user):
+                sys.exit("نام کاربری فقط حروف انگلیسی/عدد/_.-@ و ۳ تا ۳۲ کاراکتر.")
+            cfg["web"]["user"] = a.user
+        if env_pw or not cfg["web"].get("hash"):
+            if env_pw and len(env_pw) < 8:
+                sys.exit("رمز باید حداقل ۸ کاراکتر باشد.")
+            pw = env_pw or secrets.token_urlsafe(12)
             cfg["web"].update(hash_password(pw))
-            cfg["web"]["user"] = "admin"
-            out["WEB_PASSWORD"] = pw
+            cfg["web"]["secret"] = secrets.token_hex(32)
+            if not cfg["web"].get("user"):
+                cfg["web"]["user"] = "admin"
+            if not env_pw:
+                out["WEB_PASSWORD"] = pw
     else:
-        pw = a.password or secrets.token_urlsafe(12)
+        pw = a.password or env_pw or secrets.token_urlsafe(12)
         cfg["web"].update(hash_password(pw))
+        cfg["web"]["secret"] = secrets.token_hex(32)
         out["WEB_PASSWORD"] = pw
     save_config(cfg)
     out.update(WEB_USER=cfg["web"].get("user", "admin"), WEB_PORT=cfg["web_port"])
