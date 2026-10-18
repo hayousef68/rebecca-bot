@@ -772,38 +772,58 @@ async def apply_user_save(api, username: str, gb=None, days=None, service_id=Non
     return res
 
 
-def next_plan_view(u: dict) -> dict | None:
-    """پلن بعدی (شارژ خودکار) کاربر به‌صورت {gb, days, add_remaining} یا None."""
-    np_ = u.get("next_plan")
-    if not isinstance(np_, dict):
-        return None
-    dl, ex = int(np_.get("data_limit") or 0), int(np_.get("expire") or 0)
-    if not dl and not ex:
-        return None
-    return {"gb": round(dl / GB, 2), "days": ex // 86400, "add_remaining": bool(np_.get("add_remaining_traffic"))}
+_PLAN_DROP = ("id", "user_id")                      # فیلدهایی که هنگام نوشتن نباید فرستاده شوند
+_PLAN_DEFAULTS = {"add_remaining_traffic": False, "fire_on_either": True, "increase_data_limit": True, "start_on_first_connect": False}
 
 
-async def set_next_plan(api, username: str, enabled: bool, gb=0.0, days=0, add_remaining=False):
-    """تنظیم/حذف «پلن بعدی»: بعد از اتمام حجم یا زمان، یک‌بار این حجم و مدت به کاربر اضافه می‌شود.
-    بعد از نوشتن، دوباره می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
+def _raw_plans(u: dict) -> list[dict]:
+    """فهرست خام پلن‌های بعدی کاربر؛ ربکا ≥0.2 «next_plans» (لیست) دارد، نسخه‌های قدیمی «next_plan» (تکی)."""
+    pl = u.get("next_plans")
+    if isinstance(pl, list):
+        return [x for x in pl if isinstance(x, dict)]
+    old = u.get("next_plan")
+    return [old] if isinstance(old, dict) and (old.get("data_limit") or old.get("expire")) else []
+
+
+def next_plans_view(u: dict) -> list[dict]:
+    """پلن‌های بعدی برای نمایش: [{idx, gb, days, add_remaining}] به ترتیب اجرا."""
+    out = []
+    for i, p in enumerate(_raw_plans(u)):
+        dl, ex = int(p.get("data_limit") or 0), int(p.get("expire") or 0)
+        out.append({"idx": i, "gb": round(dl / GB, 2), "days": ex // 86400, "add_remaining": bool(p.get("add_remaining_traffic"))})
+    return out
+
+
+async def set_next_plans(api, username: str, plans: list[dict]):
+    """جایگزینی کامل فهرست «پلن بعدی» (شارژ خودکار). هر پلن: {idx|None, gb, days, add_remaining}.
+    idx = شماره‌ی پلن موجود (برای حفظ سایر فیلدهای آن)؛ None = پلن جدید.
+    بعد از نوشتن دوباره می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
     ph = api.upath(username)
-    if enabled:
-        if not gb and not days:
+    u = await api.request("GET", ph)
+    raw = _raw_plans(u)
+    legacy = "next_plans" not in u and "next_plan" in u          # ربکای قدیمی
+    built = []
+    for i, pl in enumerate(plans):
+        gb, days = float(pl.get("gb") or 0), int(pl.get("days") or 0)
+        if gb <= 0 and days <= 0:
             raise RebeccaError("حجم یا مدت پلن بعدی را وارد کنید.")
-        want = {"data_limit": int(gb * GB) if gb > 0 else 0, "expire": int(days) * 86400 if days > 0 else 0,
-                "add_remaining_traffic": bool(add_remaining)}
-        await api.request("PUT", ph, json={"next_plan": want})
-        after = await api.request("GET", ph)
-        got = next_plan_view(after)
-        if not got:
-            raise RebeccaError("پنل پلن بعدی را ذخیره نکرد؛ احتمالاً این نسخه‌ی ربکا فیلد next_plan را پشتیبانی نمی‌کند.")
-        return after
-    for body in (None, {"data_limit": 0, "expire": 0, "add_remaining_traffic": False}):
-        await api.request("PUT", ph, json={"next_plan": body})
-        after = await api.request("GET", ph)
-        if not next_plan_view(after):
-            return after
-    raise RebeccaError("پنل حذف پلن بعدی را اعمال نکرد.")
+        idx = pl.get("idx")
+        base = dict(raw[idx]) if isinstance(idx, int) and 0 <= idx < len(raw) else {**_PLAN_DEFAULTS, **{k: v for k, v in (raw[0] if raw else {}).items() if k not in ("data_limit", "expire")}}
+        for k in _PLAN_DROP:
+            base.pop(k, None)
+        base.update(data_limit=int(gb * GB) if gb > 0 else 0, expire=days * 86400 if days > 0 else 0, add_remaining_traffic=bool(pl.get("add_remaining")))
+        if "position" in base:
+            base["position"] = i
+        built.append(base)
+    if legacy:
+        body = {"next_plan": built[0] if built else None}
+    else:
+        body = {"next_plans": built}
+    await api.request("PUT", ph, json=body)
+    after = await api.request("GET", ph)
+    if len(next_plans_view(after)) != len(built):
+        raise RebeccaError("پنل پلن بعدی را ذخیره نکرد (نسخه‌ی ربکا یا فیلدها سازگار نیست). جزئیات فنی را بفرستید.")
+    return after
 
 
 async def set_service(api, username: str, service_id: int):
