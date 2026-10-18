@@ -107,7 +107,7 @@ img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:1
 </style>
 </head>
 <body>
-<header><h1><span class="logo">R</span>پنل مدیریت ربکا</h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:12px"></select><span id="conn" class="pill">…</span></div></header>
+<header><h1><span class="logo">R</span>پنل مدیریت ربکا</h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:12px"></select><span id="conn" class="pill">…</span><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:11px" aria-label="خروج">خروج</button></div></header>
 <main id="view"></main>
 <nav id="nav"></nav>
 <div id="toast" class="toast" hidden></div>
@@ -134,6 +134,7 @@ async function api(path, method = 'GET', body) {
   try {
     r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' }, body: body ? JSON.stringify(body) : undefined });
   } catch { throw new Error('ارتباط با سرور برقرار نشد.'); }
+  if (r.status === 401) { location.href = '/login'; throw new Error('نشست شما تمام شد؛ دوباره وارد شوید.'); }
   let d = {}; try { d = await r.json(); } catch {}
   if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : (Array.isArray(d.detail) ? 'ورودی نامعتبر است.' : 'خطا ' + r.status));
   return d;
@@ -190,6 +191,7 @@ async function setPanel(id) {
   S.panel = id; S.users.off = 0; try { localStorage.setItem('rb.panel', id); } catch {}
   $('#psel').value = id; await go(S.tab);
 }
+$('#out').onclick = async () => { try { await fetch('/api/logout', { method: 'POST', headers: { 'X-Requested-With': 'rebecca' } }); } catch {} location.href = '/login'; };
 const mount = (...n) => $('#view').replaceChildren(...n);
 const field = (label, input) => h('div', {}, h('label', {}, label), input);
 
@@ -320,68 +322,115 @@ async function vUsers() {
   search.addEventListener('input', debounce(() => { U.q = search.value.trim(); load(true); }, 350));
   more.onclick = () => run(more, () => load(false));
   try { S.svcs = (await api('/services')).services; } catch { S.svcs = []; }
-  mount(bulkCard(), h('div', { style: 'height:10px' }), search, h('div', { style: 'height:10px' }), chips, info, list, more); load(true);
+  mount(soonCard(), h('div', { style: 'height:10px' }), search, h('div', { style: 'height:10px' }), chips, info, list, more); load(true);
 }
-function bulkCard() {
-  const base = h('input', { placeholder: 'نام پایه، مثلاً ali', dir: 'ltr', maxlength: 32 }), start = h('input', { type: 'number', min: 0, placeholder: 'عدد شروع (خالی = تک کاربر)', dir: 'ltr' }), count = h('input', { type: 'number', min: 1, value: 10, dir: 'ltr' });
-  const act = h('select', {}, [['service', '🔀 تغییر سرویس'], ['renew', '⚡ تمدید با تمپلت'], ['reset', '🔄 صفر کردن مصرف'], ['disable', '⛔ غیرفعال‌سازی'], ['enable', '✅ فعال‌سازی'], ['delete', '🗑 حذف']].map(([v, t]) => h('option', { value: v }, t)));
-  const svc = h('select', {}, (S.svcs || []).map(s => h('option', { value: s.id }, s.name)));
-  const tpl = h('select', {}, Object.entries(S.st.templates).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB/${t.days || '∞'}d`)));
-  const svcF = field('سرویس جدید', svc), tplF = field('تمپلت', tpl), out = h('div'), go = h('button', { class: 'btn pri' }, 'اجرا');
-  const sync = () => { svcF.hidden = act.value !== 'service'; tplF.hidden = act.value !== 'renew'; count.disabled = start.value === ''; };
-  [act, start].forEach(x => x.addEventListener('input', sync)); sync();
-  go.onclick = () => run(go, async () => {
-    if (!base.value.trim()) throw new Error('نام پایه را وارد کنید.');
-    const n = start.value === '' ? 1 : +count.value;
-    if (!confirm(`${act.selectedOptions[0].textContent} روی ${n} کاربر اجرا شود؟`)) return;
-    const r = await api('/bulk', 'POST', { base: base.value.trim(), start: start.value === '' ? null : +start.value, count: n, action: act.value, service_id: svc.value ? +svc.value : null, template: tpl.value });
-    out.replaceChildren(h('p', { class: 'hint' }, `✅ ${r.ok} از ${r.total} کاربر انجام شد.`), r.failed.slice(0, 20).map(f => h('p', { class: 'err' }, `${f.username}: ${f.reason}`)));
-  });
-  return h('details', { class: 'item' }, h('summary', {}, h('span', { class: 'nm' }, '👥 عملیات گروهی'), h('span', { class: 'sub' }, 'سرویس، تمدید، ریست…')),
-    h('div', { class: 'body' }, field('نام پایه', base), h('div', { class: 'row' }, field('عدد شروع', start), field('تعداد', count)), field('عملیات', act), svcF, tplF, h('div', { class: 'btns' }, go), out));
+function soonCard() {
+  const box = h('div', { class: 'body' }), out = h('div');
+  const det = h('details', { class: 'item' }, h('summary', {}, h('span', { class: 'nm' }, '⏰ در آستانه پایان'), h('span', { class: 'sub' }, 'انقضا نزدیک / حجم کم')), box);
+  async function load() {
+    out.replaceChildren(h('p', { class: 'hint' }, 'در حال بررسی…'));
+    try {
+      const r = await api('/soon');
+      out.replaceChildren(h('p', { class: 'hint' }, r.items.length ? `${r.total} کاربر (تا ${r.days} روز به انقضا یا کمتر از ${r.low_pct}٪ حجم) — برای تمدید روی کاربر بزنید` : '✅ همه‌چیز مرتب است؛ موردی نیست.'),
+        ...r.items.map(i => h('div', {}, h('p', { class: 'sub', style: 'margin:8px 2px 4px' }, i.reason), userItem(i.user, out))));
+    } catch (e) { out.replaceChildren(h('p', { class: 'err' }, e.message)); }
+  }
+  const re = h('button', { class: 'btn sm', type: 'button' }, '🔄 بروزرسانی'); re.onclick = () => run(re, load);
+  box.append(h('div', { class: 'btns', style: 'margin-top:10px' }, re), out);
+  let first = true; det.addEventListener('toggle', () => { if (det.open && first) { first = false; load(); } });
+  return det;
 }
-
 function userItem(u, parent) {
   const pct = u.limit ? Math.min(100, u.used * 100 / u.limit) : 0;
   const d = h('details', { class: 'item s-' + u.status });
   const body = h('div', { class: 'body' });
+  const P = `/user/${encodeURIComponent(u.username)}/`;
+  const swap = n => { d.replaceWith(n); n.open = true; };
+  const sec = t => h('h2', { style: 'font-size:12px;margin:16px 0 8px;color:var(--mu)' }, t);
   const act = (label, path, ok, cls = '') => {
     const b = h('button', { class: 'btn sm ' + cls }, label);
-    b.onclick = () => run(b, async () => { const r = await api(path, 'POST', undefined); toast(ok); if (r.username) { const n = userItem(r, parent); d.replaceWith(n); n.open = true; } else if (ok === 'حذف شد') d.remove(); });
+    b.onclick = () => run(b, async () => { const r = await api(path, 'POST', undefined); toast(ok); if (r.username) swap(userItem(r, parent)); else if (ok === 'حذف شد') d.remove(); });
     return b;
   };
-  const gbI = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'حجم GB (0=∞)', dir: 'ltr' });
-  const dI = h('input', { type: 'number', min: 0, placeholder: 'روز (0=∞)', dir: 'ltr' });
-  const save = h('button', { class: 'btn sm pri' }, 'ذخیره');
-  save.onclick = () => run(save, async () => {
-    if (gbI.value === '' && dI.value === '') throw new Error('حداقل یکی را وارد کنید.');
-    const r = await api(`/user/${encodeURIComponent(u.username)}/edit`, 'POST', { gb: gbI.value === '' ? null : +gbI.value, days: dI.value === '' ? null : +dI.value });
-    toast('ذخیره شد'); const n = userItem(r, parent); d.replaceWith(n); n.open = true;
-  });
-  const q = h('div'); const P = `/user/${encodeURIComponent(u.username)}/`;
+  const q = h('div');
   const svcName = ((S.svcs || []).find(s => s.id === u.service_id) || {}).name || (u.service_id != null ? '#' + u.service_id : '—');
-  const swap = n => { d.replaceWith(n); n.open = true; };
+  const left = u.limit ? gb(Math.max(0, u.limit - u.used)) : 'نامحدود';
+
+  // پیام آماده برای ارسال به مشتری
+  const msg = () => ['👤 نام کاربری: ' + u.username, '📦 حجم: ' + gb(u.limit) + ' (باقی‌مانده: ' + left + ')', '⏳ اعتبار: ' + u.expire_text, '🔗 لینک اشتراک:', u.sub].join('\n');
+
+  // افزودن سریع (به مقدار فعلی اضافه می‌شود، مصرف صفر نمی‌شود)
+  const quick = (label, payload) => {
+    const b = h('button', { class: 'chip', type: 'button' }, label);
+    b.onclick = () => run(b, async () => { const r = await api(P + 'edit', 'POST', payload); toast('انجام شد'); swap(userItem(r, parent)); });
+    return b;
+  };
+  const addG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'حجم اضافه GB', dir: 'ltr' });
+  const addD = h('input', { type: 'number', min: 0, placeholder: 'روز اضافه', dir: 'ltr' });
+  const addB = h('button', { class: 'btn sm' }, '➕ افزودن');
+  addB.onclick = () => run(addB, async () => {
+    if (!+addG.value && !+addD.value) throw new Error('حجم یا روز اضافه را وارد کنید.');
+    const r = await api(P + 'edit', 'POST', { add_gb: +addG.value || null, add_days: +addD.value || null }); toast('اضافه شد'); swap(userItem(r, parent));
+  });
+
+  // تمدید با تمپلت (با گزینه‌ی حفظ مصرف)
+  const tplSel = h('select', {}, Object.entries(S.st.templates).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB/${t.days || '∞'}d`)));
+  const rid = 'rs' + Math.random().toString(36).slice(2, 8);
+  const rst = h('input', { type: 'checkbox', id: rid, checked: true });
+  const rnBtn = h('button', { class: 'btn sm pri', title: 'سرویس فعلی کاربر حفظ می‌شود' }, '⚡ تمدید با تمپلت');
+  rnBtn.onclick = () => {
+    if (!confirm(`«${u.username}» با تمپلت «${tplSel.value}» تمدید شود؟ (${rst.checked ? 'مصرف صفر می‌شود' : 'مصرف فعلی حفظ می‌شود'})`)) return;
+    run(rnBtn, async () => { const r = await api(P + 'renew', 'POST', { template: tplSel.value, reset_usage: rst.checked }); toast('تمدید شد'); swap(userItem(r, parent)); });
+  };
+
+  // تمدید دلخواه (حجم و روز دستی، بدون تمپلت)
+  const cG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'حجم GB', dir: 'ltr' });
+  const cD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr' });
+  const cB = h('button', { class: 'btn sm' }, '⚡ تمدید دلخواه');
+  cB.onclick = () => {
+    if (cG.value === '' || cD.value === '') return toast('حجم و روز هر دو لازم است.', true);
+    if (!confirm(`«${u.username}» با ${cG.value} گیگ / ${cD.value} روز تمدید شود؟ (${rst.checked ? 'مصرف صفر می‌شود' : 'مصرف فعلی حفظ می‌شود'})`)) return;
+    run(cB, async () => { const r = await api(P + 'renew', 'POST', { gb: +cG.value, days: +cD.value, reset_usage: rst.checked }); toast('تمدید شد'); swap(userItem(r, parent)); });
+  };
+
   const svcSel = h('select', {}, (S.svcs || []).map(s => h('option', { value: s.id, selected: s.id === u.service_id }, s.name)));
   const svcBtn = h('button', { class: 'btn sm' }, '🔀 تغییر سرویس');
   svcBtn.onclick = () => run(svcBtn, async () => { if (!svcSel.value) throw new Error('سرویسی موجود نیست.'); const r = await api(P + 'service', 'POST', { service_id: +svcSel.value }); toast('سرویس تغییر کرد'); swap(userItem(r, parent)); });
-  const tplSel = h('select', {}, Object.entries(S.st.templates).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB/${t.days || '∞'}d`)));
-  const rnBtn = h('button', { class: 'btn sm pri', title: 'سرویس فعلی کاربر حفظ می‌شود' }, '⚡ تمدید (سرویس فعلی می‌ماند)');
-  rnBtn.onclick = () => { if (!confirm(`«${u.username}» با تمپلت «${tplSel.value}» تمدید شود؟ (مصرف صفر می‌شود)`)) return; run(rnBtn, async () => { const r = await api(P + 'renew', 'POST', { template: tplSel.value }); toast('تمدید شد'); swap(userItem(r, parent)); }); };
   const noteI = h('input', { value: u.note || '', placeholder: 'یادداشت (نام مشتری، شماره…)', maxlength: 500 });
   const noteB = h('button', { class: 'btn sm' }, '📝 ذخیره یادداشت');
   noteB.onclick = () => run(noteB, async () => { const r = await api(P + 'note', 'POST', { note: noteI.value }); toast('یادداشت ذخیره شد'); swap(userItem(r, parent)); });
+
+  // تنظیم مقدار مطلق
+  const gbI = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'حجم کل GB (0=∞)', dir: 'ltr' });
+  const dI = h('input', { type: 'number', min: 0, placeholder: 'روز از الان (0=∞)', dir: 'ltr' });
+  const save = h('button', { class: 'btn sm' }, 'ذخیره مقدار جدید');
+  save.onclick = () => run(save, async () => {
+    if (gbI.value === '' && dI.value === '') throw new Error('حداقل یکی را وارد کنید.');
+    const r = await api(P + 'edit', 'POST', { gb: gbI.value === '' ? null : +gbI.value, days: dI.value === '' ? null : +dI.value });
+    toast('ذخیره شد'); swap(userItem(r, parent));
+  });
+  const del = h('button', { class: 'btn sm bad' }, '🗑 حذف');
+  del.onclick = () => { if (!confirm(`کاربر ${u.username} حذف شود؟`)) return; run(del, async () => { await api(P + 'delete', 'POST'); toast('حذف شد'); d.remove(); }); };
+
   body.append(h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
-    h('p', { class: 'sub' }, `سرویس: ${svcName} · مصرف: ${gb(u.used)} / ${gb(u.limit)} · اعتبار: ${u.expire_text}`),
+    h('p', { class: 'sub' }, `سرویس: ${svcName} · مصرف: ${gb(u.used)} / ${gb(u.limit)} · باقی: ${left} · اعتبار: ${u.expire_text}`),
     h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
     h('div', { class: 'btns' },
       h('button', { class: 'btn sm', onclick: () => toggleQR(q, u.sub, u.username) }, '🖼 QR'),
-      h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 کپی'),
+      h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 کپی لینک'),
+      h('button', { class: 'btn sm', onclick: () => copy(msg()) }, '💬 کپی پیام مشتری'),
       act('🔄 صفر کردن مصرف', P + 'reset', 'مصرف صفر شد'), act('🔗 لینک جدید', P + 'revoke', 'لینک جدید ساخته شد'),
       act(u.status === 'disabled' ? '✅ فعال‌سازی' : '⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد')),
-    h('div', { class: 'row', style: 'margin-top:12px' }, svcSel, svcBtn), h('div', { class: 'row', style: 'margin-top:8px' }, tplSel, rnBtn),
-    h('div', { class: 'row', style: 'margin-top:8px' }, noteI, noteB),
-    h('div', { class: 'row', style: 'margin-top:12px' }, gbI, dI), h('div', { class: 'btns' }, save,
-      (() => { const b = h('button', { class: 'btn sm bad' }, '🗑 حذف'); b.onclick = () => { if (!confirm(`کاربر ${u.username} حذف شود؟`)) return; run(b, async () => { await api(P + 'delete', 'POST'); toast('حذف شد'); d.remove(); }); }; return b; })()));
+    sec('➕ افزودن سریع (به مقدار فعلی اضافه می‌شود)'),
+    h('div', { class: 'chips', style: 'flex-wrap:wrap;padding-bottom:6px' }, [5, 10, 30, 50].map(g => quick(`+${g} گیگ`, { add_gb: g })), [7, 15, 30, 60].map(n => quick(`+${n} روز`, { add_days: n }))),
+    h('div', { class: 'row' }, addG, addD), h('div', { class: 'btns' }, addB),
+    sec('⚡ تمدید'),
+    h('label', { class: 'chk', for: rid, style: 'margin-top:0' }, rst, 'صفر کردن مصرف هنگام تمدید'),
+    h('div', { class: 'row', style: 'margin-top:8px' }, tplSel, rnBtn),
+    h('div', { class: 'row', style: 'margin-top:8px' }, cG, cD), h('div', { class: 'btns' }, cB),
+    sec('⚙️ تنظیمات کاربر'),
+    h('div', { class: 'row' }, svcSel, svcBtn), h('div', { class: 'row', style: 'margin-top:8px' }, noteI, noteB),
+    h('div', { class: 'row', style: 'margin-top:12px' }, gbI, dI), h('div', { class: 'btns' }, save, del));
   d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username), h('span', { class: 'sub' }, `${svcName} · ${gb(u.used)} / ${gb(u.limit)}`)), body);
   return d;
 }
@@ -462,7 +511,7 @@ async function vHome() {
   const soonOut = h('div'), soonBtn = h('button', { class: 'btn' }, '⏰ نزدیک انقضا / کم‌حجم');
   soonBtn.onclick = () => run(soonBtn, async () => {
     const r = await api('/soon');
-    soonOut.replaceChildren(h('p', { class: 'hint' }, r.items.length ? `${r.items.length} کاربر (تا ${r.days} روز یا کمتر از ${r.low_pct}٪ حجم)` : '✅ موردی نیست'), r.items.map(i => h('p', { class: 'sub' }, `${i.username} — ${i.reason}`)));
+    soonOut.replaceChildren(h('p', { class: 'hint' }, r.items.length ? `${r.items.length} کاربر (تا ${r.days} روز یا کمتر از ${r.low_pct}٪ حجم)` : '✅ موردی نیست'), ...r.items.map(i => h('p', { class: 'sub' }, `${i.username} — ${i.reason}`)));
   });
   res.replaceChildren(h('h2', {}, 'عملیات'), h('div', { class: 'btns' }, clean, core, soonBtn), soonOut);
 }
@@ -571,6 +620,44 @@ async function vSet() {
       h('div', { class: 'row' }, field('خرید هر ترابایت', buy), field('ضریب مصرف همکاری', mul)), mulBox,
       field('سرویس‌های نادیده (تست؛ با کاما)', ign), h('div', { class: 'btns' }, saveS));
   }
+  // SSL و پورت وب‌پنل
+  let sslCard = h('div', { class: 'card' }, h('h2', {}, '🔒 SSL و پورت وب‌پنل'), h('p', { class: 'err' }, 'خطا در دریافت تنظیمات SSL'));
+  try {
+    const sc2 = await api('/ssl');
+    const dom = i(sc2.domain, 'panel.example.com'), crt = i(sc2.cert, '/var/lib/rebecca/certs/panel.example.com/fullchain.pem'), key = i(sc2.key, '/var/lib/rebecca/certs/panel.example.com/key.pem'), prt = i(c.web_port, '8686', 'number');
+    const on = h('input', { type: 'checkbox', id: 'sslOn', checked: sc2.enabled });
+    const found = h('div');
+    const state = sc2.active ? '🔒 اکنون با HTTPS اجرا می‌شود' : (sc2.enabled ? '⚠️ SSL روشن است ولی اجرا نشد' : '🔓 اکنون با HTTP (بدون SSL) اجرا می‌شود');
+    const exp = sc2.info && sc2.info.expires ? ` · انقضای گواهی: ${sc2.info.expires}` : '';
+    const detB = h('button', { class: 'btn', type: 'button' }, '🔍 پیدا کردن گواهی پنل ربکا');
+    detB.onclick = () => run(detB, async () => {
+      const r = await api('/ssl/detect', 'POST');
+      if (!r.items.length) { found.replaceChildren(h('p', { class: 'hint' }, 'گواهی‌ای روی این سرور پیدا نشد. مسیرها را دستی وارد کنید (پنل ربکا باید روی همین سرور باشد).')); return; }
+      found.replaceChildren(h('p', { class: 'hint' }, 'یکی را انتخاب کنید تا مسیرها پر شود:'), ...r.items.map(x => h('div', { class: 'item', style: x.match ? 'border-color:var(--ac)' : '' }, h('div', { class: 'body', style: 'border:0;padding:10px 12px' },
+        h('p', { class: 'sub' }, (x.match ? '⭐ هم‌دامنه با پنل · ' : '') + x.source + (x.cn ? ' · ' + x.cn : '') + (x.expires ? ' · تا ' + x.expires : '')),
+        h('code', { style: 'margin:6px 0' }, x.cert), h('code', { style: 'margin:6px 0' }, x.key),
+        x.ok ? h('button', { class: 'btn sm pri', type: 'button', onclick: () => { crt.value = x.cert; key.value = x.key; if (x.cn && !dom.value) dom.value = x.cn.replace(/^\*\./, ''); on.checked = true; toast('مسیرها پر شد؛ «ذخیره و اعمال» را بزنید'); } }, 'استفاده از این گواهی') : h('p', { class: 'err' }, '❌ ' + x.error)))));
+    });
+    const saveSsl = h('button', { class: 'btn pri', type: 'button' }, 'ذخیره و اعمال (ریستارت وب‌پنل)');
+    saveSsl.onclick = () => run(saveSsl, async () => {
+      if (!confirm(on.checked ? 'وب‌پنل با SSL ریستارت می‌شود و آدرس جدید باز می‌شود. ادامه؟' : 'تنظیمات ذخیره و وب‌پنل ریستارت شود؟')) return;
+      const r = await api('/ssl', 'POST', { enabled: on.checked, cert: crt.value, key: key.value, domain: dom.value, port: +prt.value || 8686 });
+      if (!r.restart) { toast('ذخیره شد (تغییری برای ریستارت نبود)'); return; }
+      toast('✅ ذخیره شد؛ در حال ریستارت… به آدرس جدید می‌روید'); const same = new URL(r.url).protocol === location.protocol;
+      const go = () => { location.href = r.url; };
+      if (!same) return setTimeout(go, 4500);
+      for (let n = 0; n < 15; n++) { await new Promise(x => setTimeout(x, 1500)); try { await fetch(r.url + '/login', { mode: 'no-cors', cache: 'no-store' }); break; } catch {} }
+      go();
+    });
+    sslCard = h('div', { class: 'card' }, h('h2', {}, '🔒 SSL و پورت وب‌پنل'),
+      h('p', { class: 'hint', style: 'margin:0 0 6px' }, state + exp),
+      sc2.error ? h('p', { class: 'err' }, 'آخرین خطا: ' + sc2.error) : null,
+      h('label', { class: 'chk', for: 'sslOn' }, on, 'وب‌پنل با HTTPS اجرا شود'),
+      field('دامنه (همان دامنه پنل ربکا)', dom), field('مسیر گواهی (cert / fullchain)', crt), field('مسیر کلید خصوصی (key)', key), field('پورت وب‌پنل', prt),
+      h('div', { class: 'btns' }, detB), found,
+      h('div', { class: 'btns' }, saveSsl),
+      h('p', { class: 'hint' }, 'پنل ربکا باید روی همین سرور باشد تا فایل‌های گواهی‌اش خوانده شود. بعد از تمدید گواهی، وب‌پنل خودش ریستارت می‌شود. اگر بعد از تغییر به آدرس نرسیدید، روی سرور بزنید: rebecca-bot ssl off'));
+  } catch (e) { sslCard = h('div', { class: 'card' }, h('h2', {}, '🔒 SSL و پورت وب‌پنل'), h('p', { class: 'err' }, e.message)); }
   // بکاپ و بازیابی
   const autoB = h('input', { type: 'checkbox', id: 'autob', checked: c.backup_enabled });
   autoB.onchange = () => api('/backup/settings', 'POST', { enabled: autoB.checked }).then(() => toast(autoB.checked ? 'بکاپ شبانه روشن شد' : 'بکاپ شبانه خاموش شد')).catch(e => { autoB.checked = !autoB.checked; toast(e.message, true); });
@@ -593,7 +680,7 @@ async function vSet() {
     h('p', { class: 'hint' }, 'فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
     h('div', { class: 'btns' }, rsB));
   mount(
-    priceCard, backupCard,
+    sslCard, priceCard, backupCard,
     h('h2', { style: 'font-size:13px;margin:0 2px 8px' }, `پنل‌های ربکا (${c.panels.length})`), ...list,
     h('div', { class: 'card' }, ptitle, field('نام پنل', nm), field('آدرس پنل', url), field('دامنه سابسکریپشن', sub), field('نام کاربری ادمین', user), field('رمز عبور', pass),
       h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
