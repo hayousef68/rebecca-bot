@@ -175,7 +175,7 @@ async function vCreate() {
   const tg = h('input', { type: 'checkbox', id: 'tg', checked: st.bot });
   const prev = h('p', { class: 'hint' }), last = h('p', { class: 'hint' });
   const out = h('div');
-  let mode = S.cmode || 'group';
+  let mode = 'single';   // هر بار که صفحه باز می‌شود، پیش‌فرض ساخت تکی است
   const chipS = h('button', { class: 'chip', type: 'button' }, '👤 تکی'), chipG = h('button', { class: 'chip', type: 'button' }, '👥 گروهی');
   const grpBox = h('div', {}, field('پیشوند نام کاربری', base), h('div', { class: 'row' }, field('عدد شروع (خودکار)', start), field('تعداد', count)));
   const oneBox = h('div', {}, field('نام کاربری', one));
@@ -203,7 +203,8 @@ async function vCreate() {
   };
   chipS.onclick = () => { mode = S.cmode = 'single'; if (!svcTouched) autoSvc(mode); upd(); }; chipG.onclick = () => { mode = S.cmode = 'group'; if (!svcTouched) autoSvc(mode); upd(); };
   base.addEventListener('input', debounce(() => { upd(); if (/^[A-Za-z0-9_]{1,28}$/.test(base.value.trim())) detect(base.value.trim(), true); }, 450));
-  [start, count, one].forEach(i => i.addEventListener('input', upd)); autoSvc(mode); upd(); detect(st.default_prefix, true);
+  [start, count, one].forEach(i => i.addEventListener('input', upd));
+  [one, cg, cd, base, start, count].forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go_.click(); } })); autoSvc(mode); upd(); detect(st.default_prefix, true);
   const go_ = h('button', { class: 'btn pri' }, '⚡ ساخت اکانت');
   go_.onclick = () => run(go_, async () => {
     if (!svc.value) throw new Error('سرویسی برای این پنل پیدا نشد؛ اتصال پنل را در تنظیمات بررسی کنید.');
@@ -306,7 +307,7 @@ function userItem(u, parent) {
   const svcBtn = h('button', { class: 'btn sm' }, '🔀 تغییر سرویس');
   svcBtn.onclick = () => run(svcBtn, async () => { if (!svcSel.value) throw new Error('سرویسی موجود نیست.'); const r = await api(P + 'service', 'POST', { service_id: +svcSel.value }); toast('سرویس تغییر کرد'); swap(userItem(r, parent)); });
   const tplSel = h('select', {}, Object.entries(S.st.templates).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB/${t.days || '∞'}d`)));
-  const rnBtn = h('button', { class: 'btn sm pri' }, '⚡ تمدید');
+  const rnBtn = h('button', { class: 'btn sm pri', title: 'سرویس فعلی کاربر حفظ می‌شود' }, '⚡ تمدید (سرویس فعلی می‌ماند)');
   rnBtn.onclick = () => { if (!confirm(`«${u.username}» با تمپلت «${tplSel.value}» تمدید شود؟ (مصرف صفر می‌شود)`)) return; run(rnBtn, async () => { const r = await api(P + 'renew', 'POST', { template: tplSel.value }); toast('تمدید شد'); swap(userItem(r, parent)); }); };
   const noteI = h('input', { value: u.note || '', placeholder: 'یادداشت (نام مشتری، شماره…)', maxlength: 500 });
   const noteB = h('button', { class: 'btn sm' }, '📝 ذخیره یادداشت');
@@ -323,7 +324,7 @@ function userItem(u, parent) {
     h('div', { class: 'row', style: 'margin-top:8px' }, noteI, noteB),
     h('div', { class: 'row', style: 'margin-top:12px' }, gbI, dI), h('div', { class: 'btns' }, save,
       (() => { const b = h('button', { class: 'btn sm bad' }, '🗑 حذف'); b.onclick = () => { if (!confirm(`کاربر ${u.username} حذف شود؟`)) return; run(b, async () => { await api(P + 'delete', 'POST'); toast('حذف شد'); d.remove(); }); }; return b; })()));
-  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username), h('span', { class: 'sub' }, `${gb(u.used)} / ${gb(u.limit)}`)), body);
+  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username), h('span', { class: 'sub' }, `${svcName} · ${gb(u.used)} / ${gb(u.limit)}`)), body);
   return d;
 }
 
