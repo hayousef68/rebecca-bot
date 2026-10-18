@@ -128,14 +128,14 @@ def _load_attach() -> list[dict]:
         return []
 
 
-def record_attach(username: str, service_id, gb: float, days: int = 0, ts: float | None = None) -> None:
-    """یک پیوست (حجم gb + مدت days) را برای محاسبه‌ی فروش ثبت می‌کند. حجم صفر ثبت نمی‌شود."""
+def record_attach(username: str, service_id, gb: float, days: int = 0, ts: float | None = None, kind: str = "attach") -> None:
+    """یک پیوست/پلن بعدی (حجم gb + مدت days) را برای محاسبه‌ی فروش ثبت می‌کند. kind: attach | next. حجم صفر ثبت نمی‌شود."""
     if not gb or gb <= 0:
         return
     now = ts or _time.time()
     with _ATTACH_LOCK:
         items = [x for x in _load_attach() if now - float(x.get("ts", 0)) < _ATTACH_KEEP_DAYS * 86400]
-        items.append({"ts": now, "u": str(username), "sid": service_id, "gb": float(gb), "days": int(days or 0)})
+        items.append({"ts": now, "u": str(username), "sid": service_id, "gb": float(gb), "days": int(days or 0), "k": "next" if kind == "next" else "attach"})
         path = _attach_file()
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -154,7 +154,7 @@ def _attach_rows(a, b, off: int, svc: dict) -> list[dict]:
         if not (a <= at < b):
             continue
         sid = x.get("sid")
-        out.append({"kind": "attach", "at": at, "username": x.get("u", ""), "data_limit": float(x.get("gb", 0)) * GB, "expire": None,
+        out.append({"kind": "next" if x.get("k") == "next" else "attach", "at": at, "username": x.get("u", ""), "data_limit": float(x.get("gb", 0)) * GB, "expire": None,
                     "hold": None, "service_id": sid, "service_name": svc.get(sid, ""), "created_at": None, "_off": off,
                     "months": 2 if int(x.get("days") or 0) > 45 else 1, "days": int(x.get("days") or 0)})
     return out
@@ -365,7 +365,7 @@ def classify(rows: list[dict], cfg: dict) -> dict:
         gb = round((r["data_limit"] or 0) / GB)
         if gb <= 0:
             continue
-        key = r["kind"] if r["kind"] in ("new", "attach") else "renew"
+        key = r["kind"] if r["kind"] in ("new", "attach", "next") else "renew"
         if _is_hamkari(r, cfg):          # همکاری: همیشه گیگی (حتی خارج از لیست)
             ham[(gb, key)] += 1
             continue
@@ -376,7 +376,7 @@ def classify(rows: list[dict], cfg: dict) -> dict:
         match = next((p for p in plans if int(p["gb"]) == gb and int(p["months"]) == m), None)
         if match:
             single[(gb, m, key)] += 1
-        elif key == "attach" and skip_extra:
+        elif key in ("attach", "next") and skip_extra:
             skipped[(gb, m)] += 1        # پیوست خارج از لیست: نه فروش حساب می‌شود نه هزینه
         else:
             extra[(gb, m, key)] += 1     # ms خارج از لیست: به‌نرخ گیگی
@@ -417,7 +417,7 @@ def _t(n) -> str:
     return f"{int(round(n)):,}".replace(",", "٬")
 
 
-_KIND_FA = {"new": "ساخت", "renew": "تمدید/ریست", "attach": "پیوست"}
+_KIND_FA = {"new": "ساخت", "renew": "تمدید/ریست", "attach": "پیوست", "next": "پلن بعدی"}
 
 
 def _render(title: str, d: dict, html: bool) -> str:
@@ -539,7 +539,7 @@ def summary(kind: str = "today") -> dict:
     for (gb, m, _k), n in cl["extra"].items():
         agg[(gb, m)] = agg.get((gb, m), 0) + n
     extra = [{"gb": gb, "months": m, "count": n, "suggest": int(round(gb * d["rate"]))} for (gb, m), n in sorted(agg.items())]
-    att = sum(n for c, i in ((cl["ham"], 1), (cl["single"], 2), (cl["extra"], 2)) for k, n in c.items() if k[i] == "attach")
+    att = sum(n for c, i in ((cl["ham"], 1), (cl["single"], 2), (cl["extra"], 2)) for k, n in c.items() if k[i] in ("attach", "next"))
     return {"income": int(round(d["income"])), "cost": int(round(d["cost"])), "profit": int(round(d["income"] - d["cost"])),
             "new": news, "renew": total - news, "attach": att, "skipped": sum(cl["skipped"].values()), "ham_gb": d["ham_gb"], "ignored": sum(cl["ignored"].values()), "extra": extra}
 
@@ -646,7 +646,7 @@ def build_events(day: str, html: bool = True, partial: bool = False, limit: int 
         else:
             m = int(r["months"]) if r.get("months") else _months(r)
             inlist = any(int(p["gb"]) == gb and int(p["months"]) == m for p in cfg["single_prices"])
-            typ = f"تکی {m}ماهه" + ("" if inlist else (" (خارج لیست — محاسبه نمی‌شود)" if r["kind"] == "attach" and cfg.get("attach_extra_mode", "skip") == "skip" else " (خارج لیست)"))
+            typ = f"تکی {m}ماهه" + ("" if inlist else (" (خارج لیست — محاسبه نمی‌شود)" if r["kind"] in ("attach", "next") and cfg.get("attach_extra_mode", "skip") == "skip" else " (خارج لیست)"))
         L.append(f"{at} | {_KIND_FA.get(r['kind'], r['kind'])} | {r['username']} | {gb}GB | {typ}")
     if len(rows) > limit:
         L.append(f"… و {len(rows) - limit} مورد دیگر")
