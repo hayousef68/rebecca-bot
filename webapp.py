@@ -10,13 +10,13 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 import common as C
 import ops
 import sales
+import tlsutil
 from sales import price_for
 from common import get_api, get_panel, load_config, new_panel_id, update_config, RebeccaClient
 
@@ -24,39 +24,97 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", le
 log = logging.getLogger("rebecca.web")
 
 INDEX = os.path.join(C.BASE_DIR, "index.html")
+LOGIN = os.path.join(C.BASE_DIR, "login.html")
 _html_cache = {"mtime": 0.0, "data": ""}
+_login_cache = {"mtime": 0.0, "data": ""}
+COOKIE = "rb_session"
 _bg: set = set()
 _bot = {"token": None, "obj": None}
 
 
+async def _restart_self(delay: float = 1.0):
+    """ریستارت وب‌پنل بعد از تأخیر کوتاه تا پاسخ HTTP به مرورگر برسد."""
+    await asyncio.sleep(delay)
+    try:
+        proc = await asyncio.create_subprocess_exec("systemctl", "--no-block", "restart", "rebecca-webapp")
+        await proc.wait()
+    except Exception:  # noqa: BLE001
+        log.warning("ریستارت خودکار وب‌پنل ممکن نشد؛ دستی: systemctl restart rebecca-webapp")
+
+
+async def _cert_watch():
+    """اگر گواهی (تمدید خودکار Let's Encrypt/پنل ربکا) عوض شد، وب‌پنل خودش ریستارت می‌شود."""
+    ss = load_config()["ssl"]
+
+    def sig():
+        try:
+            return tuple(os.stat(p).st_mtime_ns for p in (ss["cert"], ss["key"]))
+        except OSError:
+            return None
+    base = sig()
+    while True:
+        await asyncio.sleep(3600)
+        if sig() != base:
+            log.info("گواهی SSL تغییر کرد؛ ریستارت وب‌پنل برای بارگذاری گواهی جدید")
+            await _restart_self(0)
+            return
+
+
 @asynccontextmanager
 async def lifespan(_app):
+    watcher = asyncio.create_task(_cert_watch()) if os.environ.get("REBECCA_SSL_ACTIVE") == "1" else None
     yield
+    if watcher:
+        watcher.cancel()
     for c in list(C._clients.values()):
         await c.aclose()
 
 
 app = FastAPI(title="Rebecca Panel", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-security = HTTPBasic()
 _fails: dict[str, list[float]] = {}
 
 
-def guard(request: Request, cred: HTTPBasicCredentials = Depends(security)):
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
+def _basic_ok(request: Request) -> bool:
+    """سازگاری با اسکریپت‌های قدیمی (curl -u)؛ مرورگر دیگر از Basic استفاده نمی‌کند."""
+    import base64
+    h = request.headers.get("authorization", "")
+    if not h.lower().startswith("basic "):
+        return False
+    try:
+        u, _, pw = base64.b64decode(h[6:]).decode().partition(":")
+    except Exception:  # noqa: BLE001
+        return False
+    ip, now = _client_ip(request), time.time()
+    recent = [t for t in _fails.get(ip, []) if now - t < 300]
+    if len(recent) >= 8:
+        return False
+    if C.check_web_login(u, pw):
+        return True
+    _fails[ip] = recent + [now]
+    return False
+
+
+def guard(request: Request):
     if not C.web_configured():
         raise HTTPException(503, "رمز وب‌پنل تنظیم نشده است. روی سرور اجرا کنید: rebecca-bot passwd")
-    ip = request.client.host if request.client else "?"
-    now = time.time()
-    recent = [t for t in _fails.get(ip, []) if now - t < 300]
-    if len(recent) >= 10:
-        raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
-    if not C.check_web_login(cred.username, cred.password):
-        recent.append(now)
-        _fails[ip] = recent
-        raise HTTPException(401, "نام کاربری یا رمز اشتباه است.", headers={"WWW-Authenticate": 'Basic realm="Rebecca"'})
-    _fails.pop(ip, None)
+    tok = request.cookies.get(COOKIE, "")
+    if not (tok and C.check_session(tok)) and not _basic_ok(request):
+        raise HTTPException(401, "نشست شما تمام شده؛ دوباره وارد شوید.")
     # ضد CSRF: مرورگر بدون preflight نمی‌تواند هدر سفارشی بفرستد
     if request.method not in ("GET", "HEAD") and request.headers.get("x-requested-with") != "rebecca":
         raise HTTPException(403, "درخواست نامعتبر.")
+
+
+def page_guard(request: Request):
+    """برای صفحه‌ی اصلی: بدون نشست، به صفحه‌ی ورود هدایت می‌شود."""
+    tok = request.cookies.get(COOKIE, "")
+    if C.web_configured() and tok and C.check_session(tok):
+        return None
+    return RedirectResponse("/login", status_code=303)
 
 
 @app.exception_handler(C.RebeccaError)
@@ -83,13 +141,67 @@ def P(panel: str | None = Query(None, max_length=20)) -> RebeccaClient:
 
 
 # ───────────────────────────── صفحه ─────────────────────────────
-@app.get("/", response_class=HTMLResponse, dependencies=[Depends(guard)])
-async def index():
-    m = os.path.getmtime(INDEX)
-    if m != _html_cache["mtime"]:
-        with open(INDEX, encoding="utf-8") as f:
-            _html_cache.update(mtime=m, data=f.read())
-    return HTMLResponse(_html_cache["data"], headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer"})
+_PAGE_HEADERS = {"Cache-Control": "no-store", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer"}
+
+
+def _read_cached(path: str, cache: dict) -> str:
+    m = os.path.getmtime(path)
+    if m != cache["mtime"]:
+        with open(path, encoding="utf-8") as f:
+            cache.update(mtime=m, data=f.read())
+    return cache["data"]
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    r = page_guard(request)
+    if r is not None:
+        return r
+    return HTMLResponse(_read_cached(INDEX, _html_cache), headers=_PAGE_HEADERS)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    tok = request.cookies.get(COOKIE, "")
+    if C.web_configured() and tok and C.check_session(tok):
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse(_read_cached(LOGIN, _login_cache), headers=_PAGE_HEADERS)
+
+
+class LoginReq(BaseModel):
+    user: str = Field(max_length=100)
+    password: str = Field(max_length=256)
+    remember: bool = False
+
+
+@app.post("/api/login")
+async def login(r: LoginReq, request: Request):
+    if request.headers.get("x-requested-with") != "rebecca":
+        raise HTTPException(403, "درخواست نامعتبر.")
+    if not C.web_configured():
+        raise HTTPException(503, "رمز وب‌پنل تنظیم نشده است. روی سرور اجرا کنید: rebecca-bot passwd")
+    ip, now = _client_ip(request), time.time()
+    recent = [t for t in _fails.get(ip, []) if now - t < 300]
+    if len(recent) >= 8:
+        raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
+    if not C.check_web_login(r.user.strip(), r.password):
+        recent.append(now)
+        _fails[ip] = recent
+        await asyncio.sleep(0.6)   # کند کردن حدس رمز
+        raise HTTPException(401, "نام کاربری یا رمز اشتباه است.")
+    _fails.pop(ip, None)
+    tok, ttl = C.make_session(r.user.strip(), r.remember)
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(COOKIE, tok, max_age=ttl, httponly=True, samesite="strict",
+                    secure=request.url.scheme == "https", path="/")
+    return resp
+
+
+@app.post("/api/logout")
+async def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(COOKIE, path="/")
+    return resp
 
 
 def _panels_view(cfg):
@@ -351,8 +463,10 @@ async def users(search: str = "", status: str = "", offset: int = Query(0, ge=0)
 
 
 class EditReq(BaseModel):
-    gb: float | None = Field(default=None, ge=0)
-    days: int | None = Field(default=None, ge=0)
+    gb: float | None = Field(default=None, ge=0, le=100000)
+    days: int | None = Field(default=None, ge=0, le=36500)
+    add_gb: float | None = Field(default=None, gt=0, le=100000)     # افزودن حجم به حجم فعلی
+    add_days: int | None = Field(default=None, gt=0, le=36500)      # افزودن روز به اعتبار فعلی
 
 
 class ServiceReq(BaseModel):
@@ -364,7 +478,11 @@ class NoteReq(BaseModel):
 
 
 class RenewReq(BaseModel):
-    template: str
+    template: str | None = None
+    reset_usage: bool = True                                         # False = مصرف فعلی حفظ شود
+    gb: float | None = Field(default=None, ge=0, le=100000)         # تمدید دلخواه (بدون تمپلت)
+    days: int | None = Field(default=None, ge=0, le=36500)
+    mode: str | None = Field(default=None, pattern="^(on_hold|active)$")
 
 
 @app.post("/api/user/{uname}/service", dependencies=[Depends(guard)])
@@ -380,42 +498,25 @@ async def user_note(uname: str, r: NoteReq, api: RebeccaClient = Depends(P)):
 
 @app.post("/api/user/{uname}/renew", dependencies=[Depends(guard)])
 async def user_renew(uname: str, r: RenewReq, api: RebeccaClient = Depends(P)):
-    tpl = load_config()["templates"].get(r.template)
-    if not tpl:
-        raise HTTPException(404, "تمپلت پیدا نشد.")
-    await C.renew_user(api, uname, tpl)
+    if r.template:
+        tpl = load_config()["templates"].get(r.template)
+        if not tpl:
+            raise HTTPException(404, "تمپلت پیدا نشد.")
+        tpl = dict(tpl)
+    elif r.gb is not None and r.days is not None:
+        tpl = {"gb": r.gb, "days": r.days, "mode": r.mode or "active"}
+    else:
+        raise HTTPException(400, "تمپلت یا حجم و روز را مشخص کنید.")
+    await C.renew_user(api, uname, tpl, reset_usage=r.reset_usage)
     return _slim(await api.request("GET", api.upath(uname)), api)
-
-
-class BulkReq(BaseModel):
-    base: str = Field(min_length=1, max_length=32)
-    start: int | None = None
-    count: int = 1
-    action: str
-    service_id: int | None = None
-    template: str | None = None
-
-
-@app.post("/api/bulk", dependencies=[Depends(guard)])
-async def bulk(r: BulkReq, api: RebeccaClient = Depends(P)):
-    cfg = load_config()
-    names = C.make_names(r.base, r.start, r.count, cfg["max_batch"])
-    if r.action not in C.BULK_ACTIONS:
-        raise HTTPException(400, "عملیات ناشناخته")
-    if r.action == "service" and r.service_id is None:
-        raise HTTPException(400, "سرویس را انتخاب کنید.")
-    tpl = cfg["templates"].get(r.template or "") if r.action == "renew" else None
-    if r.action == "renew" and not tpl:
-        raise HTTPException(400, "تمپلت را انتخاب کنید.")
-    ok, bad = await C.bulk_apply(api, names, r.action, service_id=r.service_id, tpl=tpl, concurrency=6)
-    return {"ok": len(ok), "total": len(names), "failed": [{"username": n, "reason": why} for n, why in bad]}
 
 
 @app.get("/api/soon", dependencies=[Depends(guard)])
 async def soon(api: RebeccaClient = Depends(P)):
     rc = load_config()["reminders"]
     items = await ops.find_soon(api, rc["days"], rc["low_pct"])
-    return {"days": rc["days"], "low_pct": rc["low_pct"], "items": [{"username": i["username"], "reason": i["reason"]} for i in items[:200]]}
+    return {"days": rc["days"], "low_pct": rc["low_pct"], "total": len(items),
+            "items": [{"username": i["username"], "reason": i["reason"], "user": _slim(i["user"], api)} for i in items[:100]]}
 
 
 @app.post("/api/user/{uname}/{action}", dependencies=[Depends(guard)])
@@ -432,7 +533,7 @@ async def user_action(uname: str, action: str, body: EditReq | None = None, api:
         return _slim(await api.request("PUT", p, json={"status": new}), api)
     if action == "edit":
         b = body or EditReq()
-        return _slim(await C.apply_user_edit(api, uname, b.gb, b.days), api)
+        return _slim(await C.apply_user_edit(api, uname, b.gb, b.days, b.add_gb, b.add_days), api)
     if action == "delete":
         await api.request("DELETE", p)
         return {"ok": True}
@@ -523,7 +624,7 @@ async def settings_get():
     panels = [{"id": p["id"], "name": p["name"], "panel_url": p["panel_url"], "sub_url": p["sub_url"], "username": p["username"],
                "has_password": bool(p["password"]), "verify_ssl": p["verify_ssl"]} for p in c["panels"]]
     return {"panels": panels, "active_panel": c["active_panel"], "bot_token": _mask(c["bot_token"]),
-            "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin"),
+            "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin"), "web_port": c["web_port"],
             "backup_enabled": c["backup"]["enabled"]}
 
 
@@ -556,6 +657,72 @@ async def settings_save(r: SettingsReq):
         except Exception:  # noqa: BLE001
             log.warning("ریستارت خودکار ربات ممکن نشد")
     return {"ok": True, "bot_restarted": restart_bot}
+
+
+# ───────────────────────────── SSL و پورت وب‌پنل ─────────────────────────────
+def _panel_domain(cfg) -> str:
+    p = get_panel(cfg, cfg["active_panel"]) or (cfg["panels"][0] if cfg["panels"] else None)
+    return tlsutil._domain_of(p["panel_url"]) if p else ""
+
+
+def _web_url(scheme: str, host: str, port: int) -> str:
+    return f"{scheme}://{host}" + ("" if (scheme, port) in (("https", 443), ("http", 80)) else f":{port}")
+
+
+@app.get("/api/ssl", dependencies=[Depends(guard)])
+async def ssl_get(request: Request):
+    c = load_config()
+    ss = c["ssl"]
+    return {"enabled": ss["enabled"], "active": os.environ.get("REBECCA_SSL_ACTIVE") == "1", "cert": ss["cert"], "key": ss["key"],
+            "domain": ss["domain"] or _panel_domain(c), "error": ss["error"], "port": c["web_port"],
+            "info": tlsutil.cert_info(ss["cert"]) if ss["cert"] else {}, "scheme": request.url.scheme}
+
+
+@app.post("/api/ssl/detect", dependencies=[Depends(guard)])
+async def ssl_detect():
+    c = load_config()
+    items = await asyncio.to_thread(tlsutil.detect, (get_panel(c, c["active_panel"]) or {}).get("panel_url", ""))
+    return {"items": items}
+
+
+class SslReq(BaseModel):
+    enabled: bool
+    cert: str = Field(default="", max_length=500)
+    key: str = Field(default="", max_length=500)
+    domain: str = Field(default="", max_length=253)
+    port: int = Field(default=8686, ge=1, le=65535)
+
+
+@app.post("/api/ssl", dependencies=[Depends(guard)])
+async def ssl_save(r: SslReq, request: Request):
+    cert, key, domain = r.cert.strip(), r.key.strip(), r.domain.strip().lower()
+    if domain and not re.fullmatch(r"[a-z0-9.-]{1,253}", domain):
+        raise ValueError("دامنه نامعتبر است.")
+    if r.enabled:
+        err = await asyncio.to_thread(tlsutil.check_pair, cert, key)
+        if err:
+            raise ValueError(err)
+    old = load_config()
+    if r.port != old["web_port"]:
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+            try:
+                sk.bind(("0.0.0.0", r.port))
+            except OSError:
+                raise ValueError(f"پورت {r.port} روی سرور در حال استفاده است؛ پورت دیگری بدهید.")
+    changed = (old["ssl"]["enabled"], old["ssl"]["cert"], old["ssl"]["key"], old["web_port"]) != (r.enabled, cert, key, r.port)
+
+    def mut(c):
+        c["ssl"].update(enabled=r.enabled, cert=cert, key=key, domain=domain, error="")
+        c["web_port"] = r.port
+    cfg = update_config(mut)
+    host = (domain or _panel_domain(cfg)) if r.enabled else (request.url.hostname or "")
+    url = _web_url("https" if r.enabled else "http", host or request.url.hostname or "", r.port)
+    if changed:
+        t = asyncio.create_task(_restart_self())
+        _bg.add(t)
+        t.add_done_callback(_bg.discard)
+    return {"ok": True, "restart": changed, "url": url}
 
 
 # ───────────────────────────── بکاپ و بازیابی ─────────────────────────────
