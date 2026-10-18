@@ -7,66 +7,107 @@
 <title>پنل ربکا</title>
 <style>
 :root{
-  --bg:#0c1319;--s1:#131c25;--s2:#1a2632;--line:#263644;--tx:#e7eef4;--mu:#8a9db0;
-  --ac:#f0b429;--ac-ink:#1c1503;--ok:#3ecf8e;--bad:#f2706b;--info:#5aa9ff;--r:14px;
+  --bg:#0a1016;--s1:#121b24;--s2:#1a2632;--line:#233241;--tx:#e9f0f6;--mu:#8497aa;
+  --ac:#f0b429;--ac2:#ff8a3d;--ac-ink:#1c1503;--ok:#3ecf8e;--bad:#f2706b;--warn:#f5a524;--info:#5aa9ff;--r:16px;
+  --shadow:0 8px 28px #0007;
   font-family:"Vazirmatn","Vazir","IRANSansX","Segoe UI",Tahoma,system-ui,sans-serif;
 }
 *{box-sizing:border-box;margin:0}
 html{-webkit-text-size-adjust:100%}
-body{background:var(--bg);color:var(--tx);font-size:14px;line-height:1.7;padding-bottom:calc(76px + env(safe-area-inset-bottom))}
-header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+body{background:radial-gradient(900px 420px at 90% -140px,#f0b4291f,transparent 60%),radial-gradient(700px 380px at -10% 8%,#5aa9ff12,transparent 60%),var(--bg);
+  background-attachment:fixed;color:var(--tx);font-size:14px;line-height:1.7;padding-bottom:calc(100px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
   padding:calc(10px + env(safe-area-inset-top)) 16px 10px;display:flex;align-items:center;justify-content:space-between}
-header h1{font-size:15px;font-weight:700}
-.pill{font-size:11px;padding:2px 10px;border-radius:99px;background:var(--s2);color:var(--mu)}
-.pill.ok{color:var(--ok)}.pill.bad{color:var(--bad)}
+header h1{font-size:15px;font-weight:800;display:flex;align-items:center;gap:10px}
+.logo{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;font-weight:900;font-size:16px;color:var(--ac-ink);background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 4px 14px #f0b42955}
+.pill{font-size:11px;padding:3px 11px;border-radius:99px;background:var(--s2);color:var(--mu);border:1px solid var(--line)}
+.pill.ok{color:var(--ok);border-color:#3ecf8e55;background:#3ecf8e14}.pill.bad{color:var(--bad);border-color:#f2706b55;background:#f2706b14}
 main{max-width:600px;margin:0 auto;padding:14px 14px 24px}
-nav{position:fixed;inset:auto 0 0 0;z-index:6;background:var(--s1);border-top:1px solid var(--line);
-  display:grid;grid-template-columns:repeat(5,1fr);padding:6px 6px calc(6px + env(safe-area-inset-bottom))}
-nav button{background:none;border:0;color:var(--mu);font:inherit;font-size:11px;padding:6px 0;border-radius:10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:0}
-nav button b{font-size:18px;font-weight:400;line-height:1.3}
-nav button.on{color:var(--ac);background:var(--s2)}
+nav{position:fixed;inset:auto 10px calc(10px + env(safe-area-inset-bottom)) 10px;z-index:6;max-width:580px;margin:0 auto;background:color-mix(in srgb,var(--s1) 88%,transparent);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);
+  display:grid;grid-template-columns:repeat(5,1fr);gap:2px;padding:6px}
+nav button{position:relative;background:none;border:0;color:var(--mu);font:inherit;font-size:11px;font-weight:600;padding:7px 0 6px;border-radius:16px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;transition:color .15s,background .15s}
+nav button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:transform .2s}
+nav button.on{color:var(--ac);background:linear-gradient(180deg,#f0b4292b,#f0b42910)}
+nav button.on svg{transform:translateY(-1px) scale(1.08)}
+nav button.on::after{content:"";position:absolute;bottom:2px;width:16px;height:3px;border-radius:3px;background:var(--ac)}
 :focus-visible{outline:2px solid var(--ac);outline-offset:2px}
-.card{background:var(--s1);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:12px}
-.card h2{font-size:13px;font-weight:700;margin-bottom:10px;color:var(--tx)}
+.card{background:linear-gradient(180deg,var(--s1),#0f1821);border:1px solid var(--line);border-radius:var(--r);padding:15px;margin-bottom:12px;box-shadow:0 2px 10px #0004}
+.card h2{font-size:13px;font-weight:800;margin-bottom:12px;color:var(--tx);display:flex;align-items:center;gap:8px}
+.card h2::before{content:"";width:4px;height:15px;border-radius:4px;background:linear-gradient(180deg,var(--ac),var(--ac2));flex:none}
 label{display:block;font-size:12px;color:var(--mu);margin:10px 0 4px}
-input,select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;color:var(--tx);font:inherit;padding:10px 12px;min-height:44px}
-input:focus,select:focus{border-color:var(--ac);outline:0}
+input,select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:12px;color:var(--tx);font:inherit;padding:10px 12px;min-height:46px;transition:border-color .15s,box-shadow .15s}
+input:focus,select:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
 input[type=checkbox]{width:20px;height:20px;min-height:0;accent-color:var(--ac)}
 .row{display:flex;gap:10px}.row>*{flex:1;min-width:0}
 .chk{display:flex;align-items:center;gap:8px;margin-top:12px;color:var(--tx);font-size:13px}
-.btn{display:inline-flex;justify-content:center;align-items:center;gap:6px;min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--line);
-  background:var(--s2);color:var(--tx);font:inherit;font-weight:600;cursor:pointer;width:100%}
-.btn.pri{background:var(--ac);border-color:var(--ac);color:var(--ac-ink)}
+.btn{display:inline-flex;justify-content:center;align-items:center;gap:6px;min-height:46px;padding:0 16px;border-radius:12px;border:1px solid var(--line);
+  background:var(--s2);color:var(--tx);font:inherit;font-weight:700;cursor:pointer;width:100%;transition:transform .08s,filter .15s,border-color .15s}
+.btn:hover{border-color:#3a5166}.btn:active{transform:scale(.98)}
+.btn.pri{background:linear-gradient(135deg,var(--ac),var(--ac2));border-color:transparent;color:var(--ac-ink);box-shadow:0 4px 16px #f0b42940}
+.btn.pri:hover{filter:brightness(1.07)}
 .btn.bad{color:var(--bad)}.btn.sm{min-height:36px;padding:0 12px;font-size:12px;width:auto}
 .btn:disabled{opacity:.5;cursor:wait}
 .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.btns .btn{flex:1}
 .hint{font-size:12px;color:var(--mu);margin-top:8px}
-.stat{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.stat div{background:var(--s1);border:1px solid var(--line);border-radius:var(--r);padding:12px}
-.stat span{font-size:12px;color:var(--mu)}.stat strong{display:block;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
-.item{border:1px solid var(--line);background:var(--s1);border-radius:var(--r);margin-bottom:8px;overflow:hidden}
-.item>summary,.item>.head{list-style:none;padding:12px 14px;display:flex;justify-content:space-between;gap:8px;align-items:center;cursor:pointer;min-height:48px}
+.sec{display:flex;justify-content:space-between;align-items:center;margin:4px 2px 10px}
+.sec h2{font-size:14px;font-weight:800;margin:0;display:flex;align-items:center;gap:8px}
+.sec h2::before{content:"";width:4px;height:16px;border-radius:4px;background:linear-gradient(180deg,var(--ac),var(--ac2))}
+.stat{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.stat div{position:relative;overflow:hidden;background:linear-gradient(180deg,var(--s1),#0f1821);border:1px solid var(--line);border-radius:var(--r);padding:10px 10px 8px}
+.stat div::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--c,var(--line));opacity:.9}
+.stat div::after{content:"";position:absolute;inset-inline-end:-18px;top:-18px;width:64px;height:64px;border-radius:50%;background:var(--c,transparent);opacity:.09}
+.stat span{font-size:11px;color:var(--mu);white-space:nowrap}
+.stat strong{display:block;font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--c,var(--tx));line-height:1.3;unicode-bidi:isolate}
+.stat div.wide{grid-column:1/-1;padding:12px 14px;display:flex;align-items:center;justify-content:space-between}
+.stat div.wide strong{font-size:28px}
+.hero{position:relative;overflow:hidden;background:linear-gradient(135deg,#f0b4292e,#ff8a3d14 55%,transparent),var(--s1);border:1px solid #f0b42947;border-radius:20px;padding:16px;margin-bottom:12px;box-shadow:var(--shadow)}
+.hero::after{content:"";position:absolute;inset-inline-start:-40px;bottom:-60px;width:160px;height:160px;border-radius:50%;background:var(--ac);opacity:.07}
+.hero .lb{font-size:12px;color:var(--mu)}
+.hero .big{font-size:32px;font-weight:900;font-variant-numeric:tabular-nums;line-height:1.35;unicode-bidi:isolate}
+.hero .big small{font-size:12px;color:var(--mu);font-weight:500;margin-inline-start:6px}
+.hero .mini{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;position:relative;z-index:1}
+.hero .mini div{background:#0a101699;border:1px solid var(--line);border-radius:12px;padding:8px 6px;text-align:center}
+.hero .mini span{display:block;font-size:11px;color:var(--mu)}
+.hero .mini strong{font-size:15px;font-variant-numeric:tabular-nums;unicode-bidi:isolate}
+.bw{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
+.bw div{display:flex;justify-content:space-between;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:8px 12px;font-size:12px;color:var(--mu)}
+.bw b{font-size:16px;font-variant-numeric:tabular-nums;direction:ltr}
+.bw .d b{color:var(--info)}.bw .u b{color:var(--ok)}
+.item{border:1px solid var(--line);background:linear-gradient(180deg,var(--s1),#0f1821);border-radius:var(--r);margin-bottom:8px;overflow:hidden;transition:border-color .15s}
+.item:hover{border-color:#34495b}
+.item>summary,.item>.head{list-style:none;padding:12px 14px;display:flex;justify-content:space-between;gap:8px;align-items:center;cursor:pointer;min-height:50px}
 .item>summary::-webkit-details-marker{display:none}
+.item>summary .nm{flex:1;min-width:0}.item>summary .sub{flex:none}
+.item>summary::after{content:"";flex:none;width:7px;height:7px;border:solid var(--mu);border-width:0 2px 2px 0;transform:rotate(45deg);transition:transform .2s;margin-inline-start:4px}
+.item[open]>summary::after{transform:rotate(-135deg)}
+.item[open]{border-color:#3a5166}
 .item .body{padding:0 14px 14px;border-top:1px solid var(--line)}
 .nm{font-weight:700;word-break:break-all}.sub{font-size:12px;color:var(--mu)}
 code,.code{display:block;direction:ltr;text-align:left;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--bg);
-  border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:10px 0;word-break:break-all;cursor:copy}
-.bar{height:6px;background:var(--bg);border-radius:9px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;background:var(--ok)}
-.chips{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px}
-.chip{flex:none;border:1px solid var(--line);background:var(--s1);color:var(--mu);border-radius:99px;padding:4px 12px;font:inherit;font-size:12px;cursor:pointer}
-.chip.on{color:var(--ac-ink);background:var(--ac);border-color:var(--ac)}
+  border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin:10px 0;word-break:break-all;cursor:copy}
+.bar{height:8px;background:var(--bg);border:1px solid var(--line);border-radius:9px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;border-radius:9px;background:linear-gradient(90deg,var(--ok),#7be3b3);transition:width .5s}
+.bar i.w{background:linear-gradient(90deg,var(--warn),#ffd079)}.bar i.b{background:linear-gradient(90deg,var(--bad),#ff9d99)}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none}.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;border:1px solid var(--line);background:var(--s1);color:var(--mu);border-radius:99px;padding:5px 14px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.chip:hover{border-color:#3a5166;color:var(--tx)}
+.chip.on{color:var(--ac-ink);background:linear-gradient(135deg,var(--ac),var(--ac2));border-color:transparent}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-inline-end:6px;background:var(--mu)}
-.s-active .dot{background:var(--ok)}.s-on_hold .dot{background:var(--info)}.s-expired .dot,.s-limited .dot{background:var(--bad)}
-img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:10px;background:#fff;padding:6px}
+.s-active .dot{background:var(--ok);box-shadow:0 0 8px var(--ok)}.s-on_hold .dot{background:var(--info)}.s-expired .dot,.s-limited .dot{background:var(--bad)}
+img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:14px;background:#fff;padding:8px}
 .err{color:var(--bad);font-size:12px;margin-top:6px}
-.toast{position:fixed;inset:auto 16px calc(90px + env(safe-area-inset-bottom)) 16px;z-index:9;margin:auto;max-width:420px;background:var(--s2);border:1px solid var(--line);
-  border-radius:12px;padding:10px 14px;text-align:center;box-shadow:0 8px 30px #0008}
+.toast{position:fixed;inset:auto 16px calc(100px + env(safe-area-inset-bottom)) 16px;z-index:9;margin:auto;max-width:420px;background:var(--s2);border:1px solid var(--line);
+  border-radius:14px;padding:11px 14px;text-align:center;box-shadow:var(--shadow)}
 .toast.bad{border-color:var(--bad);color:var(--bad)}
-@media (prefers-reduced-motion:no-preference){.toast{animation:up .18s ease-out}@keyframes up{from{transform:translateY(8px);opacity:0}}}
+@media (prefers-reduced-motion:no-preference){
+  .toast{animation:up .18s ease-out}@keyframes up{from{transform:translateY(8px);opacity:0}}
+  main>*{animation:fade .28s ease-out both}@keyframes fade{from{transform:translateY(6px);opacity:0}}
+  main>*:nth-child(2){animation-delay:.04s}main>*:nth-child(3){animation-delay:.08s}main>*:nth-child(4){animation-delay:.12s}
+}
 </style>
 </head>
 <body>
-<header><h1>پنل مدیریت ربکا</h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:12px"></select><span id="conn" class="pill">…</span></div></header>
+<header><h1><span class="logo">R</span>پنل مدیریت ربکا</h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:12px"></select><span id="conn" class="pill">…</span></div></header>
 <main id="view"></main>
 <nav id="nav"></nav>
 <div id="toast" class="toast" hidden></div>
@@ -119,11 +160,19 @@ async function run(btn, fn) {
 }
 
 const S = { st: null, panel: null, tab: 'create', users: { q: '', status: '', off: 0 }, last: null };
-const TABS = [['create', '➕', 'ساخت'], ['users', '👥', 'کاربران'], ['home', '📊', 'خانه'], ['tpl', '⚙️', 'تمپلت'], ['set', '🔧', 'تنظیمات']];
+const ICONS = {   // آیکون‌های خطی (ثابت و داخلی)
+  create: '<path d="M12 5v14M5 12h14"/>',
+  users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.8c1.8.7 3 2.4 3 5.2"/>',
+  home: '<path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/>',
+  tpl: '<rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="10" height="6" rx="2"/><path d="M18 14v6M15 17h6"/>',
+  set: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/>'
+};
+const svgIcon = k => { const w = document.createElement('span'); w.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`; return w.firstChild; };
+const TABS = [['create', 'create', 'ساخت'], ['users', 'users', 'کاربران'], ['home', 'home', 'خانه'], ['tpl', 'tpl', 'تمپلت'], ['set', 'set', 'تنظیمات']];
 
 function renderNav() {
   const nav = $('#nav'); nav.replaceChildren(...TABS.map(([k, ic, t]) =>
-    h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k), 'aria-label': t }, h('b', {}, ic), t)));
+    h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k), 'aria-label': t }, svgIcon(ic), t)));
 }
 async function go(tab) { S.tab = tab; renderNav(); await ({ create: vCreate, users: vUsers, home: vHome, tpl: vTpl, set: vSet })[tab](); window.scrollTo(0, 0); }
 const hasPanel = () => S.st.panels.some(p => p.ok);
@@ -321,7 +370,7 @@ function userItem(u, parent) {
   const noteI = h('input', { value: u.note || '', placeholder: 'یادداشت (نام مشتری، شماره…)', maxlength: 500 });
   const noteB = h('button', { class: 'btn sm' }, '📝 ذخیره یادداشت');
   noteB.onclick = () => run(noteB, async () => { const r = await api(P + 'note', 'POST', { note: noteI.value }); toast('یادداشت ذخیره شد'); swap(userItem(r, parent)); });
-  body.append(h('div', { class: 'bar' }, h('i', { style: `width:${pct}%` })),
+  body.append(h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
     h('p', { class: 'sub' }, `سرویس: ${svcName} · مصرف: ${gb(u.used)} / ${gb(u.limit)} · اعتبار: ${u.expire_text}`),
     h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
     h('div', { class: 'btns' },
@@ -345,29 +394,32 @@ async function vHome() {
   const mb = b => { let n = +b || 0; const u = ['B', 'K', 'M', 'G', 'T']; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; }
     return (n >= 10 || i === 0 ? Math.round(n) : +n.toFixed(1)) + u[i]; };                // فشرده: 23M ، 1.5G
   const fa = n => (+n || 0).toLocaleString('fa-IR');
-  const usersBox = h('div', { class: 'stat' }), sysBox = h('div', { class: 'card' }), saleBox = h('div', { class: 'stat' }), extraBox = h('div');
-  const cell = (t, v, sub) => h('div', {}, h('span', {}, t), h('strong', { dir: 'ltr', style: 'text-align:right' }, v), sub ? h('span', {}, sub) : null);
+  const usersBox = h('div', { class: 'stat' }), sysBox = h('div', { class: 'card' }), saleBox = h('div'), extraBox = h('div');
+  const cell = (t, v, sub, c, cls) => h('div', { class: cls || null, style: c ? `--c:${c}` : null }, h('span', {}, t), h('strong', { dir: 'ltr', style: 'text-align:right' }, v), sub ? h('span', {}, sub) : null);
   const meter = (label, pct, text) => h('div', { style: 'margin-bottom:10px' }, h('div', { style: 'display:flex;justify-content:space-between;font-size:13px' }, h('span', {}, label), h('span', { dir: 'ltr' }, text)),
-    h('div', { class: 'bar' }, h('i', { style: `width:${Math.min(100, Math.max(0, pct))}%;${pct > 85 ? 'background:var(--bad)' : ''}` })));
+    h('div', { class: 'bar' }, h('i', { class: pct > 85 ? 'b' : pct > 65 ? 'w' : '', style: `width:${Math.min(100, Math.max(0, pct))}%` })));
   const loadStats = async () => {
     try {
       const s = await api('/stats');
-      const items = [['کل کاربران', s.total_user], ['فعال', s.users_active], ['On-Hold', s.users_on_hold], ['آنلاین', s.online_users],
-        ['منقضی', s.users_expired], ['محدود‌شده', s.users_limited], ['غیرفعال', s.users_disabled]].filter(([, v]) => v != null);
-      usersBox.replaceChildren(...items.map(([t, v]) => cell(t, sp(v))));
+      const items = [['👥 کل کاربران', s.total_user, 'var(--ac)', 'wide'], ['🟢 فعال', s.users_active, 'var(--ok)'], ['🌐 آنلاین', s.online_users, 'var(--info)'],
+        ['⏳ On-Hold', s.users_on_hold, 'var(--info)'], ['🔴 منقضی', s.users_expired, 'var(--bad)'], ['🟠 محدود‌شده', s.users_limited, 'var(--warn)'],
+        ['⚫ غیرفعال', s.users_disabled, 'var(--mu)']].filter(([, v]) => v != null);
+      usersBox.replaceChildren(...items.map(([t, v, c, w]) => cell(t, sp(v), null, c, w)));
       const ramP = s.mem_total ? s.mem_used * 100 / s.mem_total : 0;
-      sysBox.replaceChildren(
+      sysBox.replaceChildren(h('h2', {}, '🖥 منابع سرور'),
         meter('CPU', s.cpu_usage || 0, Math.round(s.cpu_usage || 0) + '%'),
         meter('RAM', ramP, `${mb(s.mem_used)} / ${mb(s.mem_total)}`),
-        h('div', { style: 'display:flex;justify-content:space-between;font-size:13px' }, h('span', {}, '🌐 پهنای باند'),
-          h('span', { dir: 'ltr' }, `↓ ${mb(s.incoming_bandwidth)}   ↑ ${mb(s.outgoing_bandwidth)}`)));
+        h('div', { class: 'bw' }, h('div', { class: 'd' }, h('span', {}, '↓ دانلود'), h('b', {}, mb(s.incoming_bandwidth))),
+          h('div', { class: 'u' }, h('span', {}, '↑ آپلود'), h('b', {}, mb(s.outgoing_bandwidth)))));
     } catch (e) { usersBox.replaceChildren(h('p', { class: 'err' }, e.message)); sysBox.replaceChildren(); }
   };
   const loadSales = async () => {
     try {
       const r = await api('/report/summary?kind=today');
-      saleBox.replaceChildren(cell('💰 فروش امروز', fa(r.income), 'تومان'), cell('✅ سود تخمینی', fa(r.profit), 'تومان'),
-        cell('➕ ساخت', fa(r.new)), cell('🔄 تمدید/ریست', fa(r.renew)));
+      const mini = (l, v, c) => h('div', {}, h('span', {}, l), h('strong', { dir: 'ltr', style: c ? `color:${c}` : '' }, v));
+      saleBox.replaceChildren(h('div', { class: 'hero' }, h('div', { class: 'lb' }, '💰 فروش امروز'),
+        h('div', { class: 'big', dir: 'ltr', style: 'text-align:right' }, fa(r.income), h('small', {}, 'تومان')),
+        h('div', { class: 'mini' }, mini('✅ سود تخمینی', fa(r.profit), 'var(--ok)'), mini('➕ ساخت', fa(r.new)), mini('🔄 تمدید', fa(r.renew)))));
       extraBox.replaceChildren(...(r.extra.length ? [h('div', { class: 'card' }, h('h2', {}, '📐 حجم‌های خارج از لیست قیمت'),
         h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'با ثبت قیمت، از گزارش بعدی جزو فروش‌های لیست حساب می‌شود.'),
         ...r.extra.map(x => { const b = h('button', { class: 'btn sm pri', type: 'button', style: 'flex:none' }, '➕ ثبت قیمت');
@@ -397,8 +449,8 @@ async function vHome() {
     h('div', { class: 'row', style: 'margin-bottom:8px;align-items:center' }, dFrom, dTo, h('button', { class: 'btn sm', onclick: pickRange }, 'نمایش بازه')),
     rep, h('div', { class: 'btns' }, sendBtn, detBtn), h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
   loadStats(); loadSales(); loadRep('today');
-  mount(h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin:0 2px 8px' }, h('h2', { style: 'font-size:13px;margin:0' }, '📊 وضعیت پنل'), refB),
-    usersBox, h('div', { style: 'height:10px' }), sysBox, saleBox, h('div', { style: 'height:10px' }), extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
+  mount(saleBox, h('div', { class: 'sec' }, h('h2', {}, 'وضعیت پنل'), refB),
+    usersBox, sysBox, extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const clean = h('button', { class: 'btn' }, '🧹 پاکسازی منقضی‌ها'); const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   clean.onclick = () => run(clean, async () => {
     const { count } = await api('/cleanup?dry=true', 'POST');
@@ -437,11 +489,11 @@ function vTpl() {
           mk('🗑', async () => { if (!confirm(`«${n}» حذف شود؟`)) return; await api('/templates/delete', 'POST', { name: n }); await reload(); }, 'bad'))));
   };
   const ents = Object.entries(st.templates), sing = ents.filter(([, t]) => t.kind !== 'group').map(mkItem), grp = ents.filter(([, t]) => t.kind === 'group').map(mkItem);
-  const sec = t => h('h2', { style: 'font-size:13px;margin:14px 2px 8px' }, t);
+  const sec = t => h('div', { class: 'sec', style: 'margin-top:16px' }, h('h2', {}, t));
   // افزودن سریع
   const name = h('input', { placeholder: 'نام (مثلاً ۶۰ گیگ دوماهه)', maxlength: 40 }), g = num(60, 'GB', 'any'), d = num(60, 'روز'), m = modeSel('on_hold'), kd = kindSel('single');
   const add = mk('➕ افزودن تمپلت', async () => { if (!name.value.trim()) throw new Error('نام را وارد کنید.'); await api('/templates', 'POST', { name: name.value.trim(), old_name: null, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value }); toast('اضافه شد'); await reload(); }, 'pri');
-  mount(h('h2', { style: 'font-size:13px;margin:0 2px 8px' }, `تمپلت‌ها (${ents.length}) — برای ویرایش روی هر مورد بزنید`),
+  mount(h('p', { class: 'hint', style: 'margin:0 2px' }, `${ents.length} تمپلت — برای ویرایش روی هر مورد بزنید`),
     sec(`👤 تکی — سرویس ms (${sing.length})`), ...(sing.length ? sing : [h('p', { class: 'hint' }, 'تمپلت تکی ندارید.')]),
     sec(`👥 همکاری — سرویس hamkari (${grp.length})`), ...(grp.length ? grp : [h('p', { class: 'hint' }, 'تمپلت همکاری ندارید؛ ساخت گروهی از تمپلت‌های تکی استفاده می‌کند.')]),
     h('div', { class: 'card' }, h('h2', {}, 'تمپلت جدید'), field('نام', name), field('نوع', kd), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m), h('p', { class: 'hint' }, '۰ یعنی نامحدود.'), h('div', { class: 'btns' }, add)));
@@ -486,6 +538,9 @@ async function vSet() {
   let priceCard = h('div', { class: 'card' }, h('h2', {}, '💰 قیمت‌ها'), h('p', { class: 'err' }, 'خطا در دریافت تنظیمات فروش'));
   if (sc) {
     const ham = i(sc.hamkari_per_gb, '3000', 'number'), buy = i(sc.buy_per_tb, '750000', 'number'), mul = i(sc.hamkari_usage_multiplier, '1.5', 'number');
+    const mulOn = h('input', { type: 'checkbox', id: 'mulOn' }); mulOn.checked = sc.hamkari_multiplier_enabled !== false;
+    const mulBox = h('label', { class: 'hint', style: 'display:flex;gap:6px;align-items:center;margin:4px 0' }, mulOn, 'اعمال ضریب (خاموش = بدون ضریب، عدد حفظ می‌شود)');
+    const syncMul = () => { mul.disabled = !mulOn.checked; mul.style.opacity = mulOn.checked ? 1 : .5; }; mulOn.addEventListener('change', syncMul); syncMul();
     const svc = i(sc.hamkari_service_names, 'hamkari'), ign = i(sc.ignore_service_names, 'tes, test');
     const rows = h('div', {});
     const fa = n => (+n || 0).toLocaleString('fa-IR');
@@ -504,7 +559,7 @@ async function vSet() {
     const saveS = h('button', { class: 'btn pri' }, 'ذخیره قیمت‌ها');
     saveS.onclick = () => run(saveS, async () => {
       const single_prices = [...rows.children].map(r => ({ gb: +r._f.g.value, months: +r._f.m.value, price: +r._f.pr.value })).filter(p => p.gb > 0 && p.months > 0);
-      await api('/sales/settings', 'POST', { hamkari_per_gb: +ham.value, buy_per_tb: +buy.value, hamkari_usage_multiplier: +mul.value, hamkari_service_names: svc.value, ignore_service_names: ign.value, single_prices });
+      await api('/sales/settings', 'POST', { hamkari_per_gb: +ham.value, buy_per_tb: +buy.value, hamkari_usage_multiplier: +mul.value || 1.5, hamkari_multiplier_enabled: mulOn.checked, hamkari_service_names: svc.value, ignore_service_names: ign.value, single_prices });
       toast('✅ قیمت‌ها ذخیره شد (از گزارش بعدی اعمال می‌شود)'); vSet();
     });
     priceCard = h('div', { class: 'card' }, h('h2', {}, '💰 قیمت‌ها و لیست فروش'),
@@ -513,7 +568,7 @@ async function vSet() {
       h('p', { class: 'hint' }, `حجم‌های خارج از لیست روی سرویس MS به‌نرخ گیگی ${fa(sc.fallback_rate)} تومان (از پلن ۳۰ گیگ یک‌ماهه) حساب می‌شود.`),
       h('div', { class: 'btns', style: 'margin-top:6px' }, addB),
       h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, '🧾 هزینه و سرویس‌ها'),
-      h('div', { class: 'row' }, field('خرید هر ترابایت', buy), field('ضریب مصرف همکاری', mul)),
+      h('div', { class: 'row' }, field('خرید هر ترابایت', buy), field('ضریب مصرف همکاری', mul)), mulBox,
       field('سرویس‌های نادیده (تست؛ با کاما)', ign), h('div', { class: 'btns' }, saveS));
   }
   // بکاپ و بازیابی
