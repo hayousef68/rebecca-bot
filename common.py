@@ -743,6 +743,69 @@ async def apply_user_edit(api, username: str, gb, days, add_gb=None, add_days=No
     return await api.request("PUT", api.upath(username), json=p)
 
 
+async def apply_user_save(api, username: str, gb=None, days=None, service_id=None, note=None):
+    """ذخیره‌ی یک‌جای تغییرات ویرایش. فقط مقدارهایی که None نیستند اعمال می‌شوند.
+    gb = حجم کل جدید (۰=نامحدود) ، days = روز از «الان» (۰=نامحدود؛ برای On-Hold مدت پس از اولین اتصال)."""
+    ph = api.upath(username)
+    u = await api.request("GET", ph)
+    p: dict = {}
+    if gb is not None:
+        p["data_limit"] = int(gb * GB) if gb > 0 else 0
+    if days is not None:
+        if u.get("status") == "on_hold":
+            p["on_hold_expire_duration"] = days * 86400 if days > 0 else 30 * 86400
+        else:
+            p["expire"] = int(time.time()) + days * 86400 if days > 0 else 0
+    if service_id is not None and service_id != u.get("service_id"):
+        p["service_id"] = int(service_id)
+    if note is not None and note != (u.get("note") or ""):
+        p["note"] = note[:500]
+    if not p:
+        return u
+    if ("data_limit" in p or "expire" in p) and u.get("status") in ("expired", "limited"):
+        p["status"] = "active"
+    res = await api.request("PUT", ph, json=p)
+    if "service_id" in p:
+        got = (res if isinstance(res, dict) and "service_id" in res else await api.request("GET", ph)).get("service_id")
+        if got is not None and int(got) != p["service_id"]:
+            raise RebeccaError("پنل تغییر سرویس را اعمال نکرد (سرویس همچنان قبلی است).")
+    return res
+
+
+def next_plan_view(u: dict) -> dict | None:
+    """پلن بعدی (شارژ خودکار) کاربر به‌صورت {gb, days, add_remaining} یا None."""
+    np_ = u.get("next_plan")
+    if not isinstance(np_, dict):
+        return None
+    dl, ex = int(np_.get("data_limit") or 0), int(np_.get("expire") or 0)
+    if not dl and not ex:
+        return None
+    return {"gb": round(dl / GB, 2), "days": ex // 86400, "add_remaining": bool(np_.get("add_remaining_traffic"))}
+
+
+async def set_next_plan(api, username: str, enabled: bool, gb=0.0, days=0, add_remaining=False):
+    """تنظیم/حذف «پلن بعدی»: بعد از اتمام حجم یا زمان، یک‌بار این حجم و مدت به کاربر اضافه می‌شود.
+    بعد از نوشتن، دوباره می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
+    ph = api.upath(username)
+    if enabled:
+        if not gb and not days:
+            raise RebeccaError("حجم یا مدت پلن بعدی را وارد کنید.")
+        want = {"data_limit": int(gb * GB) if gb > 0 else 0, "expire": int(days) * 86400 if days > 0 else 0,
+                "add_remaining_traffic": bool(add_remaining)}
+        await api.request("PUT", ph, json={"next_plan": want})
+        after = await api.request("GET", ph)
+        got = next_plan_view(after)
+        if not got:
+            raise RebeccaError("پنل پلن بعدی را ذخیره نکرد؛ احتمالاً این نسخه‌ی ربکا فیلد next_plan را پشتیبانی نمی‌کند.")
+        return after
+    for body in (None, {"data_limit": 0, "expire": 0, "add_remaining_traffic": False}):
+        await api.request("PUT", ph, json={"next_plan": body})
+        after = await api.request("GET", ph)
+        if not next_plan_view(after):
+            return after
+    raise RebeccaError("پنل حذف پلن بعدی را اعمال نکرد.")
+
+
 async def set_service(api, username: str, service_id: int):
     """تغییر سرویس کاربر؛ بعد از تغییر وضعیت را می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
     p = api.upath(username)
