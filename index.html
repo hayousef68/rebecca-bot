@@ -152,7 +152,15 @@ async function vCreate() {
   try { services = (await api('/services')).services; } catch (e) { toast(e.message, true); }
   const psel = h('select', {}, st.panels.map(p => h('option', { value: p.id, selected: p.id === S.panel }, p.name + (p.ok ? '' : ' (ناقص)'))));
   psel.onchange = () => setPanel(psel.value);
-  const tpl = h('select', {}, Object.entries(st.templates).map(([n, t]) => h('option', { value: n, selected: n === st.active }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
+  const tpl = h('select', {});
+  const kindOf = m => m === 'group' ? 'group' : 'single';
+  const fillTplOpts = m => {                                   // فقط تمپلت‌های همین نوع (اگر نبود همه)
+    const k = kindOf(m); let ents = Object.entries(st.templates).filter(([, t]) => (t.kind || 'single') === k); if (!ents.length) ents = Object.entries(st.templates);
+    const def = k === 'group' ? st.active_group : st.active;
+    tpl.replaceChildren(...ents.map(([n, t]) => h('option', { value: n, selected: n === def }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
+    if (!ents.some(([n]) => n === def) && tpl.options.length) tpl.selectedIndex = 0;
+  };
+  fillTplOpts('single');
   const ltr = { autocapitalize: 'none', autocomplete: 'off', dir: 'ltr', maxlength: 32 };
   const base = h('input', { ...ltr, value: st.default_prefix, placeholder: 'MS_' });
   const start = h('input', { type: 'number', inputmode: 'numeric', min: 0, dir: 'ltr', placeholder: '…' });
@@ -162,7 +170,7 @@ async function vCreate() {
   const cd = h('input', { type: 'number', min: 0, dir: 'ltr', placeholder: 'روز (0=∞)' });
   const cm = h('select', {}, h('option', { value: 'on_hold' }, '⏳ از اولین اتصال (On-Hold)'), h('option', { value: 'active' }, '▶️ از همین حالا (Active)'));
   const fillTpl = () => { const t = st.templates[tpl.value]; if (t) { cg.value = t.gb; cd.value = t.days; cm.value = t.mode; } };
-  tpl.addEventListener('change', fillTpl); fillTpl();
+  tpl.addEventListener('change', fillTpl);
   const svc = h('select', {}, services.map(s => h('option', { value: s.id }, s.name)));
   // تکی ← ms ، گروهی ← hamkari (اگر کاربر دستی عوض کند، دیگر خودکار تغییر نمی‌کند)
   const hamNames = (st.ham_names && st.ham_names.length ? st.ham_names : ['hamkari']).map(x => x.toLowerCase());
@@ -201,10 +209,11 @@ async function vCreate() {
     } catch (e) { if (my === seq) last.textContent = 'تشخیص خودکار ممکن نشد: ' + e.message; }
     upd();
   };
-  chipS.onclick = () => { mode = S.cmode = 'single'; if (!svcTouched) autoSvc(mode); upd(); }; chipG.onclick = () => { mode = S.cmode = 'group'; if (!svcTouched) autoSvc(mode); upd(); };
+  const setMode = m => { mode = S.cmode = m; fillTplOpts(m); fillTpl(); svcTouched = false; autoSvc(m); upd(); };
+  chipS.onclick = () => setMode('single'); chipG.onclick = () => setMode('group');
   base.addEventListener('input', debounce(() => { upd(); if (/^[A-Za-z0-9_]{1,28}$/.test(base.value.trim())) detect(base.value.trim(), true); }, 450));
   [start, count, one].forEach(i => i.addEventListener('input', upd));
-  [one, cg, cd, base, start, count].forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go_.click(); } })); autoSvc(mode); upd(); detect(st.default_prefix, true);
+  [one, cg, cd, base, start, count].forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go_.click(); } })); fillTpl(); autoSvc(mode); upd(); detect(st.default_prefix, true);
   const go_ = h('button', { class: 'btn pri' }, '⚡ ساخت اکانت');
   go_.onclick = () => run(go_, async () => {
     if (!svc.value) throw new Error('سرویسی برای این پنل پیدا نشد؛ اتصال پنل را در تنظیمات بررسی کنید.');
@@ -412,25 +421,30 @@ function vTpl() {
   const mk = (label, fn, cls = '') => { const b = h('button', { class: 'btn sm ' + cls, type: 'button' }, label); b.onclick = () => run(b, fn); return b; };
   const num = (v, p, step) => h('input', { type: 'number', min: 0, step: step || 1, value: v, placeholder: p, dir: 'ltr' });
   const modeSel = v => h('select', {}, h('option', { value: 'on_hold', selected: v === 'on_hold' }, 'On-Hold'), h('option', { value: 'active', selected: v === 'active' }, 'Active'));
+  const kindSel = v => h('select', {}, h('option', { value: 'single', selected: v !== 'group' }, '👤 تکی ← سرویس ms'), h('option', { value: 'group', selected: v === 'group' }, '👥 همکاری ← سرویس hamkari'));
   const reload = async () => { await refreshState(); vTpl(); };
   // هر تمپلت یک ردیف قابل ویرایش درجا
-  const items = Object.entries(st.templates).map(([n, t]) => {
-    const on = n === st.active;
-    const nm = h('input', { value: n, maxlength: 40 }), g = num(t.gb, 'GB', 'any'), d = num(t.days, 'روز'), m = modeSel(t.mode);
+  const mkItem = ([n, t]) => {
+    const isG = t.kind === 'group', on = n === (isG ? st.active_group : st.active);
+    const nm = h('input', { value: n, maxlength: 40 }), g = num(t.gb, 'GB', 'any'), d = num(t.days, 'روز'), m = modeSel(t.mode), kd = kindSel(t.kind);
     return h('details', { class: 'item', style: on ? 'border-color:var(--ac)' : '' },
       h('summary', {}, h('span', { class: 'nm' }, (on ? '✅ ' : '') + n), h('span', { class: 'sub' }, `${t.gb || '∞'}GB · ${t.days || '∞'}d · ${t.mode === 'active' ? 'Active' : 'On-Hold'}`)),
-      h('div', { class: 'body', style: 'padding-top:12px' }, field('نام', nm), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m),
+      h('div', { class: 'body', style: 'padding-top:12px' }, field('نام', nm), field('نوع (تعیین‌کننده‌ی سرویس)', kd), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m),
         h('div', { class: 'btns' },
-          mk('💾 ذخیره', async () => { await api('/templates', 'POST', { name: nm.value.trim(), old_name: n, gb: +g.value, days: +d.value, mode: m.value }); toast('ذخیره شد'); await reload(); }, 'pri'),
-          on ? null : mk('✅ فعال', async () => { await api('/templates/active', 'POST', { name: n }); await reload(); }),
-          mk('📄 کپی', async () => { await api('/templates', 'POST', { name: (n + ' کپی').slice(0, 40), old_name: null, gb: +g.value, days: +d.value, mode: m.value }); await reload(); }),
+          mk('💾 ذخیره', async () => { await api('/templates', 'POST', { name: nm.value.trim(), old_name: n, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value }); toast('ذخیره شد'); await reload(); }, 'pri'),
+          on ? null : mk('✅ پیش‌فرض این نوع', async () => { await api('/templates/active', 'POST', { name: n }); await reload(); }),
+          mk('📄 کپی', async () => { await api('/templates', 'POST', { name: (n + ' کپی').slice(0, 40), old_name: null, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value }); await reload(); }),
           mk('🗑', async () => { if (!confirm(`«${n}» حذف شود؟`)) return; await api('/templates/delete', 'POST', { name: n }); await reload(); }, 'bad'))));
-  });
+  };
+  const ents = Object.entries(st.templates), sing = ents.filter(([, t]) => t.kind !== 'group').map(mkItem), grp = ents.filter(([, t]) => t.kind === 'group').map(mkItem);
+  const sec = t => h('h2', { style: 'font-size:13px;margin:14px 2px 8px' }, t);
   // افزودن سریع
-  const name = h('input', { placeholder: 'نام (مثلاً ۶۰ گیگ دوماهه)', maxlength: 40 }), g = num(60, 'GB', 'any'), d = num(60, 'روز'), m = modeSel('on_hold');
-  const add = mk('➕ افزودن تمپلت', async () => { if (!name.value.trim()) throw new Error('نام را وارد کنید.'); await api('/templates', 'POST', { name: name.value.trim(), old_name: null, gb: +g.value, days: +d.value, mode: m.value }); toast('اضافه شد'); await reload(); }, 'pri');
-  mount(h('h2', { style: 'font-size:13px;margin:0 2px 8px' }, `تمپلت‌ها (${items.length}) — برای ویرایش روی هر مورد بزنید`), ...items,
-    h('div', { class: 'card' }, h('h2', {}, 'تمپلت جدید'), field('نام', name), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m), h('p', { class: 'hint' }, '۰ یعنی نامحدود.'), h('div', { class: 'btns' }, add)));
+  const name = h('input', { placeholder: 'نام (مثلاً ۶۰ گیگ دوماهه)', maxlength: 40 }), g = num(60, 'GB', 'any'), d = num(60, 'روز'), m = modeSel('on_hold'), kd = kindSel('single');
+  const add = mk('➕ افزودن تمپلت', async () => { if (!name.value.trim()) throw new Error('نام را وارد کنید.'); await api('/templates', 'POST', { name: name.value.trim(), old_name: null, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value }); toast('اضافه شد'); await reload(); }, 'pri');
+  mount(h('h2', { style: 'font-size:13px;margin:0 2px 8px' }, `تمپلت‌ها (${ents.length}) — برای ویرایش روی هر مورد بزنید`),
+    sec(`👤 تکی — سرویس ms (${sing.length})`), ...(sing.length ? sing : [h('p', { class: 'hint' }, 'تمپلت تکی ندارید.')]),
+    sec(`👥 همکاری — سرویس hamkari (${grp.length})`), ...(grp.length ? grp : [h('p', { class: 'hint' }, 'تمپلت همکاری ندارید؛ ساخت گروهی از تمپلت‌های تکی استفاده می‌کند.')]),
+    h('div', { class: 'card' }, h('h2', {}, 'تمپلت جدید'), field('نام', name), field('نوع', kd), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m), h('p', { class: 'hint' }, '۰ یعنی نامحدود.'), h('div', { class: 'btns' }, add)));
 }
 
 /* ───────── تنظیمات ───────── */
