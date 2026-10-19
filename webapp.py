@@ -28,6 +28,7 @@ LOGIN = os.path.join(C.BASE_DIR, "login.html")
 _html_cache = {"mtime": 0.0, "data": ""}
 _login_cache = {"mtime": 0.0, "data": ""}
 COOKIE = "rb_session"
+COOKIE_REP = "rb_rep"
 _bg: set = set()
 _bot = {"token": None, "obj": None}
 
@@ -114,6 +115,9 @@ def page_guard(request: Request):
     tok = request.cookies.get(COOKIE, "")
     if C.web_configured() and tok and C.check_session(tok):
         return None
+    rt = request.cookies.get(COOKIE_REP, "")
+    if C.web_configured() and rt and C.check_rep_session(rt):
+        return None
     return RedirectResponse("/login", status_code=303)
 
 
@@ -162,8 +166,8 @@ async def index(request: Request):
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    tok = request.cookies.get(COOKIE, "")
-    if C.web_configured() and tok and C.check_session(tok):
+    tok, rt = request.cookies.get(COOKIE, ""), request.cookies.get(COOKIE_REP, "")
+    if C.web_configured() and ((tok and C.check_session(tok)) or (rt and C.check_rep_session(rt))):
         return RedirectResponse("/", status_code=303)
     return HTMLResponse(_read_cached(LOGIN, _login_cache), headers=_PAGE_HEADERS)
 
@@ -184,16 +188,28 @@ async def login(r: LoginReq, request: Request):
     recent = [t for t in _fails.get(ip, []) if now - t < 300]
     if len(recent) >= 8:
         raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
-    if not C.check_web_login(r.user.strip(), r.password):
+    user = r.user.strip()
+    secure = request.url.scheme == "https"
+    if not C.check_web_login(user, r.password):
+        rp = await asyncio.to_thread(C.check_rep_login, user, r.password)      # شاید نماینده باشد
+        if rp:
+            if rp[1]:
+                raise HTTPException(403, "حساب شما مسدود شده است؛ با مدیر تماس بگیرید.")
+            _fails.pop(ip, None)
+            tok, ttl = C.make_rep_session(rp[0])
+            resp = JSONResponse({"ok": True, "role": "rep"})
+            resp.set_cookie(COOKIE_REP, tok, max_age=ttl, httponly=True, samesite="strict", secure=secure, path="/")
+            resp.delete_cookie(COOKIE, path="/")
+            return resp
         recent.append(now)
         _fails[ip] = recent
         await asyncio.sleep(0.6)   # کند کردن حدس رمز
         raise HTTPException(401, "نام کاربری یا رمز اشتباه است.")
     _fails.pop(ip, None)
-    tok, ttl = C.make_session(r.user.strip(), r.remember)
-    resp = JSONResponse({"ok": True})
-    resp.set_cookie(COOKIE, tok, max_age=ttl, httponly=True, samesite="strict",
-                    secure=request.url.scheme == "https", path="/")
+    tok, ttl = C.make_session(user, r.remember)
+    resp = JSONResponse({"ok": True, "role": "admin"})
+    resp.set_cookie(COOKIE, tok, max_age=ttl, httponly=True, samesite="strict", secure=secure, path="/")
+    resp.delete_cookie(COOKIE_REP, path="/")
     return resp
 
 
@@ -201,7 +217,20 @@ async def login(r: LoginReq, request: Request):
 async def logout():
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(COOKIE, path="/")
+    resp.delete_cookie(COOKIE_REP, path="/")
     return resp
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    """نقش نشست فعلی: admin یا rep (برای انتخاب رابط)."""
+    tok, rt = request.cookies.get(COOKIE, ""), request.cookies.get(COOKIE_REP, "")
+    if tok and C.check_session(tok):
+        return {"role": "admin"}
+    rr = C.check_rep_session(rt) if rt else None
+    if rr:
+        return {"role": "rep", "name": rr[1]["name"], "label": rr[1]["label"]}
+    raise HTTPException(401, "نشست شما تمام شده؛ دوباره وارد شوید.")
 
 
 def _panels_view(cfg):
@@ -375,6 +404,7 @@ class CreateReq(BaseModel):
     gb: float | None = Field(default=None, ge=0, le=100000)      # جایگزین حجم تمپلت (تکی)
     days: int | None = Field(default=None, ge=0, le=36500)       # جایگزین مدت تمپلت
     mode: str | None = Field(default=None, pattern="^(on_hold|active)$")
+    rep_id: str | None = Field(default=None, max_length=20)          # نمایندگی که اکانت‌ها به لیستش اضافه می‌شوند
 
 
 def _tg_bot(token: str):
@@ -410,6 +440,10 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
         tpl["mode"] = req.mode
     names = C.make_names(req.base, req.start, req.count, cfg["max_batch"])
     results, failed = await C.create_users(api, names, tpl, req.service_id, concurrency=6)
+    if req.rep_id and results:
+        if req.rep_id not in cfg["reps"]:
+            raise HTTPException(404, "نماینده پیدا نشد.")
+        await asyncio.to_thread(C.assign_users, req.rep_id, api.pid, [x["username"] for x in results])
     tg = "off"
     if req.telegram and results:
         if cfg["bot_token"] and cfg["admin_ids"]:
@@ -436,6 +470,135 @@ async def _safe_send(cfg, results, header):
         await C.send_results(_tg_bot(cfg["bot_token"]), cfg["admin_ids"][0], results, header, cfg["max_qr"])
     except Exception:  # noqa: BLE001
         log.exception("ارسال به تلگرام ناموفق بود")
+
+
+# ───────────────────────────── نماینده‌ها ─────────────────────────────
+def rep_guard(request: Request):
+    """فقط نماینده‌ی واردشده و غیرمسدود؛ کوکی ادمین به این مسیرها دسترسی نمی‌دهد."""
+    tok = request.cookies.get(COOKIE_REP, "")
+    r = C.check_rep_session(tok) if tok else None
+    if not r:
+        raise HTTPException(401, "نشست شما تمام شده؛ دوباره وارد شوید.")
+    if request.method not in ("GET", "HEAD") and request.headers.get("x-requested-with") != "rebecca":
+        raise HTTPException(403, "درخواست نامعتبر.")
+    return r
+
+
+_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def _slim_rep(u: dict, api) -> dict:
+    """فقط چیزهایی که نماینده باید ببیند (بدون یادداشت، سرویس، پلن بعدی و ...)."""
+    d = _slim(u, api)
+    return {k: d[k] for k in ("username", "status", "used", "limit", "days_left", "unlimited_days", "expire_text", "sub")}
+
+
+@app.get("/api/rep/users")
+async def rep_users(offset: int = Query(0, ge=0, le=100000), limit: int = Query(20, ge=1, le=50), search: str = Query("", max_length=64), rep=Depends(rep_guard)):
+    rid = rep[0]
+    cfg = load_config()
+    q = search.translate(_FA_DIGITS).strip().lstrip("@").lower()
+    items = [(pid, u) for pid, m in cfg["rep_users"].items() for u, r in m.items() if r == rid and (not q or q in u.lower())]
+    items.sort(key=lambda x: C._natkey(x[1]))
+    page = items[offset:offset + limit]
+    sem = asyncio.Semaphore(6)
+
+    async def one(pid, u):
+        async with sem:
+            try:
+                api = get_api(pid)
+                if not api.is_configured():
+                    return None
+                return _slim_rep(await api.request("GET", api.upath(u)), api)
+            except C.RebeccaError:        # حذف‌شده از پنل یا خطای موقت
+                return None
+    res = [x for x in await asyncio.gather(*(one(p, u) for p, u in page)) if x]
+    return {"users": res, "total": len(items), "missing": len(page) - len(res)}
+
+
+@app.get("/api/rep/qr")
+async def rep_qr(text: str = Query(..., min_length=1, max_length=2000), rep=Depends(rep_guard)):
+    png = await asyncio.to_thread(C.make_qr_png, text)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+
+class RepCreateReq(BaseModel):
+    name: str = Field(min_length=3, max_length=32)
+    password: str = Field(default="", max_length=64)
+    label: str = Field(default="", max_length=60)
+
+
+class RepPwReq(BaseModel):
+    password: str = Field(default="", max_length=64)
+
+
+class RepBlockReq(BaseModel):
+    blocked: bool
+
+
+class RepSpecReq(BaseModel):
+    prefix: str = Field(default="", max_length=28)
+    start: int | None = Field(default=None, ge=0, le=10 ** 9)
+    end: int | None = Field(default=None, ge=0, le=10 ** 9)
+    names: str = Field(default="", max_length=20000)
+
+
+def _rep_pid(panel: str | None) -> str:
+    cfg = load_config()
+    pid = panel or cfg["active_panel"]
+    if not get_panel(cfg, pid):
+        raise HTTPException(404, "پنل پیدا نشد.")
+    return pid
+
+
+@app.get("/api/reps", dependencies=[Depends(guard)])
+async def reps_list():
+    cfg = load_config()
+    cnt: dict[str, int] = {}
+    for m in cfg["rep_users"].values():
+        for r in m.values():
+            cnt[r] = cnt.get(r, 0) + 1
+    return {"reps": [{"id": i, "name": r["name"], "label": r["label"], "blocked": r["blocked"], "count": cnt.get(i, 0), "created": r["created"]}
+                     for i, r in cfg["reps"].items()]}
+
+
+@app.post("/api/reps", dependencies=[Depends(guard)])
+async def reps_create(r: RepCreateReq):
+    return await asyncio.to_thread(C.create_rep, r.name, r.password, r.label)
+
+
+@app.post("/api/reps/{rid}/password", dependencies=[Depends(guard)])
+async def reps_password(rid: str, r: RepPwReq):
+    return {"password": await asyncio.to_thread(C.reset_rep_password, rid, r.password)}
+
+
+@app.post("/api/reps/{rid}/block", dependencies=[Depends(guard)])
+async def reps_block(rid: str, r: RepBlockReq):
+    await asyncio.to_thread(C.set_rep_blocked, rid, r.blocked)
+    return {"ok": True}
+
+
+@app.post("/api/reps/{rid}/delete", dependencies=[Depends(guard)])
+async def reps_delete(rid: str):
+    await asyncio.to_thread(C.delete_rep, rid)
+    return {"ok": True}
+
+
+@app.post("/api/reps/{rid}/assign", dependencies=[Depends(guard)])
+async def reps_assign(rid: str, r: RepSpecReq, panel: str | None = Query(None, max_length=20)):
+    names = C.parse_user_spec(r.prefix, r.start, r.end, r.names)
+    if not names:
+        raise HTTPException(400, "نام کاربری یا بازه را وارد کنید.")
+    n = await asyncio.to_thread(C.assign_users, rid, _rep_pid(panel), names)
+    return {"added": n}
+
+
+@app.post("/api/reps/{rid}/unassign", dependencies=[Depends(guard)])
+async def reps_unassign(rid: str, r: RepSpecReq, panel: str | None = Query(None, max_length=20)):
+    names = C.parse_user_spec(r.prefix, r.start, r.end, r.names)
+    if not names:
+        raise HTTPException(400, "نام کاربری یا بازه را وارد کنید.")
+    return {"removed": await asyncio.to_thread(C.unassign_users, rid, _rep_pid(panel), names)}
 
 
 # ───────────────────────────── کاربران ─────────────────────────────
