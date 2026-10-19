@@ -947,6 +947,22 @@ async def sales_reply(update, context):
     await update.message.reply_html(text, reply_markup=main_kb())
 
 
+@admin_only
+async def unlock_cmd(update, context):
+    """/unlock نام_نماینده = فعال‌سازی مجدد نمایندهٔ قفل‌شده."""
+    arg = " ".join(context.args or []).strip()
+    if not arg:
+        await update.message.reply_html("استفاده: <code>/unlock نام_نماینده</code>")
+        return END
+    f = C._rep_find(C.load_config(), arg)
+    if not f:
+        await update.message.reply_html("❌ نماینده‌ای با این نام پیدا نشد.")
+        return END
+    await asyncio.to_thread(C.unlock_rep, f[0])
+    await update.message.reply_html(f"🔓 حساب نماینده «{C.esc(f[1]['name'])}» دوباره فعال شد.")
+    return END
+
+
 # ───────────────────────────── راه‌اندازی ─────────────────────────────
 async def on_error(update, context):
     log.error("خطا در پردازش آپدیت", exc_info=context.error)
@@ -958,10 +974,10 @@ async def on_error(update, context):
 
 
 async def post_init(app: Application):
-    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("cancel", "لغو عملیات جاری")])
+    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("unlock", "فعال‌سازی مجدد نمایندهٔ قفل‌شده"), BotCommand("cancel", "لغو عملیات جاری")])
     # ردیاب فروش و گزارش روزانه ۰۰:۰۰ (به وقت ایران)
     app.bot_data["bg"] = [
-        asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot)),
+        asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot)), asyncio.create_task(sales.backup_loop(app.bot)),
         asyncio.create_task(ops.reminder_loop(app.bot)), asyncio.create_task(ops.monitor_loop(app.bot)),
     ]
 
@@ -1010,6 +1026,7 @@ def build_app() -> Application:
         fallbacks=[CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), cb(back_cb, pattern=r"^back$")],
         allow_reentry=True,
     )
+    app.add_handler(CommandHandler("unlock", unlock_cmd), group=-1)
     app.add_handler(conv)
     app.add_error_handler(on_error)
     return app
