@@ -1327,19 +1327,20 @@ async def send_results(bot, chat_id, results: list[dict], header, max_qr: int = 
         await _retry(lambda: bot.send_message(
             chat_id, f"📦 <b>{len(results)} اکانت ساخته شد</b>\n<code>{esc(rng)}</code>\n\n" + "\n".join(lines), parse_mode=ParseMode.HTML))
 
-    with_qr = [r for r in results if r["sub"]][:max_qr] if send_qr else []
-    pngs = await asyncio.gather(*(asyncio.to_thread(make_qr_png, r["sub"]) for r in with_qr))
-    # هر اشتراک جداگانه و پشت‌سرهم (به ترتیب ساخت)
+    with_qr = [r for r in results if r["sub"]][:max_qr]
+    pngs = await asyncio.gather(*(asyncio.to_thread(make_qr_png, r["sub"]) for r in with_qr)) if send_qr else [None] * len(with_qr)
+    # لینک همیشه ارسال می‌شود؛ تصویر QR فقط وقتی send_qr روشن است. هر اشتراک جداگانه و پشت‌سرهم (به ترتیب ساخت)
     for r, png in zip(with_qr, pngs):
-        try:
-            await _retry(lambda: bot.send_photo(chat_id, png, caption=caption(r), parse_mode=ParseMode.HTML))
-        except TelegramError as e:
-            log.warning("send_photo failed for %s: %s", r["username"], e)
-            await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML))
+        if png is not None:
+            try:
+                await _retry(lambda: bot.send_photo(chat_id, png, caption=caption(r), parse_mode=ParseMode.HTML))
+            except TelegramError as e:
+                log.warning("send_photo failed for %s: %s", r["username"], e)
+                await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML))
+        else:
+            await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML, disable_web_page_preview=True))
         await asyncio.sleep(0.5)  # رعایت محدودیت نرخ تلگرام
-    if not send_qr and len(results) == 1:    # تک‌کاربرِ بدون QR: فقط مشخصات و لینک قابل‌کپی
-        await _retry(lambda: bot.send_message(chat_id, caption(results[0]), parse_mode=ParseMode.HTML))
-    elif len(results) > 1 or len(results) > len(with_qr):
+    if len(results) > 1 or len(results) > len(with_qr):
         txt = "\n".join(f"{r['username']} | {r['sub']}" for r in results)
         bio = io.BytesIO(txt.encode("utf-8"))
         bio.name = f"{results[0]['username']}_to_{results[-1]['username']}.txt"
