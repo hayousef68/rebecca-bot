@@ -72,6 +72,8 @@ DEFAULT_CFG = {
     "monitor": {"enabled": True, "interval": 300},
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
     "web": {"user": "admin", "salt": "", "hash": "", "secret": ""},
+    "reps": {},          # نمایندگان: {id: {name, label, salt, hash, blocked, created}}
+    "rep_users": {},     # کاربرهای هر نماینده: {panel_id: {username: rep_id}}
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
 
@@ -192,6 +194,17 @@ def _normalize(data: dict) -> dict:
                 except (TypeError, ValueError):
                     sec[k] = dv
         cfg[key] = sec
+    reps = {}
+    for rid, r in (cfg.get("reps") if isinstance(cfg.get("reps"), dict) else {}).items():
+        if isinstance(r, dict) and r.get("name") and r.get("salt") and r.get("hash"):
+            reps[str(rid)] = {"name": str(r["name"]), "label": str(r.get("label") or "")[:60], "salt": str(r["salt"]), "hash": str(r["hash"]),
+                              "blocked": bool(r.get("blocked")), "created": int(r.get("created") or 0)}
+    cfg["reps"] = reps
+    ru = {}
+    for pid, m in (cfg.get("rep_users") if isinstance(cfg.get("rep_users"), dict) else {}).items():
+        if isinstance(m, dict):
+            ru[str(pid)] = {str(u): str(r) for u, r in m.items() if str(r) in reps}
+    cfg["rep_users"] = ru
     for k in ("max_batch", "max_qr", "web_port"):
         try:
             cfg[k] = int(cfg[k])
@@ -333,6 +346,155 @@ def check_session(token: str) -> str | None:
     except (ValueError, AttributeError):
         pass
     return None
+
+
+# ───────────────────────────── نمایندگان ─────────────────────────────
+REP_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{3,32}")
+REP_COOKIE_TTL = 12 * 3600
+
+
+def _rep_find(cfg: dict, name: str) -> tuple[str, dict] | None:
+    n = (name or "").strip().lower()
+    return next(((rid, r) for rid, r in cfg["reps"].items() if r["name"].lower() == n), None)
+
+
+def create_rep(name: str, password: str = "", label: str = "") -> dict:
+    """نماینده‌ی جدید؛ اگر رمز خالی باشد تصادفی ساخته می‌شود. رمز فقط همین یک بار برگردانده می‌شود."""
+    name = (name or "").strip()
+    if not REP_NAME_RE.fullmatch(name):
+        raise ValueError("نام کاربری نماینده: ۳ تا ۳۲ حرف انگلیسی، عدد، _ . -")
+    password = password or secrets.token_urlsafe(9)
+    if len(password) < 6:
+        raise ValueError("رمز نماینده حداقل ۶ کاراکتر باشد.")
+    out = {}
+
+    def mut(c):
+        if name.lower() == str(c["web"].get("user", "admin")).lower() or _rep_find(c, name):
+            raise ValueError("این نام کاربری قبلاً استفاده شده است.")
+        rid = "r" + secrets.token_hex(4)
+        c["reps"][rid] = {"name": name, "label": (label or "").strip()[:60], **hash_password(password), "blocked": False, "created": int(time.time())}
+        out.update(id=rid, name=name)
+    update_config(mut)
+    return {**out, "password": password}
+
+
+def reset_rep_password(rid: str, password: str = "") -> str:
+    password = password or secrets.token_urlsafe(9)
+    if len(password) < 6:
+        raise ValueError("رمز نماینده حداقل ۶ کاراکتر باشد.")
+
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        c["reps"][rid].update(hash_password(password))
+    update_config(mut)
+    return password
+
+
+def set_rep_blocked(rid: str, blocked: bool) -> None:
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        c["reps"][rid]["blocked"] = bool(blocked)
+    update_config(mut)
+
+
+def delete_rep(rid: str) -> None:
+    def mut(c):
+        c["reps"].pop(rid, None)
+        for m in c["rep_users"].values():
+            for u in [u for u, r in m.items() if r == rid]:
+                del m[u]
+    update_config(mut)
+
+
+def check_rep_login(name: str, pw: str) -> tuple[str, bool] | None:
+    """(rep_id, blocked) اگر نام و رمز درست باشد، وگرنه None."""
+    f = _rep_find(load_config(), name)
+    if not f:
+        hash_password(pw or "x", "00" * 16)          # زمان پاسخ برای نام ناموجود هم مشابه باشد
+        return None
+    rid, r = f
+    if secrets.compare_digest(hash_password(pw, r["salt"])["hash"], r["hash"]):
+        return rid, r["blocked"]
+    return None
+
+
+def _rep_key(rep: dict) -> bytes | None:
+    k = _session_key()
+    return None if k is None else k + b"|rep|" + rep["hash"].encode()      # با عوض شدن رمز نماینده، نشست‌هایش باطل می‌شود
+
+
+def make_rep_session(rid: str) -> tuple[str, int]:
+    import hmac
+    rep = load_config()["reps"][rid]
+    exp = int(time.time()) + REP_COOKIE_TTL
+    body = f"{rid}|{exp}"
+    return f"{body}|{hmac.new(_rep_key(rep), body.encode(), hashlib.sha256).hexdigest()}", REP_COOKIE_TTL
+
+
+def check_rep_session(token: str) -> tuple[str, dict] | None:
+    """(rep_id, rep) اگر نشست معتبر و نماینده مسدود نباشد."""
+    import hmac
+    try:
+        rid, exp, sig = token.rsplit("|", 2)
+        rep = load_config()["reps"].get(rid)
+        key = _rep_key(rep) if rep else None
+        if key is None or rep["blocked"] or int(exp) < time.time():
+            return None
+        if hmac.compare_digest(sig, hmac.new(key, f"{rid}|{exp}".encode(), hashlib.sha256).hexdigest()):
+            return rid, rep
+    except (ValueError, AttributeError, TypeError):
+        pass
+    return None
+
+
+def _natkey(s: str):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+
+
+def parse_user_spec(prefix: str = "", start: int | None = None, end: int | None = None, names: str = "") -> list[str]:
+    """ورودی ادمین ← فهرست نام کاربری: بازه (پیشوند + از + تا) یا فهرست جداشده با فاصله/کاما/خط."""
+    out: list[str] = []
+    if names and names.strip():
+        out = [x for x in re.split(r"[\s,;،]+", names.strip()) if x]
+    elif prefix and start is not None and end is not None:
+        if end < start or end - start > 4999:
+            raise ValueError("بازه نامعتبر است (حداکثر ۵۰۰۰ کاربر).")
+        out = [f"{prefix}{n}" for n in range(start, end + 1)]
+    bad = [u for u in out if not USERNAME_RE.fullmatch(u)]
+    if bad:
+        raise ValueError(f"نام کاربری نامعتبر: {bad[0]}")
+    return list(dict.fromkeys(out))
+
+
+def assign_users(rid: str, pid: str, names: list[str]) -> int:
+    """کاربرها را به نماینده نسبت می‌دهد (اگر قبلاً مال نماینده‌ی دیگری بود، منتقل می‌شود). تعداد را برمی‌گرداند."""
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        m = c["rep_users"].setdefault(pid, {})
+        for u in names:
+            m[u] = rid
+    update_config(mut)
+    return len(names)
+
+
+def unassign_users(rid: str, pid: str, names: list[str]) -> int:
+    n = []
+
+    def mut(c):
+        m = c["rep_users"].get(pid, {})
+        for u in names:
+            if m.get(u) == rid:
+                del m[u]
+                n.append(u)
+    update_config(mut)
+    return len(n)
+
+
+def rep_owner(cfg: dict, pid: str, username: str) -> str | None:
+    return cfg["rep_users"].get(pid, {}).get(username)
 
 
 # ───────────────────────────── کمکی‌ها ─────────────────────────────
