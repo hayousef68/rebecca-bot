@@ -94,6 +94,8 @@ code,.code{display:block;direction:ltr;text-align:left;font-family:ui-monospace,
 .chip.on{color:var(--ac-ink);background:linear-gradient(135deg,var(--ac),var(--ac2));border-color:transparent}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-inline-end:6px;background:var(--mu)}
 .s-active .dot{background:var(--ok);box-shadow:0 0 8px var(--ok)}.s-on_hold .dot{background:var(--warn)}.s-expired .dot,.s-limited .dot{background:var(--bad)}
+.rnote{display:block;font-size:12px;color:var(--ac);margin-top:2px;word-break:break-word}
+.notebox{display:flex;gap:6px;margin:10px 0 0}.notebox .noteIn{flex:1;min-width:0}
 img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:14px;background:#fff;padding:8px}
 .err{color:var(--bad);font-size:12px;margin-top:6px}
 .toast{position:fixed;inset:auto 16px calc(100px + env(safe-area-inset-bottom)) 16px;z-index:9;margin:auto;max-width:420px;background:var(--s2);border:1px solid var(--line);
@@ -405,7 +407,7 @@ async function vUsers() {
   if (!hasPanel()) return vCreate();
   const U = S.users; let seq = 0;
   const list = h('div'), pg = h('div', { class: 'pager', hidden: true }), info = h('p', { class: 'hint' });
-  const search = h('input', { type: 'search', placeholder: 'جستجو: نام کاربری (مثلاً MS_150 یا 150)…', value: U.q, dir: 'ltr', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
+  const search = h('input', { type: 'search', placeholder: 'جستجو: نام کاربری (مثلاً MS_150 یا 150)…', value: U.q, autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
   const clear = h('button', { class: 'clr', type: 'button', 'aria-label': 'پاک کردن', hidden: !U.q }, '✕');
   const chips = h('div', { class: 'chips' }, [['', 'همه'], ['active', 'فعال شده'], ['on_hold', 'خام'], ['expired', 'منقضی'], ['limited', 'محدود'], ['disabled', 'غیرفعال']].map(([k, t]) =>
     h('button', { class: 'chip' + (U.status === k ? ' on' : ''), onclick: () => { U.status = k; vUsers(); } }, t)));
@@ -607,7 +609,7 @@ async function repApp(me) {
   document.body.style.paddingBottom = 'calc(24px + env(safe-area-inset-bottom))';
   const R = { q: '', off: 0 }; let seq = 0;
   const list = h('div'), pg = h('div', { class: 'pager', hidden: true }), info = h('p', { class: 'hint' });
-  const search = h('input', { type: 'search', placeholder: 'جستجوی کاربر: نام یا بخشی از نام (مثلاً 150)…', dir: 'ltr', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
+  const search = h('input', { type: 'search', placeholder: 'جستجوی کاربر: نام، بخشی از نام (مثلاً 150) یا یادداشت…', dir: 'ltr', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
   const clear = h('button', { class: 'clr', type: 'button', 'aria-label': 'پاک کردن', hidden: true }, '✕');
   async function load(reset) {
     const my = ++seq;
@@ -639,9 +641,18 @@ function repItem(u) {
   const q = h('div');
   const msg = () => ['👤 نام کاربری: ' + u.username, '📦 حجم: ' + gb(u.limit) + ' (باقی‌مانده: ' + left + ')', '⏳ اعتبار: ' + u.expire_text, '🔗 لینک اشتراک:', u.sub].join('\n');
   const tile = (l, v) => h('div', {}, h('span', {}, l), h('b', {}, v));
-  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username, stTag(u.status)), h('span', { class: 'sub' }, usage(u))),
+  const noteTxt = h('span', { class: 'rnote', hidden: !u.note }, u.note ? '📝 ' + u.note : '');
+  const noteIn = h('input', { type: 'text', class: 'noteIn', maxlength: 100, value: u.note || '', placeholder: 'اسم یا یادداشت (مثلاً اسم مشتری)…', autocomplete: 'off' });
+  const noteBtn = h('button', { class: 'btn sm pri', type: 'button' }, '💾 ذخیره');
+  const saveNote = () => { noteBtn.disabled = true; api('/rep/note', 'POST', { username: u.username, pid: u.pid, note: noteIn.value })
+    .then(r => { u.note = r.note; noteIn.value = r.note; noteTxt.textContent = r.note ? '📝 ' + r.note : ''; noteTxt.hidden = !r.note; toast(r.note ? '✅ یادداشت ذخیره شد' : 'یادداشت پاک شد'); })
+    .catch(e => toast(e.message, true)).finally(() => { noteBtn.disabled = false; }); };
+  noteBtn.onclick = saveNote;
+  noteIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveNote(); } });
+  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username, stTag(u.status), noteTxt), h('span', { class: 'sub' }, usage(u))),
     h('div', { class: 'body' },
       h('div', { class: 'ustat' }, h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status)),
+      h('div', { class: 'notebox' }, noteIn, noteBtn),
       h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
       h('div', { class: 'tiles' }, tile('مصرف', gb(u.used)), tile('باقی‌مانده', left), tile('اعتبار', u.expire_text)),
       h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
