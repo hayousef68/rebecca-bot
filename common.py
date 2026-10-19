@@ -25,6 +25,7 @@ log = logging.getLogger("rebecca")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.environ.get("REBECCA_CONFIG") or os.path.join(BASE_DIR, "config.json")
 GB = 1024 ** 3
+REP_NOTE_MAX = 100
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 
 DEFAULT_TEMPLATES = {
@@ -75,6 +76,7 @@ DEFAULT_CFG = {
     "web": {"user": "admin", "salt": "", "hash": "", "secret": ""},
     "reps": {},          # نمایندگان: {id: {name, label, salt, hash, blocked, created}}
     "rep_users": {},     # کاربرهای هر نماینده: {panel_id: {username: rep_id}}
+    "rep_notes": {},     # اسم/یادداشت نماینده برای هر کاربرش: {panel_id: {username: note}}
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
 
@@ -222,6 +224,13 @@ def _normalize(data: dict) -> dict:
         if isinstance(m, dict):
             ru[str(pid)] = {str(u): str(r) for u, r in m.items() if str(r) in reps}
     cfg["rep_users"] = ru
+    rn = {}
+    for pid, m in (cfg.get("rep_notes") if isinstance(cfg.get("rep_notes"), dict) else {}).items():
+        if isinstance(m, dict):
+            v = {str(u): str(n).strip()[:REP_NOTE_MAX] for u, n in m.items() if str(u) in ru.get(str(pid), {}) and str(n).strip()}
+            if v:
+                rn[str(pid)] = v
+    cfg["rep_notes"] = rn
     for k in ("max_batch", "max_qr", "web_port"):
         try:
             cfg[k] = int(cfg[k])
@@ -462,6 +471,7 @@ def delete_rep(rid: str) -> None:
         for m in c["rep_users"].values():
             for u in [u for u, r in m.items() if r == rid]:
                 del m[u]
+        # یادداشت‌های کاربرهای حذف‌شده در نرمال‌سازی پاک می‌شود
     update_config(mut)
 
 
@@ -584,7 +594,10 @@ def assign_users(rid: str, pid: str, names: list[str]) -> int:
         if rid not in c["reps"]:
             raise ValueError("نماینده پیدا نشد.")
         m = c["rep_users"].setdefault(pid, {})
+        notes = c["rep_notes"].get(pid, {})
         for u in names:
+            if m.get(u) != rid:
+                notes.pop(u, None)            # کاربر از نماینده‌ی دیگری منتقل شد: یادداشت قبلی مال او بود
             m[u] = rid
     update_config(mut)
     return len(names)
@@ -598,9 +611,26 @@ def unassign_users(rid: str, pid: str, names: list[str]) -> int:
         for u in names:
             if m.get(u) == rid:
                 del m[u]
+                c["rep_notes"].get(pid, {}).pop(u, None)
                 n.append(u)
     update_config(mut)
     return len(n)
+
+
+def set_rep_note(rid: str, pid: str, username: str, note: str) -> str:
+    """یادداشت نماینده برای یکی از کاربرهای خودش را ذخیره می‌کند (خالی = حذف). متن ذخیره‌شده را برمی‌گرداند."""
+    note = " ".join(str(note).split())[:REP_NOTE_MAX]
+
+    def mut(c):
+        if c["rep_users"].get(pid, {}).get(username) != rid:
+            raise ValueError("این کاربر در لیست شما نیست.")
+        m = c["rep_notes"].setdefault(pid, {})
+        if note:
+            m[username] = note
+        else:
+            m.pop(username, None)
+    update_config(mut)
+    return note
 
 
 def rep_owner(cfg: dict, pid: str, username: str) -> str | None:
