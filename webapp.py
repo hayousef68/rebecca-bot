@@ -182,7 +182,7 @@ def _notify_lock(rep_name: str):
         bot = _tg_bot(cfg["bot_token"])
         for uid in cfg["admin_ids"]:
             try:
-                await bot.send_message(uid, f"🔒 حساب نماینده «{rep_name}» بعد از {C.REP_MAX_FAILS} رمز اشتباه پیاپی موقتاً غیرفعال شد.\nاز وب‌پنل > تنظیمات > نماینده‌ها (یا ربات: /unlock {rep_name}) فعالش کنید.")
+                await bot.send_message(uid, f"🔒 حساب نماینده «{rep_name}» بعد از {C.REP_MAX_FAILS} رمز اشتباه پیاپی موقتاً غیرفعال شد.\nاز وب‌پنل > تنظیمات > نماینده‌ها می‌توانید دوباره فعالش کنید.")
             except Exception:  # noqa: BLE001
                 pass
     t = asyncio.create_task(go())
@@ -208,7 +208,7 @@ async def login(r: LoginReq, request: Request):
         raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
     user = r.user.strip()
     secure = request.url.scheme == "https"
-    if not C.check_web_login(user, r.password):          # ادمین هرگز قفل نمی‌شود (فقط محدودیت IP)
+    if not C.check_web_login(user, r.password):
         st, rid = await asyncio.to_thread(C.rep_login, user, r.password)      # شاید نماینده باشد
         if st in ("locked", "locked_now"):
             if st == "locked_now":
@@ -268,7 +268,7 @@ async def state():
         "panels": _panels_view(cfg), "active_panel": cfg["active_panel"],
         "bot": bool(cfg["bot_token"] and cfg["admin_ids"]),
         "templates": cfg["templates"], "active": cfg["active_template"], "active_group": cfg.get("active_group_template", ""), "max_batch": cfg["max_batch"],
-        "default_prefix": cfg["default_prefix"], "multi_panel": len(cfg["panels"]) > 1,
+        "default_prefix": cfg["default_prefix"], "multi_panel": len(cfg["panels"]) > 1, "unpaid_hours": cfg["unpaid"]["hours"],
         "ham_names": cfg.get("sales", {}).get("hamkari_service_names", ["hamkari"]),
     }
 
@@ -523,7 +523,7 @@ async def rep_users(offset: int = Query(0, ge=0, le=100000), limit: int = Query(
     cfg = load_config()
     q = search.translate(_FA_DIGITS).strip().lstrip("@").lower()
     items = [(pid, u) for pid, m in cfg["rep_users"].items() for u, r in m.items() if r == rid and (not q or q in u.lower())]
-    items.sort(key=lambda x: C._natkey(x[1]))
+    items.sort(key=lambda x: C._natkey(x[1]), reverse=True)      # از عدد بزرگ به کوچک (MS_150 قبل از MS_149)
     page = items[offset:offset + limit]
     sem = asyncio.Semaphore(6)
 
@@ -633,8 +633,11 @@ async def reps_unassign(rid: str, r: RepSpecReq, panel: str | None = Query(None,
 
 
 # ───────────────────────────── کاربران ─────────────────────────────
-def _slim(u: dict, api) -> dict:
+def _slim(u: dict, api, pend: dict | None = None) -> dict:
     st = u.get("status")
+    if pend is None:
+        pend = C.unpaid_map(getattr(api, "pid", ""))
+    rec = pend.get(u.get("username") or "")
     exp, hold = int(u.get("expire") or 0), int(u.get("on_hold_expire_duration") or 0)
     if st == "on_hold":
         days_left = hold // 86400
@@ -652,6 +655,7 @@ def _slim(u: dict, api) -> dict:
         "service_id": u.get("service_id"), "note": u.get("note") or "",
         "next_plans": C.next_plans_view(u),
         "np_raw": json.dumps(C._raw_plans(u), ensure_ascii=False)[:1500] if C._raw_plans(u) else "",
+        "unpaid_due": int(rec["due"]) if rec and st != "disabled" else 0,      # زمان غیرفعال‌سازی خودکار (timestamp)؛ ۰ = ندارد
     }
 
 
@@ -664,7 +668,8 @@ async def users(search: str = "", status: str = "", offset: int = Query(0, ge=0)
     if status:
         params["status"] = status
     res = await api.request("GET", "/api/users", params=params)
-    return {"users": [_slim(u, api) for u in res.get("users", [])], "total": res.get("total", 0)}
+    pend = C.unpaid_map(api.pid)
+    return {"users": [_slim(u, api, pend) for u in res.get("users", [])], "total": res.get("total", 0)}
 
 
 class EditReq(BaseModel):
@@ -688,6 +693,8 @@ class RenewReq(BaseModel):
     gb: float | None = Field(default=None, ge=0, le=100000)         # تمدید دلخواه (بدون تمپلت)
     days: int | None = Field(default=None, ge=0, le=36500)
     mode: str | None = Field(default=None, pattern="^(on_hold|active)$")
+    unpaid: bool = False                                             # تمدید «واریز نشده»: بعد از مهلت خودکار غیرفعال می‌شود
+    unpaid_hours: int | None = Field(default=None, ge=1, le=24 * 365)  # مهلت (ساعت)؛ خالی = مقدار تنظیمات
 
 
 @app.post("/api/user/{uname}/service", dependencies=[Depends(guard)])
@@ -714,6 +721,10 @@ async def user_renew(uname: str, r: RenewReq, api: RebeccaClient = Depends(P)):
         raise HTTPException(400, "تمپلت یا حجم و روز را مشخص کنید.")
     await C.renew_user(api, uname, tpl, reset_usage=r.reset_usage)
     res = await api.request("GET", api.upath(uname))
+    if r.unpaid:                                                      # واریز نشده ← شمارش معکوس غیرفعال‌سازی
+        await asyncio.to_thread(C.unpaid_mark, api.pid, uname, r.unpaid_hours)
+    else:                                                             # تمدید عادی ← هر علامت «واریز نشده»ی قبلی پاک می‌شود
+        await asyncio.to_thread(C.unpaid_clear, api.pid, uname)
     if not r.reset_usage:      # بدون ریست در دیتابیس ربکا ردی نمی‌ماند؛ برای گزارش فروش خودمان ثبت می‌کنیم
         try:
             await asyncio.to_thread(sales.record_attach, uname, res.get("service_id"), tpl.get("gb"), int(tpl.get("days") or 0))
@@ -758,6 +769,13 @@ async def user_next_plans(uname: str, r: NextPlansReq, api: RebeccaClient = Depe
     return _slim(res, api)
 
 
+@app.post("/api/user/{uname}/paid", dependencies=[Depends(guard)])
+async def user_paid(uname: str, api: RebeccaClient = Depends(P)):
+    """«واریز شد»: شمارش معکوس غیرفعال‌سازی لغو می‌شود."""
+    await asyncio.to_thread(C.unpaid_clear, api.pid, uname)
+    return _slim(await api.request("GET", api.upath(uname)), api)
+
+
 @app.post("/api/user/{uname}/{action}", dependencies=[Depends(guard)])
 async def user_action(uname: str, action: str, body: EditReq | None = None, api: RebeccaClient = Depends(P)):
     p = api.upath(uname)
@@ -782,6 +800,7 @@ async def user_action(uname: str, action: str, body: EditReq | None = None, api:
         return _slim(res, api)
     if action == "delete":
         await api.request("DELETE", p)
+        await asyncio.to_thread(C.unpaid_clear, api.pid, uname)
         return {"ok": True}
     raise HTTPException(404, "عملیات ناشناخته")
 
@@ -871,13 +890,16 @@ async def settings_get():
                "has_password": bool(p["password"]), "verify_ssl": p["verify_ssl"]} for p in c["panels"]]
     return {"panels": panels, "active_panel": c["active_panel"], "bot_token": _mask(c["bot_token"]),
             "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin"), "web_port": c["web_port"],
-            "backup_enabled": c["backup"]["enabled"]}
+            "backup_enabled": c["backup"]["enabled"], "default_prefix": c["default_prefix"],
+            "unpaid_hours": c["unpaid"]["hours"], "unpaid_count": sum(len(m) for m in c["unpaid"]["pending"].values())}
 
 
 class SettingsReq(BaseModel):
     bot_token: str | None = None
     admin_ids: str | None = None
     web_password: str | None = Field(default=None, min_length=8, max_length=128)
+    default_prefix: str | None = Field(default=None, max_length=28)       # اسم پیش‌فرض کاربر جدید (مثلاً MS_)
+    unpaid_hours: int | None = Field(default=None, ge=1, le=24 * 365)     # مهلت غیرفعال‌سازی خودکارِ «واریز نشده» (ساعت)
 
 
 @app.post("/api/settings", dependencies=[Depends(guard)])
@@ -895,6 +917,13 @@ async def settings_save(r: SettingsReq):
             c["admin_ids"] = [int(x) for x in r.admin_ids.replace("،", ",").replace(" ", ",").split(",") if x.strip().lstrip("-").isdigit()]
         if r.web_password:
             c["web"].update(C.hash_password(r.web_password))
+        if r.default_prefix is not None:
+            pre = r.default_prefix.strip()
+            if not re.fullmatch(r"[A-Za-z0-9_]{1,28}", pre):
+                raise ValueError("اسم پیش‌فرض: ۱ تا ۲۸ حرف انگلیسی، عدد یا _ (مثلاً MS_)")
+            c["default_prefix"] = pre
+        if r.unpaid_hours is not None:
+            c["unpaid"]["hours"] = r.unpaid_hours
     update_config(mut)
     if restart_bot:
         try:
@@ -977,17 +1006,17 @@ class BackupSettingsReq(BaseModel):
 
 
 class RestoreReq(BaseModel):
-    content: str = Field(min_length=2, max_length=12_000_000)
+    content: str = Field(min_length=2, max_length=2_000_000)
 
 
 @app.get("/api/backup", dependencies=[Depends(guard)])
 async def backup_download():
     try:
-        data = await asyncio.to_thread(sales.full_backup_bytes)
-    except (OSError, ValueError):
+        data = await asyncio.to_thread(C.config_backup_bytes)
+    except OSError:
         raise HTTPException(404, "فایل تنظیمات پیدا نشد.")
     return Response(data, media_type="application/json",
-                    headers={"Content-Disposition": f'attachment; filename="rebecca-full-backup-{sales.tehran_day()}.json"'})
+                    headers={"Content-Disposition": f'attachment; filename="rebecca-config-{sales.tehran_day()}.json"'})
 
 
 @app.post("/api/backup/settings", dependencies=[Depends(guard)])
@@ -1013,10 +1042,10 @@ async def backup_restore(r: RestoreReq):
     import json
     import shutil
     try:
-        data, attach = sales.parse_backup(r.content)       # بکاپ کامل جدید یا config.json قدیمی
-    except ValueError as e:
-        raise HTTPException(400, str(e) if "بکاپ" in str(e) or "شبیه" in str(e) else "فایل JSON معتبر نیست.")
-    if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates", "reps"}):
+        data = json.loads(r.content)
+    except ValueError:
+        raise HTTPException(400, "فایل JSON معتبر نیست.")
+    if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates"}):
         raise HTTPException(400, "این فایل شبیه بکاپ تنظیمات ربات نیست.")
     new = C._normalize(data)
     cur = load_config()
@@ -1030,13 +1059,7 @@ async def backup_restore(r: RestoreReq):
         safety = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
         shutil.copy2(C.CONFIG_FILE, safety)
         os.chmod(safety, 0o600)
-    asafe = None
-    ap = sales._attach_file()
-    if attach is not None and os.path.exists(ap):
-        asafe = f"{ap}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
-        shutil.copy2(ap, asafe)
     C.save_config(new)
-    n_attach = await asyncio.to_thread(sales.attach_import, attach) if attach is not None else None
     for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
         C.drop_api(p)
     _bot.update(token=None, obj=None)
@@ -1046,7 +1069,7 @@ async def backup_restore(r: RestoreReq):
     except Exception:  # noqa: BLE001
         log.warning("ریستارت خودکار ربات ممکن نشد")
     return {"ok": True, "panels": len(new["panels"]), "web_changed": web_changed, "safety": os.path.basename(safety) if safety else None,
-            "reps": len(new["reps"]), "rep_users": C.backup_summary(new)["rep_users"], "reps_kept": "reps" not in data, "sales_log": n_attach}
+            "reps": len(new["reps"]), "rep_users": C.backup_summary(new)["rep_users"], "reps_kept": "reps" not in data}
 
 
 class PanelReq(BaseModel):
