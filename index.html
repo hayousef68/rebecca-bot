@@ -106,6 +106,15 @@ img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:1
 }
 
 [hidden]{display:none!important}
+.tag{display:inline-block;font-style:normal;font-size:10.5px;font-weight:700;padding:1px 8px;border-radius:99px;margin-inline-start:8px;border:1px solid var(--line);color:var(--mu);white-space:nowrap;vertical-align:middle;line-height:1.6}
+.tag.t-active{color:var(--ok);border-color:#3ecf8e55;background:#3ecf8e14}
+.tag.t-on_hold{color:var(--info);border-color:#5aa9ff55;background:#5aa9ff14}
+.tag.t-expired,.tag.t-limited{color:var(--bad);border-color:#f2706b55;background:#f2706b14}
+.item.s-active{border-inline-start:3px solid var(--ok)}.item.s-on_hold{border-inline-start:3px solid var(--info)}
+.pager{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:14px 0 6px}
+.pager button{min-width:38px;height:36px;padding:0 12px;border-radius:11px;border:1px solid var(--line);background:var(--s1);color:var(--mu);font:inherit;font-size:13px;font-weight:700;cursor:pointer}
+.pager button.on{color:var(--ac-ink);background:linear-gradient(135deg,var(--ac),var(--ac2));border-color:transparent}
+.pager button:disabled{opacity:.4;cursor:default}.pager span{color:var(--mu)}
 .sbox{position:relative;margin-bottom:10px}
 .sbox input{padding-right:44px}
 .sbox .clr{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:34px;height:34px;border-radius:50%;border:0;background:var(--s2);color:var(--mu);font-size:13px;cursor:pointer}
@@ -370,7 +379,19 @@ function showResults(box, r) {
 /* ───────── کاربران ───────── */
 const faDigits = s => String(s).replace(/[۰-۹]/g, c => '۰۱۲۳۴۵۶۷۸۹'.indexOf(c)).replace(/[٠-٩]/g, c => '٠١٢٣٤٥٦٧٨٩'.indexOf(c));
 const normQ = s => faDigits(s).replace(/^[@\s]+/, '').trim().replace(/\s+/g, ' ');   // اعداد فارسی→انگلیسی، حذف @ و فاصله‌های اضافه
-const STATUS_FA = { active: 'فعال', on_hold: 'منتظر اتصال', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
+const STATUS_FA = { active: 'فعال شده', on_hold: 'خام (منتظر اتصال)', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
+const PAGE = 30;                                                                                  // تعداد کاربر در هر صفحه
+const TAG_FA = { active: 'فعال شده', on_hold: 'خام', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
+const stTag = st => h('em', { class: 'tag t-' + st }, TAG_FA[st] || st);                           // برچسب کوچک کنار نام: «خام» یا «فعال شده»
+function drawPager(box, total, off, go) {                                                         // صفحه‌بندی شماره‌دار
+  const pages = Math.ceil(total / PAGE), cur = Math.floor(off / PAGE) + 1;
+  box.replaceChildren(); box.hidden = pages <= 1; if (pages <= 1) return;
+  const b = (t, p, on) => h('button', { type: 'button', class: on ? 'on' : '', disabled: p < 1 || p > pages || on, onclick: () => go((p - 1) * PAGE) }, t);
+  const nums = [...new Set([1, cur - 1, cur, cur + 1, pages].filter(p => p >= 1 && p <= pages))].sort((x, y) => x - y);
+  box.append(b('قبلی', cur - 1));
+  nums.forEach((p, i) => { if (i && p - nums[i - 1] > 1) box.append(h('span', {}, '…')); box.append(b(String(p), p, p === cur)); });
+  box.append(b('بعدی', cur + 1));
+}
 const gbr = b => !b ? '∞' : (b / 1073741824).toFixed(2) + ' GB';
 const usage = u => '\u2066' + gbr(u.used) + ' / ' + gbr(u.limit) + '\u2069';   // «مصرف / کل» همیشه چپ‌به‌راست
 const fmtG = n => (+n || 0) === 0 ? 'نامحدود' : '\u2066' + (+(+n).toFixed(2)) + ' GB\u2069';
@@ -379,22 +400,25 @@ const fmtD = n => (+n || 0) === 0 ? 'نامحدود' : (+n) + ' روز';
 async function vUsers() {
   if (!hasPanel()) return vCreate();
   const U = S.users; let seq = 0;
-  const list = h('div'), more = h('button', { class: 'btn', hidden: true }, 'بیشتر'), info = h('p', { class: 'hint' });
+  const list = h('div'), pg = h('div', { class: 'pager', hidden: true }), info = h('p', { class: 'hint' });
   const search = h('input', { type: 'search', placeholder: 'جستجو: نام کاربری (مثلاً MS_150 یا 150)…', value: U.q, dir: 'ltr', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
   const clear = h('button', { class: 'clr', type: 'button', 'aria-label': 'پاک کردن', hidden: !U.q }, '✕');
-  const chips = h('div', { class: 'chips' }, [['', 'همه'], ['active', 'فعال'], ['on_hold', 'On-Hold'], ['expired', 'منقضی'], ['limited', 'محدود'], ['disabled', 'غیرفعال']].map(([k, t]) =>
+  const chips = h('div', { class: 'chips' }, [['', 'همه'], ['active', 'فعال شده'], ['on_hold', 'خام'], ['expired', 'منقضی'], ['limited', 'محدود'], ['disabled', 'غیرفعال']].map(([k, t]) =>
     h('button', { class: 'chip' + (U.status === k ? ' on' : ''), onclick: () => { U.status = k; vUsers(); } }, t)));
   async function load(reset) {
     const my = ++seq;                                           // جلوگیری از نمایش نتیجه‌ی قدیمی وقتی سریع تایپ می‌کنید
-    if (reset) { U.off = 0; list.style.opacity = .45; info.className = 'hint'; info.textContent = 'در حال جستجو…'; }
+    if (reset) U.off = 0;
+    list.style.opacity = .45; info.className = 'hint'; info.textContent = 'در حال بارگذاری…';
     try {
-      const r = await api(`/users?offset=${U.off}&limit=20&search=${encodeURIComponent(U.q)}&status=${U.status}`);
+      const r = await api(`/users?offset=${U.off}&limit=${PAGE}&search=${encodeURIComponent(U.q)}&status=${U.status}`);
       if (my !== seq) return;
-      if (reset) list.replaceChildren();
+      if (!r.users.length && r.total && U.off >= r.total) { U.off = (Math.ceil(r.total / PAGE) - 1) * PAGE; return load(false); }   // صفحه‌ی آخر خالی شد (حذف کاربر)
+      list.replaceChildren();
       r.users.forEach(u => list.append(userItem(u, list)));
-      U.off += r.users.length; more.hidden = U.off >= r.total;
+      drawPager(pg, r.total, U.off, o => { U.off = o; load(false); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+      const pages = Math.ceil(r.total / PAGE), cur = Math.floor(U.off / PAGE) + 1;
       info.className = 'hint';
-      info.textContent = r.total ? (U.q ? `${r.total} نتیجه برای «${U.q}»` : `${r.total} کاربر`) : (U.q ? `برای «${U.q}» کاربری پیدا نشد.` : 'کاربری پیدا نشد.');
+      info.textContent = r.total ? (U.q ? `${r.total} نتیجه برای «${U.q}»` : `${r.total} کاربر`) + (pages > 1 ? ` · صفحه ${cur} از ${pages}` : '') : (U.q ? `برای «${U.q}» کاربری پیدا نشد.` : 'کاربری پیدا نشد.');
     } catch (e) { if (my !== seq) return; info.textContent = e.message; info.className = 'err'; }
     list.style.opacity = 1;
   }
@@ -402,9 +426,8 @@ async function vUsers() {
   search.addEventListener('input', debounce(apply, 300));
   search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); apply(); search.blur(); } });
   clear.onclick = () => { search.value = ''; U.q = ''; clear.hidden = true; load(true); search.focus(); };
-  more.onclick = () => run(more, () => load(false));
   try { S.svcs = (await api('/services')).services; } catch { S.svcs = []; }
-  mount(h('div', { class: 'sbox' }, search, clear), chips, info, list, more); load(true);
+  mount(h('div', { class: 'sbox' }, search, clear), chips, info, list, pg); load(true);
 }
 
 function userItem(u, parent, tab) {
@@ -554,7 +577,7 @@ function userItem(u, parent, tab) {
   showTab(curTab); updR(); updE();
   const hq = (S.users && S.users.q || '').toLowerCase(), ix = hq ? u.username.toLowerCase().indexOf(hq) : -1;
   const nm = ix < 0 ? [u.username] : [u.username.slice(0, ix), h('mark', {}, u.username.slice(ix, ix + hq.length)), u.username.slice(ix + hq.length)];
-  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), nm), h('span', { class: 'sub' }, `${svcName} · ${usage(u)}`)), body);
+  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), nm, stTag(u.status)), h('span', { class: 'sub' }, `${svcName} · ${usage(u)}`)), body);
   return d;
 }
 
@@ -565,20 +588,22 @@ async function repApp(me) {
   const hd = $('header h1'); if (hd) hd.lastChild.textContent = 'پنل نماینده';
   document.body.style.paddingBottom = 'calc(24px + env(safe-area-inset-bottom))';
   const R = { q: '', off: 0 }; let seq = 0;
-  const list = h('div'), more = h('button', { class: 'btn', hidden: true }, 'بیشتر'), info = h('p', { class: 'hint' });
+  const list = h('div'), pg = h('div', { class: 'pager', hidden: true }), info = h('p', { class: 'hint' });
   const search = h('input', { type: 'search', placeholder: 'جستجوی کاربر: نام یا بخشی از نام (مثلاً 150)…', dir: 'ltr', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
   const clear = h('button', { class: 'clr', type: 'button', 'aria-label': 'پاک کردن', hidden: true }, '✕');
   async function load(reset) {
     const my = ++seq;
-    if (reset) { R.off = 0; list.style.opacity = .45; info.className = 'hint'; info.textContent = 'در حال جستجو…'; }
+    if (reset) R.off = 0;
+    list.style.opacity = .45; info.className = 'hint'; info.textContent = 'در حال بارگذاری…';
     try {
-      const r = await api(`/rep/users?offset=${R.off}&limit=20&search=${encodeURIComponent(R.q)}`);
+      const r = await api(`/rep/users?offset=${R.off}&limit=${PAGE}&search=${encodeURIComponent(R.q)}`);
       if (my !== seq) return;
-      if (reset) list.replaceChildren();
+      list.replaceChildren();
       r.users.forEach(u => list.append(repItem(u)));
-      R.off += r.users.length + (r.missing || 0); more.hidden = R.off >= r.total;
+      drawPager(pg, r.total, R.off, o => { R.off = o; load(false); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+      const pages = Math.ceil(r.total / PAGE), cur = Math.floor(R.off / PAGE) + 1;
       info.className = 'hint';
-      info.textContent = r.total ? (R.q ? `${r.total} نتیجه برای «${R.q}»` : `${r.total} کاربر`) : (R.q ? `برای «${R.q}» کاربری پیدا نشد.` : 'هنوز کاربری به شما اختصاص داده نشده است.');
+      info.textContent = r.total ? (R.q ? `${r.total} نتیجه برای «${R.q}»` : `${r.total} کاربر`) + (pages > 1 ? ` · صفحه ${cur} از ${pages}` : '') : (R.q ? `برای «${R.q}» کاربری پیدا نشد.` : 'هنوز کاربری به شما اختصاص داده نشده است.');
     } catch (e) { if (my !== seq) return; info.textContent = e.message; info.className = 'err'; }
     list.style.opacity = 1;
   }
@@ -586,8 +611,7 @@ async function repApp(me) {
   search.addEventListener('input', debounce(apply, 300));
   search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); apply(); search.blur(); } });
   clear.onclick = () => { search.value = ''; R.q = ''; clear.hidden = true; load(true); search.focus(); };
-  more.onclick = () => run(more, () => load(false));
-  mount(h('div', { class: 'sbox' }, search, clear), info, list, more); load(true);
+  mount(h('div', { class: 'sbox' }, search, clear), info, list, pg); load(true);
 }
 
 function repItem(u) {
@@ -597,7 +621,7 @@ function repItem(u) {
   const q = h('div');
   const msg = () => ['👤 نام کاربری: ' + u.username, '📦 حجم: ' + gb(u.limit) + ' (باقی‌مانده: ' + left + ')', '⏳ اعتبار: ' + u.expire_text, '🔗 لینک اشتراک:', u.sub].join('\n');
   const tile = (l, v) => h('div', {}, h('span', {}, l), h('b', {}, v));
-  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username), h('span', { class: 'sub' }, usage(u))),
+  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username, stTag(u.status)), h('span', { class: 'sub' }, usage(u))),
     h('div', { class: 'body' },
       h('div', { class: 'ustat' }, h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status)),
       h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
@@ -837,17 +861,17 @@ async function vSet() {
   const rsB = h('button', { class: 'btn bad', type: 'button' }, '♻️ بازیابی از فایل');
   rsB.onclick = () => run(rsB, async () => {
     const f = fileI.files[0]; if (!f) throw new Error('ابتدا فایل بکاپ را انتخاب کنید.');
-    if (f.size > 2e6) throw new Error('حجم فایل زیاد است.');
-    if (!confirm('همه‌ی تنظیمات فعلی (پنل‌ها، توکن، قیمت‌ها، دیتابیس) با این فایل جایگزین شود؟\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
+    if (f.size > 1.2e7) throw new Error('حجم فایل زیاد است.');
+    if (!confirm('همه‌ی اطلاعات فعلی (پنل‌ها، توکن، قیمت‌ها، دیتابیس، رمز وب‌پنل، نماینده‌ها و کاربرهایشان، لاگ فروش) با این فایل جایگزین شود؟\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
     const r = await api('/backup/restore', 'POST', { content: await f.text() });
-    toast(`✅ بازیابی شد (${r.panels} پنل) · ربات در حال ریستارت`);
+    toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · ${r.rep_users} کاربرِ نماینده${r.sales_log != null ? ' · ' + r.sales_log + ' رکورد فروش' : ''}${r.reps_kept ? ' (بکاپ قدیمی بود؛ نماینده‌های فعلی حفظ شد)' : ''} · ربات در حال ریستارت`);
     setTimeout(() => location.reload(), r.web_changed ? 1800 : 1200);
   });
   const backupCard = h('div', { class: 'card' }, h('h2', {}, '💾 بکاپ و بازیابی'),
-    h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ هر شب ساعت ۰۰:۰۰ همراه گزارش فروش'),
+    h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ اصلی هر روز ساعت ۱۲ ظهر (وقت تهران) به تلگرام ادمین‌ها'),
     h('div', { class: 'btns' }, dlB, tgB),
     h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, 'بازیابی از فایل بکاپ'), fileI,
-    h('p', { class: 'hint' }, 'فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
+    h('p', { class: 'hint' }, 'بکاپ اصلی همه‌چیز را دارد: تنظیمات پنل‌ها و ربات، قیمت‌ها، دیتابیس فروش، SSL، رمز وب‌پنل، نماینده‌ها (با رمز هش‌شده)، لیست کاربرهای هر نماینده، وضعیت مسدود/قفل و لاگ فروش؛ بعد از بازیابی روی سرور جدید هر کاربر دوباره زیر نماینده‌ی خودش نمایش داده می‌شود. فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
     h('div', { class: 'btns' }, rsB));
   // ─── نماینده‌ها ───
   let reps = []; try { reps = (await api('/reps')).reps; } catch { /* خطا: لیست خالی */ }
@@ -875,8 +899,9 @@ async function vSet() {
     const seg = h('div', { class: 'seg sm' }, [['range', 'بازه (MS_111 تا MS_150)'], ['list', 'لیست نام‌ها']].map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === am ? 'on' : '', onclick: () => { am = k; seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); rangeBox.hidden = k !== 'range'; listBox.hidden = k !== 'list'; } }, t)));
     const spec = () => am === 'range' ? { prefix: pre.value.trim(), start: fr.value === '' ? null : +fr.value, end: to.value === '' ? null : +to.value } : { names: lst.value };
     const done = async (m) => { S.setOpen = 'reps'; toast(m); await vSet(); };
-    return h('details', { class: 'item' + (r.blocked ? ' s-disabled' : '') },
-      h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), r.label ? `${r.label} · ${r.name}` : r.name), h('span', { class: 'sub' }, `${r.count} کاربر${r.blocked ? ' · ⛔ مسدود' : ''}`)),
+    const pwI = h('input', { placeholder: 'رمز جدید دستی (حداقل ۶ کاراکتر)', dir: 'ltr', maxlength: 64, autocomplete: 'off', autocapitalize: 'off' });
+    return h('details', { class: 'item' + (r.blocked || r.locked ? ' s-disabled' : '') },
+      h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), r.label ? `${r.label} · ${r.name}` : r.name), h('span', { class: 'sub' }, `${r.count} کاربر${r.blocked ? ' · ⛔ مسدود' : ''}${r.locked ? ' · 🔒 قفل' : ''}`)),
       h('div', { class: 'body' },
         h('div', { class: 'psec' }, h('b', {}, 'افزودن کاربر به لیست این نماینده'), h('span', {}, 'روی پنل انتخاب‌شده')),
         seg, rangeBox, listBox,
@@ -884,11 +909,16 @@ async function vSet() {
           act('➕ افزودن به لیست', 'pri', async () => { const x = await api(`/reps/${r.id}/assign`, 'POST', spec()); await done(`${x.added} کاربر به ${r.name} اضافه شد`); }),
           act('➖ حذف از لیست', '', async () => { const x = await api(`/reps/${r.id}/unassign`, 'POST', spec()); await done(`${x.removed} کاربر از لیست حذف شد`); })),
         h('div', { class: 'psec' }, h('b', {}, 'حساب نماینده')),
+        r.locked ? h('div', { class: 'banner', style: 'margin-bottom:8px' }, '🔒 این حساب بعد از چند بار رمز اشتباه موقتاً غیرفعال شده است.',
+          h('div', { class: 'btns', style: 'margin-top:8px' }, act('🔓 فعال‌سازی مجدد', 'pri', async () => { await api(`/reps/${r.id}/unlock`, 'POST'); await done('حساب نماینده دوباره فعال شد'); }))) : null,
+        h('label', {}, 'تغییر رمز به‌صورت دستی'), pwI,
+        h('div', { class: 'btns' },
+          act('💾 ثبت رمز دستی', 'pri', async () => { const v = pwI.value; if (v.length < 6) throw new Error('رمز حداقل ۶ کاراکتر باشد.'); const x = await api(`/reps/${r.id}/password`, 'POST', { password: v }); S.repNew = { name: r.name, password: x.password, title: `رمز «${r.name}» تغییر کرد` }; await done('رمز نماینده تغییر کرد'); })),
         h('div', { class: 'btns', style: 'margin-top:0' },
-          act('🔑 رمز جدید', '', async () => { const x = await api(`/reps/${r.id}/password`, 'POST', { password: '' }); S.repNew = { name: r.name, password: x.password, title: `رمز جدید برای «${r.name}»` }; await done('رمز جدید ساخته شد'); }),
+          act('🎲 رمز تصادفی', '', async () => { const x = await api(`/reps/${r.id}/password`, 'POST', { password: '' }); S.repNew = { name: r.name, password: x.password, title: `رمز جدید برای «${r.name}»` }; await done('رمز تصادفی ساخته شد'); }),
           act(r.blocked ? '✅ رفع مسدودی' : '⛔ مسدود کردن', r.blocked ? '' : 'bad', async () => { await api(`/reps/${r.id}/block`, 'POST', { blocked: !r.blocked }); await done(r.blocked ? 'مسدودی برداشته شد' : 'نماینده مسدود شد'); }),
           act('🗑 حذف', 'bad', async () => { if (!confirm(`نماینده «${r.name}» و لیست کاربرهایش حذف شود؟ (خود کاربرها در پنل ربکا حذف نمی‌شوند)`)) return; await api(`/reps/${r.id}/delete`, 'POST'); await done('نماینده حذف شد'); })),
-        h('p', { class: 'hint' }, 'مسدود کردن، همان لحظه نماینده را از پنل بیرون می‌اندازد. «رمز جدید» رمز قبلی را از کار می‌اندازد.')));
+        h('p', { class: 'hint' }, 'مسدود کردن، همان لحظه نماینده را از پنل بیرون می‌اندازد. تغییر رمز (دستی یا تصادفی) رمز قبلی را از کار می‌اندازد و قفل ورود را هم برمی‌دارد. ۵ بار رمز اشتباه پیاپی، حساب را قفل می‌کند تا شما دوباره فعالش کنید.')));
   };
   const repBody = h('div', { class: 'acc-in' },
     newBox, ...(reps.length ? reps.map(repItem) : [h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'هنوز نماینده‌ای نساخته‌اید.')]),
