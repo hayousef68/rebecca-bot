@@ -302,8 +302,8 @@ async def confirm_step(update, context):
             f"📌 تمپلت: {esc(cr['tpl'])}\n{esc(C.tpl_summary(t))}\n"
             f"📂 سرویس: {esc(cr['services'].get(cr['service_id'], cr['service_id']))}")
     qr_on = cr.setdefault("qr", True)
-    text += f"\n🖼 ارسال QR به ربات: <b>{'روشن ✅' if qr_on else 'خاموش ⛔'}</b>"
-    kb = cancel_kb([[B(f"🖼 ارسال QR: {'✅ روشن' if qr_on else '⛔ خاموش'}", callback_data="c:qr")],
+    text += f"\n🖼 ارسال QR همراه لینک: <b>{'روشن ✅' if qr_on else 'خاموش ⛔'}</b>"
+    kb = cancel_kb([[B(f"🖼 QR همراه لینک: {'✅ بله' if qr_on else '⛔ خیر (فقط لینک)'}", callback_data="c:qr")],
                     [B("✅ شروع ساخت", callback_data="c:go")]])
     await show(update, context, text, kb)
     return C_CONFIRM
