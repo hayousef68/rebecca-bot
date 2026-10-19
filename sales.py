@@ -21,7 +21,7 @@ try:
 except Exception:  # noqa: BLE001
     TEHRAN = timezone(timedelta(hours=3, minutes=30))
 
-from common import load_config, esc, config_backup_bytes
+from common import load_config, esc, config_backup_bytes, backup_summary
 
 log = logging.getLogger("rebecca.sales")
 
@@ -579,19 +579,80 @@ async def report_loop(bot):
                 await bot.send_message(uid, text, parse_mode="HTML")
             except Exception as e:  # noqa: BLE001
                 log.warning("send report to %s: %s", uid, e)
-        if cfg["backup"]["enabled"]:
-            await send_backup(bot, cfg["admin_ids"], "💾 بکاپ خودکار شبانه — شامل توکن و رمزهاست؛ جای امن نگه دارید.")
+
+
+BACKUP_FORMAT = "rebecca-full-backup"
+BACKUP_HOUR = 12          # ساعت ارسال بکاپ اصلی (به وقت تهران)
+
+
+def attach_import(items: list) -> int:
+    """لاگ پیوست/پلن بعدی (برای محاسبه‌ی فروش) را هنگام بازیابی جایگزین می‌کند."""
+    clean = [x for x in items if isinstance(x, dict) and "ts" in x and "gb" in x]
+    with _ATTACH_LOCK:
+        path = _attach_file()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(clean, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    return len(clean)
+
+
+def full_backup_bytes() -> bytes:
+    """بکاپ اصلی: همه‌ی تنظیمات (پنل‌ها، ربات، قیمت‌ها، دیتابیس، SSL، رمز وب‌پنل)، نماینده‌ها و کاربرهایشان + لاگ فروش."""
+    cfg = json.loads(config_backup_bytes().decode("utf-8"))
+    payload = {
+        "format": BACKUP_FORMAT, "version": 2,
+        "created": datetime.now(TEHRAN).isoformat(timespec="seconds"),
+        "config": cfg,
+        "attach_log": _load_attach(),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8")
+
+
+def parse_backup(text: str) -> tuple[dict, list | None]:
+    """فایل بکاپ (کامل یا config.json قدیمی) ← (کانفیگ، لاگ فروش یا None). در خطا ValueError."""
+    data = json.loads(text)
+    if isinstance(data, dict) and data.get("format") == BACKUP_FORMAT:
+        cfg = data.get("config")
+        if not isinstance(cfg, dict):
+            raise ValueError("بکاپ ناقص است (بخش تنظیمات ندارد).")
+        att = data.get("attach_log")
+        return cfg, att if isinstance(att, list) else None
+    if not isinstance(data, dict):
+        raise ValueError("این فایل شبیه بکاپ ربات نیست.")
+    return data, None
+
+
+async def backup_loop(bot):
+    """هر روز ساعت ۱۲:۰۰ تهران بکاپ اصلی را به ادمین‌ها می‌فرستد؛ بین دو ارسال کاملاً خواب است."""
+    while True:
+        now = datetime.now(TEHRAN)
+        nxt = now.replace(hour=BACKUP_HOUR, minute=0, second=10, microsecond=0)
+        if nxt <= now:
+            nxt += timedelta(days=1)
+        await asyncio.sleep(max(1, (nxt - now).total_seconds()))
+        try:
+            cfg = load_config()
+            if cfg["backup"]["enabled"] and cfg["admin_ids"]:
+                await send_backup(bot, cfg["admin_ids"], "💾 بکاپ اصلی روزانه — شامل همه‌ی تنظیمات، نماینده‌ها و کاربرهایشان؛ شامل توکن و رمزهاست، جای امن نگه دارید.")
+        except Exception as e:  # noqa: BLE001
+            log.warning("backup loop: %s", e)
 
 
 async def send_backup(bot, admin_ids, caption: str) -> int:
-    """فایل config.json را به ادمین‌ها می‌فرستد؛ تعداد ارسال موفق را برمی‌گرداند."""
+    """بکاپ اصلی را به ادمین‌ها می‌فرستد؛ تعداد ارسال موفق را برمی‌گرداند."""
     import io
     try:
-        data = await asyncio.to_thread(config_backup_bytes)
-    except OSError as e:
+        data = await asyncio.to_thread(full_backup_bytes)
+    except (OSError, ValueError) as e:
         log.warning("backup read: %s", e)
         return 0
-    name = f"rebecca-config-{tehran_day()}.json"
+    name = f"rebecca-full-backup-{tehran_day()}.json"
+    try:
+        b = backup_summary()
+        caption += f"\n👥 {b['reps']} نماینده · {b['rep_users']} کاربر تخصیص‌یافته در این بکاپ است."
+    except Exception:  # noqa: BLE001
+        pass
     sent = 0
     for uid in admin_ids:
         try:
