@@ -71,6 +71,7 @@ DEFAULT_CFG = {
     "backup": {"enabled": True},
     "monitor": {"enabled": True, "interval": 300},
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
+    "unpaid": {"hours": 24, "pending": {}},   # تمدیدهای «واریز نشده»: pending = {panel_id: {username: {"due": ts, "set": ts}}}
     "web": {"user": "admin", "salt": "", "hash": "", "secret": ""},
     "reps": {},          # نمایندگان: {id: {name, label, salt, hash, blocked, created}}
     "rep_users": {},     # کاربرهای هر نماینده: {panel_id: {username: rep_id}}
@@ -194,6 +195,21 @@ def _normalize(data: dict) -> dict:
                 except (TypeError, ValueError):
                     sec[k] = dv
         cfg[key] = sec
+    un = cfg.get("unpaid") if isinstance(cfg.get("unpaid"), dict) else {}
+    try:
+        hrs = min(24 * 365, max(1, int(un.get("hours", DEFAULT_CFG["unpaid"]["hours"]))))
+    except (TypeError, ValueError):
+        hrs = DEFAULT_CFG["unpaid"]["hours"]
+    pend = {}
+    for pid, m in (un.get("pending") if isinstance(un.get("pending"), dict) else {}).items():
+        if not isinstance(m, dict):
+            continue
+        for uname, rec in m.items():
+            try:
+                pend.setdefault(str(pid), {})[str(uname)] = {"due": int(rec["due"]), "set": int(rec.get("set") or 0)}
+            except (TypeError, ValueError, KeyError, AttributeError):
+                continue
+    cfg["unpaid"] = {"hours": hrs, "pending": pend}
     reps = {}
     for rid, r in (cfg.get("reps") if isinstance(cfg.get("reps"), dict) else {}).items():
         if isinstance(r, dict) and r.get("name") and r.get("salt") and r.get("hash"):
@@ -263,6 +279,44 @@ def update_config(mutator) -> dict:
         mutator(cfg)
         save_config(cfg)
         return load_config()
+
+
+# ───────────────────────────── تمدید «واریز نشده» ─────────────────────────────
+def unpaid_mark(pid: str, username: str, hours: int | None = None) -> int:
+    """کاربر را «واریز نشده» ثبت می‌کند؛ بعد از `hours` ساعت (پیش‌فرض از تنظیمات) خودکار غیرفعال می‌شود. زمان سررسید را برمی‌گرداند."""
+    due = 0
+
+    def mut(c):
+        nonlocal due
+        h = int(hours) if hours else c["unpaid"]["hours"]
+        h = min(24 * 365, max(1, h))
+        now = int(time.time())
+        due = now + h * 3600
+        c["unpaid"]["pending"].setdefault(pid, {})[username] = {"due": due, "set": now}
+    update_config(mut)
+    return due
+
+
+def unpaid_clear(pid: str, usernames) -> int:
+    """«واریز شد» یا حذف از صف؛ تعداد ردیف‌های پاک‌شده را برمی‌گرداند."""
+    names = [usernames] if isinstance(usernames, str) else list(usernames)
+    n = 0
+
+    def mut(c):
+        nonlocal n
+        m = c["unpaid"]["pending"].get(pid) or {}
+        for u in names:
+            if m.pop(u, None) is not None:
+                n += 1
+        if not m:
+            c["unpaid"]["pending"].pop(pid, None)
+    if names and any(u in (load_config()["unpaid"]["pending"].get(pid) or {}) for u in names):
+        update_config(mut)
+    return n
+
+
+def unpaid_map(pid: str) -> dict:
+    return load_config()["unpaid"]["pending"].get(pid, {})
 
 
 def is_admin(uid: int) -> bool:
@@ -1273,8 +1327,6 @@ def _cli(argv):
     i.add_argument("--user", default="")
     w = sp.add_parser("passwd")
     w.add_argument("--password", default="")
-    u_ = sp.add_parser("unlock")
-    u_.add_argument("--rep", default="")
     s_ = sp.add_parser("ssl")
     s_.add_argument("action", choices=["off", "status"])
     a = p.parse_args(argv)
@@ -1289,15 +1341,6 @@ def _cli(argv):
         else:
             ss = cfg["ssl"]
             print(f"SSL={'on' if ss['enabled'] else 'off'}\nCERT={ss['cert']}\nKEY={ss['key']}\nERROR={ss['error']}")
-        return
-    if a.cmd == "unlock":
-        if not a.rep:
-            sys.exit("نام نماینده را بدهید: unlock --rep نام_نماینده")
-        f = _rep_find(cfg, a.rep)
-        if not f:
-            sys.exit("نماینده پیدا نشد.")
-        unlock_rep(f[0])
-        print(f"REP_UNLOCKED={f[1]['name']}")
         return
     # رمز از متغیر محیطی خوانده می‌شود تا در لیست پروسه‌ها (ps) دیده نشود
     env_pw = os.environ.get("REBECCA_INIT_PASSWORD", "")
