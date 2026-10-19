@@ -514,7 +514,7 @@ _FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567
 def _slim_rep(u: dict, api) -> dict:
     """فقط چیزهایی که نماینده باید ببیند (بدون یادداشت، سرویس، پلن بعدی و ...)."""
     d = _slim(u, api)
-    return {k: d[k] for k in ("username", "status", "used", "limit", "days_left", "unlimited_days", "expire_text", "sub")}
+    return {k: d[k] for k in ("username", "status", "used", "limit", "days_left", "unlimited_days", "expire_text", "sub")}   # «یادداشت پنل» مال ادمین است؛ یادداشت نماینده جداست
 
 
 @app.get("/api/rep/users")
@@ -522,7 +522,12 @@ async def rep_users(offset: int = Query(0, ge=0, le=100000), limit: int = Query(
     rid = rep[0]
     cfg = load_config()
     q = search.translate(_FA_DIGITS).strip().lstrip("@").lower()
-    items = [(pid, u) for pid, m in cfg["rep_users"].items() for u, r in m.items() if r == rid and (not q or q in u.lower())]
+    notes = cfg["rep_notes"]
+
+    def note_of(pid, u):
+        return notes.get(pid, {}).get(u, "")
+    items = [(pid, u) for pid, m in cfg["rep_users"].items() for u, r in m.items()
+             if r == rid and (not q or q in u.lower() or q in note_of(pid, u).translate(_FA_DIGITS).lower())]
     items.sort(key=lambda x: C._natkey(x[1]), reverse=True)      # از عدد بزرگ به کوچک (MS_150 قبل از MS_149)
     page = items[offset:offset + limit]
     sem = asyncio.Semaphore(6)
@@ -533,11 +538,34 @@ async def rep_users(offset: int = Query(0, ge=0, le=100000), limit: int = Query(
                 api = get_api(pid)
                 if not api.is_configured():
                     return None
-                return _slim_rep(await api.request("GET", api.upath(u)), api)
+                d = _slim_rep(await api.request("GET", api.upath(u)), api)
+                d["pid"], d["note"] = pid, note_of(pid, u)
+                return d
             except C.RebeccaError:        # حذف‌شده از پنل یا خطای موقت
                 return None
     res = [x for x in await asyncio.gather(*(one(p, u) for p, u in page)) if x]
     return {"users": res, "total": len(items), "missing": len(page) - len(res)}
+
+
+class RepNoteReq(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    pid: str = Field(default="", max_length=20)
+    note: str = Field(default="", max_length=400)
+
+
+@app.post("/api/rep/note")
+async def rep_note(r: RepNoteReq, rep=Depends(rep_guard)):
+    """ذخیره‌ی اسم/یادداشت نماینده برای یکی از کاربرهای خودش (جدا از یادداشت پنل که فقط ادمین می‌بیند)."""
+    rid = rep[0]
+    cfg = load_config()
+    pids = [p for p, m in cfg["rep_users"].items() if m.get(r.username) == rid and (not r.pid or p == r.pid)]
+    if not pids:
+        raise HTTPException(404, "این کاربر در لیست شما نیست.")
+    try:
+        note = await asyncio.to_thread(C.set_rep_note, rid, pids[0], r.username, r.note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "note": note}
 
 
 @app.get("/api/rep/qr")
@@ -1052,7 +1080,7 @@ async def backup_restore(r: RestoreReq):
     if not (new.get("web") or {}).get("hash"):          # بکاپ بدون رمز وب: رمز فعلی حفظ شود
         new["web"] = cur["web"]
     if "reps" not in data:                              # بکاپ قدیمی (قبل از نماینده‌ها): نماینده‌های فعلی پاک نشوند
-        new["reps"], new["rep_users"] = cur["reps"], cur["rep_users"]
+        new["reps"], new["rep_users"], new["rep_notes"] = cur["reps"], cur["rep_users"], cur["rep_notes"]
     web_changed = (new["web"].get("hash"), new["web"].get("user")) != (cur["web"].get("hash"), cur["web"].get("user"))
     safety = None
     if os.path.exists(C.CONFIG_FILE):
