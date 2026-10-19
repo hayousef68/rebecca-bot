@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>پنل ربکا</title>
+<title>پنل </title>
 <style>
 :root{
   --bg:#0a1016;--s1:#121b24;--s2:#1a2632;--line:#233241;--tx:#e9f0f6;--mu:#8497aa;
@@ -93,7 +93,7 @@ code,.code{display:block;direction:ltr;text-align:left;font-family:ui-monospace,
 .chip:hover{border-color:#3a5166;color:var(--tx)}
 .chip.on{color:var(--ac-ink);background:linear-gradient(135deg,var(--ac),var(--ac2));border-color:transparent}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-inline-end:6px;background:var(--mu)}
-.s-active .dot{background:var(--ok);box-shadow:0 0 8px var(--ok)}.s-on_hold .dot{background:var(--info)}.s-expired .dot,.s-limited .dot{background:var(--bad)}
+.s-active .dot{background:var(--ok);box-shadow:0 0 8px var(--ok)}.s-on_hold .dot{background:var(--warn)}.s-expired .dot,.s-limited .dot{background:var(--bad)}
 img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:14px;background:#fff;padding:8px}
 .err{color:var(--bad);font-size:12px;margin-top:6px}
 .toast{position:fixed;inset:auto 16px calc(100px + env(safe-area-inset-bottom)) 16px;z-index:9;margin:auto;max-width:420px;background:var(--s2);border:1px solid var(--line);
@@ -108,9 +108,9 @@ img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:1
 [hidden]{display:none!important}
 .tag{display:inline-block;font-style:normal;font-size:10.5px;font-weight:700;padding:1px 8px;border-radius:99px;margin-inline-start:8px;border:1px solid var(--line);color:var(--mu);white-space:nowrap;vertical-align:middle;line-height:1.6}
 .tag.t-active{color:var(--ok);border-color:#3ecf8e55;background:#3ecf8e14}
-.tag.t-on_hold{color:var(--info);border-color:#5aa9ff55;background:#5aa9ff14}
+.tag.t-on_hold{color:var(--warn);border-color:#f0b42988;background:#f0b4292b}
 .tag.t-expired,.tag.t-limited{color:var(--bad);border-color:#f2706b55;background:#f2706b14}
-.item.s-active{border-inline-start:3px solid var(--ok)}.item.s-on_hold{border-inline-start:3px solid var(--info)}
+.item.s-active{border-inline-start:3px solid var(--ok)}.item.s-on_hold{border-inline-start:4px solid var(--warn);background:linear-gradient(90deg,#f0b4290f,transparent 60%)}
 .pager{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:14px 0 6px}
 .pager button{min-width:38px;height:36px;padding:0 12px;border-radius:11px;border:1px solid var(--line);background:var(--s1);color:var(--mu);font:inherit;font-size:13px;font-weight:700;cursor:pointer}
 .pager button.on{color:var(--ac-ink);background:linear-gradient(135deg,var(--ac),var(--ac2));border-color:transparent}
@@ -122,8 +122,11 @@ input[type=search]::-webkit-search-cancel-button{display:none}
 mark{background:#f0b42940;color:var(--ac);border-radius:4px;padding:0 2px}
 .chips.wrap{flex-wrap:wrap;overflow:visible;padding:2px 0 8px}
 .ustat{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+.unpaid-box{margin:10px 0 0;padding:10px 12px;border:1px solid #f0b42988;background:#f0b4291f;border-radius:12px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-size:12.5px;color:var(--warn)}
+.unpaid-opt{margin-top:8px;padding:8px 10px;border:1px dashed #f0b42966;border-radius:12px}.unpaid-opt .uh{display:flex;gap:8px;align-items:center;margin-top:6px;font-size:12px;color:var(--mu)}.unpaid-opt .uh input{max-width:90px}
+.tag.t-unpaid,em.tag.unp{color:var(--warn)}
 .badge{font-size:11px;font-weight:700;padding:2px 10px;border-radius:99px;background:var(--s2);color:var(--mu);border:1px solid var(--line)}
-.badge.s-active{color:var(--ok);border-color:#3ecf8e55;background:#3ecf8e14}.badge.s-on_hold{color:var(--info);border-color:#5aa9ff55;background:#5aa9ff14}
+.badge.s-active{color:var(--ok);border-color:#3ecf8e55;background:#3ecf8e14}.badge.s-on_hold{color:var(--warn);border-color:#f0b42988;background:#f0b4292b}
 .badge.s-expired,.badge.s-limited{color:var(--bad);border-color:#f2706b55;background:#f2706b14}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:4px 0 6px}
 .tiles div{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:8px 6px;text-align:center;min-width:0}
@@ -379,9 +382,10 @@ function showResults(box, r) {
 /* ───────── کاربران ───────── */
 const faDigits = s => String(s).replace(/[۰-۹]/g, c => '۰۱۲۳۴۵۶۷۸۹'.indexOf(c)).replace(/[٠-٩]/g, c => '٠١٢٣٤٥٦٧٨٩'.indexOf(c));
 const normQ = s => faDigits(s).replace(/^[@\s]+/, '').trim().replace(/\s+/g, ' ');   // اعداد فارسی→انگلیسی، حذف @ و فاصله‌های اضافه
-const STATUS_FA = { active: 'فعال شده', on_hold: 'خام (منتظر اتصال)', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
+const STATUS_FA = { active: 'فعال شده', on_hold: '⏳ خام · هنوز وصل نشده', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
 const PAGE = 30;                                                                                  // تعداد کاربر در هر صفحه
-const TAG_FA = { active: 'فعال شده', on_hold: 'خام', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
+const TAG_FA = { active: 'فعال شده', on_hold: '⏳ خام · وصل نشده', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
+const fmtLeftT = ts => { const m = Math.max(0, Math.round((ts * 1000 - Date.now()) / 60000)); return m >= 1440 ? `${Math.floor(m / 1440)} روز و ${Math.floor(m % 1440 / 60)} ساعت` : m >= 60 ? `${Math.floor(m / 60)} ساعت و ${m % 60} دقیقه` : `${m} دقیقه`; };
 const stTag = st => h('em', { class: 'tag t-' + st }, TAG_FA[st] || st);                           // برچسب کوچک کنار نام: «خام» یا «فعال شده»
 function drawPager(box, total, off, go) {                                                         // صفحه‌بندی شماره‌دار
   const pages = Math.ceil(total / PAGE), cur = Math.floor(off / PAGE) + 1;
@@ -460,6 +464,12 @@ function userItem(u, parent, tab) {
   const cD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
   const rid = 'rs' + Math.random().toString(36).slice(2, 8);
   const rst = h('input', { type: 'checkbox', id: rid, checked: true });
+  const uid_ = 'up' + Math.random().toString(36).slice(2, 8);
+  const upC = h('input', { type: 'checkbox', id: uid_ });
+  const upH = h('input', { type: 'number', min: 1, max: 8760, value: S.st.unpaid_hours || 24, dir: 'ltr', inputmode: 'numeric' });
+  const upRow = h('div', { class: 'uh', hidden: true }, 'غیرفعال شدن خودکار بعد از', upH, 'ساعت');
+  upC.addEventListener('change', () => { upRow.hidden = !upC.checked; updR(); }); upH.addEventListener('input', () => updR());
+  const upBox = h('div', { class: 'unpaid-opt' }, h('label', { class: 'chk', for: uid_ }, upC, '💸 واریز نشده (اگر پرداخت نشد، خودکار غیرفعال شود)'), upRow);
   let rmode = 'tpl';
   const tplBox = field('تمپلت', tplSel), cusBox = h('div', { class: 'row', hidden: true }, field('حجم جدید (GB)', cG), field('مدت جدید (روز)', cD));
   const prev = h('div', { class: 'prev' }), goR = h('button', { class: 'btn pri' }, '⚡ اعمال تمدید');
@@ -471,11 +481,16 @@ function userItem(u, parent, tab) {
       h('div', {}, '📦 حجم نهایی: ', h('b', {}, fmtG(v.gb)), h('span', { class: 'sub' }, `  (الان: ${usage(u)})`)),
       h('div', {}, '📅 اعتبار نهایی: ', h('b', {}, fmtD(v.days)), h('span', { class: 'sub' }, `  (الان: ${u.expire_text})`)),
       h('div', {}, '🔄 مصرف: ', h('b', {}, rst.checked ? 'صفر می‌شود' : 'حفظ می‌شود')),
+      upC.checked ? h('div', {}, '💸 واریز نشده: ', h('b', {}, `غیرفعال می‌شود بعد از ${upH.value || '؟'} ساعت`)) : null,
       h('div', {}, '📂 سرویس: ', h('b', {}, svcName), h('span', { class: 'sub' }, '  (بدون تغییر)'))));
   };
   [tplSel, cG, cD, rst].forEach(i => i.addEventListener('input', updR)); rst.addEventListener('change', updR);
   goR.onclick = () => { const v = rVals(); if (!v) return;
-    run(goR, async () => { const r = await api(P + 'renew', 'POST', rmode === 'tpl' ? { template: tplSel.value, reset_usage: rst.checked } : { gb: v.gb, days: v.days, reset_usage: rst.checked }); toast('✅ تمدید شد'); swap(r, 'renew'); }); };
+    const nmT = rmode === 'tpl' ? tplSel.value : 'دلخواه';
+    if (!confirm(`تمدید «${u.username}» انجام شود؟\n\n📋 ${nmT}\n📦 حجم: ${fmtG(v.gb).replace(/[\u2066\u2069]/g, '')}\n📅 مدت: ${fmtD(v.days)}\n🔄 مصرف: ${rst.checked ? 'صفر می‌شود' : 'حفظ می‌شود'}${upC.checked ? `\n💸 واریز نشده: غیرفعال می‌شود بعد از ${upH.value} ساعت` : ''}`)) return;
+    if (upC.checked && !(+upH.value >= 1)) return toast('مهلت را به ساعت وارد کنید (حداقل ۱).', true);
+    const up = upC.checked ? { unpaid: true, unpaid_hours: Math.round(+upH.value) } : {};
+    run(goR, async () => { const r = await api(P + 'renew', 'POST', rmode === 'tpl' ? { template: tplSel.value, reset_usage: rst.checked, ...up } : { gb: v.gb, days: v.days, reset_usage: rst.checked, ...up }); toast(upC.checked ? `✅ تمدید شد · ${upH.value} ساعت دیگر اگر واریز نشود غیرفعال می‌شود` : '✅ تمدید شد'); swap(r, 'renew'); }); };
 
   // پیوست حجم/زمان: به مقدار فعلی «اضافه» می‌شود (مصرف و سرویس دست‌نخورده)
   const aG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
@@ -486,7 +501,7 @@ function userItem(u, parent, tab) {
     const r = await api(P + 'edit', 'POST', { add_gb: +aG.value || null, add_days: +aD.value || null });
     toast(`✅ پیوست شد: ${+aG.value ? '+' + aG.value + ' GB ' : ''}${+aD.value ? '+' + aD.value + ' روز' : ''}`); swap(r, 'renew'); });
   const paneRenew = h('div', {}, rseg, tplBox, cusBox, h('label', { class: 'chk', for: rid }, rst, 'مصرف فعلی صفر شود'),
-    prev, goR,
+    upBox, prev, goR,
     h('div', { class: 'psec' }, h('b', {}, '➕ پیوست حجم / زمان'), h('span', {}, 'به مقدار فعلی اضافه می‌شود')),
     h('div', { class: 'attach' }, aG, aD, aB));
 
@@ -565,6 +580,9 @@ function userItem(u, parent, tab) {
 
   body.append(
     h('div', { class: 'ustat' }, h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status), h('span', { class: 'sub' }, `سرویس: ${svcName}`)),
+    u.unpaid_due ? (() => { const b = h('button', { class: 'btn sm pri', type: 'button' }, '✅ واریز شد');
+      b.onclick = () => run(b, async () => { const r = await api(P + 'paid', 'POST'); toast('✅ ثبت شد؛ غیرفعال‌سازی خودکار لغو شد'); swap(r, 'renew'); });
+      return h('div', { class: 'unpaid-box' }, h('span', {}, `💸 واریز نشده — ${fmtLeftT(u.unpaid_due)} دیگر غیرفعال می‌شود`), b); })() : null,
     h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
     h('div', { class: 'tiles' }, tile('مصرف', gb(u.used)), tile('باقی‌مانده', left), tile('اعتبار', u.expire_text)),
     h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
@@ -577,7 +595,7 @@ function userItem(u, parent, tab) {
   showTab(curTab); updR(); updE();
   const hq = (S.users && S.users.q || '').toLowerCase(), ix = hq ? u.username.toLowerCase().indexOf(hq) : -1;
   const nm = ix < 0 ? [u.username] : [u.username.slice(0, ix), h('mark', {}, u.username.slice(ix, ix + hq.length)), u.username.slice(ix + hq.length)];
-  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), nm, stTag(u.status)), h('span', { class: 'sub' }, `${svcName} · ${usage(u)}`)), body);
+  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), nm, stTag(u.status), u.unpaid_due ? h('em', { class: 'tag unp' }, '💸') : null), h('span', { class: 'sub' }, `${svcName} · ${usage(u)}`)), body);
   return d;
 }
 
@@ -774,6 +792,12 @@ async function vSet() {
   const tok = i(c.bot_token, '123456:ABC…'), adm = i(c.admin_ids.join(', '), 'شناسه عددی ادمین‌ها، با کاما'), wp = i('', 'حداقل ۸ کاراکتر', 'password');
   const saveB = h('button', { class: 'btn pri' }, 'ذخیره تنظیمات ربات');
   saveB.onclick = () => run(saveB, async () => { const r = await api('/settings', 'POST', { bot_token: tok.value, admin_ids: adm.value }); toast(r.bot_restarted ? 'ذخیره شد و ربات ریستارت شد' : 'ذخیره شد'); await refreshState(); });
+  const dpre = i(c.default_prefix, 'MS_'); dpre.maxLength = 28; dpre.autocapitalize = 'none';
+  const saveDp = h('button', { class: 'btn pri' }, 'ذخیره اسم پیش‌فرض');
+  saveDp.onclick = () => run(saveDp, async () => { await api('/settings', 'POST', { default_prefix: dpre.value.trim() }); toast('✅ اسم پیش‌فرض ذخیره شد'); S.setOpen = 'newuser'; await refreshState(); await vSet(); });
+  const upHrs = i(String(c.unpaid_hours || 24), '24'); upHrs.type = 'number'; upHrs.min = 1; upHrs.max = 8760; upHrs.dir = 'ltr';
+  const saveUp = h('button', { class: 'btn pri' }, 'ذخیره مهلت');
+  saveUp.onclick = () => run(saveUp, async () => { const n = Math.round(+upHrs.value); if (!(n >= 1)) throw new Error('مهلت را به ساعت وارد کنید (حداقل ۱).'); await api('/settings', 'POST', { unpaid_hours: n }); toast('✅ مهلت ذخیره شد'); S.setOpen = 'unpaid'; await refreshState(); await vSet(); });
   const saveW = h('button', { class: 'btn' }, 'تغییر رمز وب‌پنل');
   saveW.onclick = () => run(saveW, async () => { await api('/settings', 'POST', { web_password: wp.value }); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
   // قیمت‌ها و لیست فروش
@@ -861,17 +885,17 @@ async function vSet() {
   const rsB = h('button', { class: 'btn bad', type: 'button' }, '♻️ بازیابی از فایل');
   rsB.onclick = () => run(rsB, async () => {
     const f = fileI.files[0]; if (!f) throw new Error('ابتدا فایل بکاپ را انتخاب کنید.');
-    if (f.size > 1.2e7) throw new Error('حجم فایل زیاد است.');
-    if (!confirm('همه‌ی اطلاعات فعلی (پنل‌ها، توکن، قیمت‌ها، دیتابیس، رمز وب‌پنل، نماینده‌ها و کاربرهایشان، لاگ فروش) با این فایل جایگزین شود؟\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
+    if (f.size > 2e6) throw new Error('حجم فایل زیاد است.');
+    if (!confirm('همه‌ی تنظیمات فعلی (پنل‌ها، توکن، قیمت‌ها، دیتابیس) با این فایل جایگزین شود؟\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
     const r = await api('/backup/restore', 'POST', { content: await f.text() });
-    toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · ${r.rep_users} کاربرِ نماینده${r.sales_log != null ? ' · ' + r.sales_log + ' رکورد فروش' : ''}${r.reps_kept ? ' (بکاپ قدیمی بود؛ نماینده‌های فعلی حفظ شد)' : ''} · ربات در حال ریستارت`);
+    toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · ${r.rep_users} کاربرِ نماینده${r.reps_kept ? ' (بکاپ قدیمی بود؛ نماینده‌های فعلی حفظ شد)' : ''} · ربات در حال ریستارت`);
     setTimeout(() => location.reload(), r.web_changed ? 1800 : 1200);
   });
   const backupCard = h('div', { class: 'card' }, h('h2', {}, '💾 بکاپ و بازیابی'),
-    h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ اصلی هر روز ساعت ۱۲ ظهر (وقت تهران) به تلگرام ادمین‌ها'),
+    h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ هر شب ساعت ۰۰:۰۰ همراه گزارش فروش'),
     h('div', { class: 'btns' }, dlB, tgB),
     h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, 'بازیابی از فایل بکاپ'), fileI,
-    h('p', { class: 'hint' }, 'بکاپ اصلی همه‌چیز را دارد: تنظیمات پنل‌ها و ربات، قیمت‌ها، دیتابیس فروش، SSL، رمز وب‌پنل، نماینده‌ها (با رمز هش‌شده)، لیست کاربرهای هر نماینده، وضعیت مسدود/قفل و لاگ فروش؛ بعد از بازیابی روی سرور جدید هر کاربر دوباره زیر نماینده‌ی خودش نمایش داده می‌شود. فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
+    h('p', { class: 'hint' }, 'بکاپ شامل نماینده‌ها (با رمز هش‌شده)، لیست کاربرهای هر نماینده و وضعیت مسدود/قفل آن‌هاست؛ بعد از بازیابی روی سرور جدید هر کاربر دوباره زیر نماینده‌ی خودش نمایش داده می‌شود. فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
     h('div', { class: 'btns' }, rsB));
   // ─── نماینده‌ها ───
   let reps = []; try { reps = (await api('/reps')).reps; } catch { /* خطا: لیست خالی */ }
@@ -942,6 +966,10 @@ async function vSet() {
       h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
       h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)')))),
     drawer('bot', '🤖', 'ربات تلگرام', tok.value ? 'تنظیم شده' : 'تنظیم نشده', strip(h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)))),
+    drawer('newuser', '🆕', 'کاربر جدید', `پیش‌فرض: ${c.default_prefix}`, strip(h('div', { class: 'card' }, h('h2', {}, 'کاربر جدید'), field('اسم پیش‌فرض (پیشوند نام کاربری)', dpre),
+      h('p', { class: 'hint' }, 'در فرم «ساخت اکانت» همین اسم از قبل پر می‌شود و شماره‌ی بعدی خودکار پیدا می‌شود. فقط حرف انگلیسی، عدد و _ (مثلاً MS_).'), h('div', { class: 'btns' }, saveDp)))),
+    drawer('unpaid', '💸', 'تمدید واریز نشده', `${c.unpaid_hours} ساعت${c.unpaid_count ? ` · ${c.unpaid_count} در انتظار` : ''}`, strip(h('div', { class: 'card' }, h('h2', {}, 'تمدید واریز نشده'), field('مهلت پیش‌فرض تا غیرفعال‌سازی خودکار (ساعت)', upHrs),
+      h('p', { class: 'hint' }, 'موقع تمدید گزینه‌ی «واریز نشده» را بزنید؛ اگر تا پایان مهلت «✅ واریز شد» نزنید، کاربر خودکار غیرفعال می‌شود (چک هر ۱ دقیقه توسط ربات، و پیام به ادمین‌ها). مهلت را موقع هر تمدید هم می‌توانید جداگانه تغییر دهید.'), h('div', { class: 'btns' }, saveUp)))),
     drawer('reps', '👤', 'نماینده‌ها', reps.length ? `${reps.length} نماینده${reps.some(r => r.blocked) ? ' · ⛔' : ''}` : 'ندارید', repBody),
     drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
     drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن' : 'خودکار خاموش', strip(backupCard)),
