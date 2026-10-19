@@ -198,7 +198,8 @@ def _normalize(data: dict) -> dict:
     for rid, r in (cfg.get("reps") if isinstance(cfg.get("reps"), dict) else {}).items():
         if isinstance(r, dict) and r.get("name") and r.get("salt") and r.get("hash"):
             reps[str(rid)] = {"name": str(r["name"]), "label": str(r.get("label") or "")[:60], "salt": str(r["salt"]), "hash": str(r["hash"]),
-                              "blocked": bool(r.get("blocked")), "created": int(r.get("created") or 0)}
+                              "blocked": bool(r.get("blocked")), "created": int(r.get("created") or 0),
+                              "locked": bool(r.get("locked")), "fails": max(0, int(r.get("fails") or 0)), "locked_at": int(r.get("locked_at") or 0)}
     cfg["reps"] = reps
     ru = {}
     for pid, m in (cfg.get("rep_users") if isinstance(cfg.get("rep_users"), dict) else {}).items():
@@ -372,7 +373,8 @@ def create_rep(name: str, password: str = "", label: str = "") -> dict:
         if name.lower() == str(c["web"].get("user", "admin")).lower() or _rep_find(c, name):
             raise ValueError("این نام کاربری قبلاً استفاده شده است.")
         rid = "r" + secrets.token_hex(4)
-        c["reps"][rid] = {"name": name, "label": (label or "").strip()[:60], **hash_password(password), "blocked": False, "created": int(time.time())}
+        c["reps"][rid] = {"name": name, "label": (label or "").strip()[:60], **hash_password(password), "blocked": False, "created": int(time.time()),
+                          "locked": False, "fails": 0, "locked_at": 0}
         out.update(id=rid, name=name)
     update_config(mut)
     return {**out, "password": password}
@@ -387,6 +389,7 @@ def reset_rep_password(rid: str, password: str = "") -> str:
         if rid not in c["reps"]:
             raise ValueError("نماینده پیدا نشد.")
         c["reps"][rid].update(hash_password(password))
+        c["reps"][rid].update(locked=False, fails=0, locked_at=0)      # رمز جدید = شروع تازه
     update_config(mut)
     return password
 
@@ -420,6 +423,59 @@ def check_rep_login(name: str, pw: str) -> tuple[str, bool] | None:
     return None
 
 
+REP_MAX_FAILS = 5
+
+
+def rep_login(name: str, pw: str) -> tuple[str, str | None]:
+    """ورود نماینده با قفل حساب: ("ok"|"bad"|"blocked"|"locked"|"locked_now"|"none", rep_id).
+
+    ۵ رمز اشتباه پیاپی روی یک نماینده، همان حساب را موقتاً غیرفعال می‌کند ("locked_now" فقط در همان لحظه‌ی قفل شدن)؛
+    تا وقتی مدیر دستی آزادش نکند، حتی با رمز درست هم وارد نمی‌شود. ورود موفق شمارنده را صفر می‌کند.
+    """
+    f = _rep_find(load_config(), name)
+    if not f:
+        hash_password(pw or "x", "00" * 16)          # زمان پاسخ برای نام ناموجود هم مشابه باشد
+        return "none", None
+    rid, r = f
+    if r.get("locked"):
+        return "locked", rid                          # رمز بررسی نمی‌شود تا حدس‌زدن روی حساب قفل‌شده ممکن نباشد
+    if secrets.compare_digest(hash_password(pw, r["salt"])["hash"], r["hash"]):
+        if r.get("fails"):
+            def ok(c):
+                if rid in c["reps"]:
+                    c["reps"][rid]["fails"] = 0
+            update_config(ok)
+        return ("blocked" if r["blocked"] else "ok"), rid
+    state = {"v": "bad"}
+
+    def bad(c):
+        rr = c["reps"].get(rid)
+        if not rr or rr.get("locked"):
+            return
+        rr["fails"] = int(rr.get("fails") or 0) + 1
+        if rr["fails"] >= REP_MAX_FAILS:
+            rr["locked"], rr["locked_at"] = True, int(time.time())
+            state["v"] = "locked_now"
+    update_config(bad)
+    return state["v"], rid
+
+
+def unlock_rep(rid: str) -> None:
+    """فعال‌سازی مجدد نماینده‌ای که به‌خاطر رمز اشتباه قفل شده."""
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        c["reps"][rid].update(locked=False, fails=0, locked_at=0)
+    update_config(mut)
+
+
+def backup_summary(cfg: dict | None = None) -> dict:
+    """شمارش نماینده‌ها و کاربرهای تخصیص‌یافته (برای نمایش در بکاپ/بازیابی)."""
+    cfg = cfg or load_config()
+    return {"panels": len(cfg["panels"]), "reps": len(cfg["reps"]),
+            "rep_users": sum(len(m) for m in cfg["rep_users"].values())}
+
+
 def _rep_key(rep: dict) -> bytes | None:
     k = _session_key()
     return None if k is None else k + b"|rep|" + rep["hash"].encode()      # با عوض شدن رمز نماینده، نشست‌هایش باطل می‌شود
@@ -440,7 +496,7 @@ def check_rep_session(token: str) -> tuple[str, dict] | None:
         rid, exp, sig = token.rsplit("|", 2)
         rep = load_config()["reps"].get(rid)
         key = _rep_key(rep) if rep else None
-        if key is None or rep["blocked"] or int(exp) < time.time():
+        if key is None or rep["blocked"] or rep.get("locked") or int(exp) < time.time():
             return None
         if hmac.compare_digest(sig, hmac.new(key, f"{rid}|{exp}".encode(), hashlib.sha256).hexdigest()):
             return rid, rep
@@ -1217,6 +1273,8 @@ def _cli(argv):
     i.add_argument("--user", default="")
     w = sp.add_parser("passwd")
     w.add_argument("--password", default="")
+    u_ = sp.add_parser("unlock")
+    u_.add_argument("--rep", default="")
     s_ = sp.add_parser("ssl")
     s_.add_argument("action", choices=["off", "status"])
     a = p.parse_args(argv)
@@ -1231,6 +1289,15 @@ def _cli(argv):
         else:
             ss = cfg["ssl"]
             print(f"SSL={'on' if ss['enabled'] else 'off'}\nCERT={ss['cert']}\nKEY={ss['key']}\nERROR={ss['error']}")
+        return
+    if a.cmd == "unlock":
+        if not a.rep:
+            sys.exit("نام نماینده را بدهید: unlock --rep نام_نماینده")
+        f = _rep_find(cfg, a.rep)
+        if not f:
+            sys.exit("نماینده پیدا نشد.")
+        unlock_rep(f[0])
+        print(f"REP_UNLOCKED={f[1]['name']}")
         return
     # رمز از متغیر محیطی خوانده می‌شود تا در لیست پروسه‌ها (ps) دیده نشود
     env_pw = os.environ.get("REBECCA_INIT_PASSWORD", "")
