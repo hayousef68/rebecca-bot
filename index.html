@@ -305,7 +305,9 @@ async function vCreate() {
     if (c) svc.value = c.id;
   };
   let svcTouched = false; svc.addEventListener('change', () => { svcTouched = true; });
-  const tg = h('input', { type: 'checkbox', id: 'tg', checked: st.bot });
+  let tgPref = null; try { tgPref = localStorage.getItem('rb_tg'); } catch { /* بدون ذخیره‌سازی */ }
+  const tg = h('input', { type: 'checkbox', id: 'tg', checked: st.bot && tgPref !== '0' });
+  tg.addEventListener('change', () => { try { localStorage.setItem('rb_tg', tg.checked ? '1' : '0'); } catch { /* ignore */ } });
   const prev = h('p', { class: 'hint' }), last = h('p', { class: 'hint' });
   const out = h('div');
   let mode = 'single';   // هر بار که صفحه باز می‌شود، پیش‌فرض ساخت تکی است
