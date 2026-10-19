@@ -424,7 +424,8 @@ class CreateReq(BaseModel):
     count: int = 1
     service_id: int
     template: str | None = None
-    telegram: bool = False
+    telegram: bool = False                                          # قدیمی؛ نادیده گرفته می‌شود (لینک همیشه ارسال می‌شود)
+    send_qr: bool = True                                            # تصویر QR هم همراه لینک ارسال شود؟
     gb: float | None = Field(default=None, ge=0, le=100000)      # جایگزین حجم تمپلت (تکی)
     days: int | None = Field(default=None, ge=0, le=36500)       # جایگزین مدت تمپلت
     mode: str | None = Field(default=None, pattern="^(on_hold|active)$")
@@ -469,11 +470,11 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
             raise HTTPException(404, "نماینده پیدا نشد.")
         await asyncio.to_thread(C.assign_users, req.rep_id, api.pid, [x["username"] for x in results])
     tg = "off"
-    if req.telegram and results:
+    if results:
         if cfg["bot_token"] and cfg["admin_ids"]:
             svc = next((s["name"] for s in await api.list_services() if s["id"] == req.service_id), req.service_id)
             header = C.build_info(api.name, tpl, svc)
-            t = asyncio.create_task(_safe_send(cfg, results, header))
+            t = asyncio.create_task(_safe_send(cfg, results, header, req.send_qr))
             _bg.add(t)
             t.add_done_callback(_bg.discard)
             tg = "queued"
@@ -489,9 +490,9 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
     return {"ok": results, "failed": [{"username": n, "reason": r} for n, r in failed], "telegram": tg, "value": value}
 
 
-async def _safe_send(cfg, results, header):
+async def _safe_send(cfg, results, header, send_qr=True):
     try:
-        await C.send_results(_tg_bot(cfg["bot_token"]), cfg["admin_ids"][0], results, header, cfg["max_qr"])
+        await C.send_results(_tg_bot(cfg["bot_token"]), cfg["admin_ids"][0], results, header, cfg["max_qr"], send_qr)
     except Exception:  # noqa: BLE001
         log.exception("ارسال به تلگرام ناموفق بود")
 
