@@ -3,7 +3,7 @@
 #
 #   نصب:      bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh)
 #   حذف:      bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/install.sh) uninstall -y
-#   بعد از نصب دستور  rebecca-bot  در دسترس است:  rebecca-bot {update|restart|status|logs|passwd|info|ssl|uninstall}
+#   بعد از نصب دستور  rebecca-bot  در دسترس است:  rebecca-bot {update|restart|status|logs|passwd|unlock|info|ssl|uninstall}
 #
 # نصب بدون سؤال:  BOT_TOKEN=123:ABC ADMIN_ID=111,222 WEB_USER=admin WEB_PASSWORD=mypass1234 WEB_PORT=8686 bash <(curl -Ls ...)
 set -euo pipefail
@@ -177,7 +177,7 @@ show_info() {
   elif [ "${PASS_GIVEN:-0}" = "1" ]; then echo " 🔑 رمز:     (همانی که وارد کردید)"
   else echo " 🔑 رمز:     (قبلاً ساخته شده؛ برای رمز جدید: rebecca-bot passwd)"; fi
   if [ "$scheme" = "http" ]; then echo " 🔒 برای فعال‌سازی SSL: وب‌پنل > تنظیمات > SSL (از گواهی پنل ربکا استفاده می‌شود)"; fi
-  echo " 🛠 دستورها: rebecca-bot {update|restart|status|logs|passwd|info|ssl|uninstall}"
+  echo " 🛠 دستورها: rebecca-bot {update|restart|status|logs|passwd|unlock|info|ssl|uninstall}"
   echo "${C}════════════════════════════════════════════${N}"
 }
 
@@ -218,6 +218,16 @@ do_passwd() {
   echo "$out" | sed -n 's/^WEB_PASSWORD=/🔑 رمز جدید وب‌پنل: /p'
 }
 
+do_unlock() {
+  need_root
+  [ "${1:-}" = "--rep" ] && [ -n "${2:-}" ] || { echo "استفاده: $0 unlock --rep نام_نماینده"; exit 1; }
+  local out; out=$(cd "$DIR" && "$DIR/venv/bin/python" common.py unlock "$@")
+  case "$out" in
+    *REP_UNLOCKED=*) ok "نماینده دوباره فعال شد." ;;
+    *)               echo "$out" ;;
+  esac
+}
+
 do_ssl() {
   need_root
   case "${1:-status}" in
@@ -237,9 +247,10 @@ main() {
     status)    systemctl --no-pager -l status rebecca-bot rebecca-webapp || true ;;
     logs)      journalctl -u rebecca-bot -u rebecca-webapp -f -n 80 --no-hostname -o cat ;;
     passwd)    do_passwd "$@" ;;
+    unlock)    do_unlock "$@" ;;      # rebecca-bot unlock --rep نام_نماینده
     info)      show_info ;;
     ssl)       do_ssl "$@" ;;
-    *)         echo "استفاده: $0 {install|update|uninstall [-y] [--keep-config]|restart|status|logs|passwd|info|ssl}"; exit 1 ;;
+    *)         echo "استفاده: $0 {install|update|uninstall [-y] [--keep-config]|restart|status|logs|passwd|unlock|info|ssl}"; exit 1 ;;
   esac
 }
 main "$@"
