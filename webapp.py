@@ -172,6 +172,24 @@ async def login_page(request: Request):
     return HTMLResponse(_read_cached(LOGIN, _login_cache), headers=_PAGE_HEADERS)
 
 
+def _notify_lock(rep_name: str):
+    """به ادمین‌ها در تلگرام خبر می‌دهد که حساب نماینده قفل شد (بی‌صدا؛ خطا نادیده گرفته می‌شود)."""
+    cfg = load_config()
+    if not (cfg["bot_token"] and cfg["admin_ids"]):
+        return
+
+    async def go():
+        bot = _tg_bot(cfg["bot_token"])
+        for uid in cfg["admin_ids"]:
+            try:
+                await bot.send_message(uid, f"🔒 حساب نماینده «{rep_name}» بعد از {C.REP_MAX_FAILS} رمز اشتباه پیاپی موقتاً غیرفعال شد.\nاز وب‌پنل > تنظیمات > نماینده‌ها (یا ربات: /unlock {rep_name}) فعالش کنید.")
+            except Exception:  # noqa: BLE001
+                pass
+    t = asyncio.create_task(go())
+    _bg.add(t)
+    t.add_done_callback(_bg.discard)
+
+
 class LoginReq(BaseModel):
     user: str = Field(max_length=100)
     password: str = Field(max_length=256)
@@ -186,17 +204,23 @@ async def login(r: LoginReq, request: Request):
         raise HTTPException(503, "رمز وب‌پنل تنظیم نشده است. روی سرور اجرا کنید: rebecca-bot passwd")
     ip, now = _client_ip(request), time.time()
     recent = [t for t in _fails.get(ip, []) if now - t < 300]
-    if len(recent) >= 8:
+    if len(recent) >= 5:
         raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
     user = r.user.strip()
     secure = request.url.scheme == "https"
-    if not C.check_web_login(user, r.password):
-        rp = await asyncio.to_thread(C.check_rep_login, user, r.password)      # شاید نماینده باشد
-        if rp:
-            if rp[1]:
+    if not C.check_web_login(user, r.password):          # ادمین هرگز قفل نمی‌شود (فقط محدودیت IP)
+        st, rid = await asyncio.to_thread(C.rep_login, user, r.password)      # شاید نماینده باشد
+        if st in ("locked", "locked_now"):
+            if st == "locked_now":
+                _notify_lock(user)
+            recent.append(now)
+            _fails[ip] = recent
+            raise HTTPException(423, "این حساب به‌خاطر چند بار رمز اشتباه موقتاً غیرفعال شده است؛ با مدیر تماس بگیرید.")
+        if st in ("ok", "blocked"):
+            if st == "blocked":
                 raise HTTPException(403, "حساب شما مسدود شده است؛ با مدیر تماس بگیرید.")
             _fails.pop(ip, None)
-            tok, ttl = C.make_rep_session(rp[0])
+            tok, ttl = C.make_rep_session(rid)
             resp = JSONResponse({"ok": True, "role": "rep"})
             resp.set_cookie(COOKIE_REP, tok, max_age=ttl, httponly=True, samesite="strict", secure=secure, path="/")
             resp.delete_cookie(COOKIE, path="/")
@@ -558,7 +582,8 @@ async def reps_list():
     for m in cfg["rep_users"].values():
         for r in m.values():
             cnt[r] = cnt.get(r, 0) + 1
-    return {"reps": [{"id": i, "name": r["name"], "label": r["label"], "blocked": r["blocked"], "count": cnt.get(i, 0), "created": r["created"]}
+    return {"reps": [{"id": i, "name": r["name"], "label": r["label"], "blocked": r["blocked"], "locked": r["locked"], "fails": r["fails"], "locked_at": r["locked_at"],
+                      "count": cnt.get(i, 0), "created": r["created"]}
                      for i, r in cfg["reps"].items()]}
 
 
@@ -575,6 +600,12 @@ async def reps_password(rid: str, r: RepPwReq):
 @app.post("/api/reps/{rid}/block", dependencies=[Depends(guard)])
 async def reps_block(rid: str, r: RepBlockReq):
     await asyncio.to_thread(C.set_rep_blocked, rid, r.blocked)
+    return {"ok": True}
+
+
+@app.post("/api/reps/{rid}/unlock", dependencies=[Depends(guard)])
+async def reps_unlock(rid: str):
+    await asyncio.to_thread(C.unlock_rep, rid)
     return {"ok": True}
 
 
@@ -946,17 +977,17 @@ class BackupSettingsReq(BaseModel):
 
 
 class RestoreReq(BaseModel):
-    content: str = Field(min_length=2, max_length=2_000_000)
+    content: str = Field(min_length=2, max_length=12_000_000)
 
 
 @app.get("/api/backup", dependencies=[Depends(guard)])
 async def backup_download():
     try:
-        data = await asyncio.to_thread(C.config_backup_bytes)
-    except OSError:
+        data = await asyncio.to_thread(sales.full_backup_bytes)
+    except (OSError, ValueError):
         raise HTTPException(404, "فایل تنظیمات پیدا نشد.")
     return Response(data, media_type="application/json",
-                    headers={"Content-Disposition": f'attachment; filename="rebecca-config-{sales.tehran_day()}.json"'})
+                    headers={"Content-Disposition": f'attachment; filename="rebecca-full-backup-{sales.tehran_day()}.json"'})
 
 
 @app.post("/api/backup/settings", dependencies=[Depends(guard)])
@@ -982,22 +1013,30 @@ async def backup_restore(r: RestoreReq):
     import json
     import shutil
     try:
-        data = json.loads(r.content)
-    except ValueError:
-        raise HTTPException(400, "فایل JSON معتبر نیست.")
-    if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates"}):
+        data, attach = sales.parse_backup(r.content)       # بکاپ کامل جدید یا config.json قدیمی
+    except ValueError as e:
+        raise HTTPException(400, str(e) if "بکاپ" in str(e) or "شبیه" in str(e) else "فایل JSON معتبر نیست.")
+    if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates", "reps"}):
         raise HTTPException(400, "این فایل شبیه بکاپ تنظیمات ربات نیست.")
     new = C._normalize(data)
     cur = load_config()
     if not (new.get("web") or {}).get("hash"):          # بکاپ بدون رمز وب: رمز فعلی حفظ شود
         new["web"] = cur["web"]
+    if "reps" not in data:                              # بکاپ قدیمی (قبل از نماینده‌ها): نماینده‌های فعلی پاک نشوند
+        new["reps"], new["rep_users"] = cur["reps"], cur["rep_users"]
     web_changed = (new["web"].get("hash"), new["web"].get("user")) != (cur["web"].get("hash"), cur["web"].get("user"))
     safety = None
     if os.path.exists(C.CONFIG_FILE):
         safety = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
         shutil.copy2(C.CONFIG_FILE, safety)
         os.chmod(safety, 0o600)
+    asafe = None
+    ap = sales._attach_file()
+    if attach is not None and os.path.exists(ap):
+        asafe = f"{ap}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.copy2(ap, asafe)
     C.save_config(new)
+    n_attach = await asyncio.to_thread(sales.attach_import, attach) if attach is not None else None
     for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
         C.drop_api(p)
     _bot.update(token=None, obj=None)
@@ -1006,7 +1045,8 @@ async def backup_restore(r: RestoreReq):
         asyncio.create_task(proc.wait())
     except Exception:  # noqa: BLE001
         log.warning("ریستارت خودکار ربات ممکن نشد")
-    return {"ok": True, "panels": len(new["panels"]), "web_changed": web_changed, "safety": os.path.basename(safety) if safety else None}
+    return {"ok": True, "panels": len(new["panels"]), "web_changed": web_changed, "safety": os.path.basename(safety) if safety else None,
+            "reps": len(new["reps"]), "rep_users": C.backup_summary(new)["rep_users"], "reps_kept": "reps" not in data, "sales_log": n_attach}
 
 
 class PanelReq(BaseModel):
