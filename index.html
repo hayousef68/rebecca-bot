@@ -160,6 +160,10 @@ mark{background:#f0b42940;color:var(--ac);border-radius:4px;padding:0 2px}
 .acc-body{padding-top:12px!important}
 .acc-in{display:block}.acc-in>:first-child{margin-top:0}
 .acc-body .card{box-shadow:none;background:var(--bg)}
+
+.item textarea{width:100%;min-height:70px;background:var(--bg);border:1px solid var(--line);border-radius:10px;color:var(--tx);font:inherit;font-size:13px;padding:8px 10px;resize:vertical;margin-top:2px}
+.item textarea:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
+.item.s-disabled .nm{opacity:.6}
 </style>
 </head>
 <body>
@@ -206,9 +210,9 @@ async function copy(text) {
   toast('کپی شد');
 }
 const gb = b => !b ? 'نامحدود' : '\u2066' + (b / 1073741824).toFixed(2) + ' GB\u2069';
-function toggleQR(box, sub, name) {
+function toggleQR(box, sub, name, path) {
   if (box.firstChild) return box.replaceChildren();
-  box.replaceChildren(h('img', { class: 'qr', loading: 'lazy', alt: 'QR ' + name, src: '/api/qr?text=' + encodeURIComponent(sub) }));
+  box.replaceChildren(h('img', { class: 'qr', loading: 'lazy', alt: 'QR ' + name, src: (path || '/api/qr') + '?text=' + encodeURIComponent(sub) }));
 }
 const debounce = (f, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f(...a), ms); }; };
 async function run(btn, fn) {
@@ -321,6 +325,8 @@ async function vCreate() {
   base.addEventListener('input', debounce(() => { upd(); if (/^[A-Za-z0-9_]{1,28}$/.test(base.value.trim())) detect(base.value.trim(), true); }, 450));
   [start, count, one].forEach(i => i.addEventListener('input', upd));
   [one, cg, cd, base, start, count].forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go_.click(); } })); fillTpl(); autoSvc(mode); upd(); detect(st.default_prefix, true);
+  let reps = []; try { reps = (await api('/reps')).reps; } catch { /* بدون نماینده */ }
+  const repSel = h('select', {}, h('option', { value: '' }, '— بدون نماینده —'), reps.filter(r => !r.blocked).map(r => h('option', { value: r.id }, r.label ? `${r.label} (${r.name})` : r.name)));
   const go_ = h('button', { class: 'btn pri' }, '⚡ ساخت اکانت');
   go_.onclick = () => run(go_, async () => {
     if (!svc.value) throw new Error('سرویسی برای این پنل پیدا نشد؛ اتصال پنل را در تنظیمات بررسی کنید.');
@@ -328,7 +334,8 @@ async function vCreate() {
     if (mode === 'single') { if (!one.value.trim()) throw new Error('نام کاربری را وارد کنید.'); if (cg.value === '' || cd.value === '' || +cg.value < 0 || +cd.value < 0) throw new Error('حجم و مدت را وارد کنید (۰ = نامحدود).'); body = { base: one.value.trim(), start: null, count: 1, gb: +cg.value, days: +cd.value, mode: cm.value }; }
     else { if (!base.value.trim() || start.value === '') throw new Error('پیشوند و عدد شروع را وارد کنید.'); body = { base: base.value.trim(), start: +start.value, count: Math.max(1, +count.value || 1) }; }
     go_.textContent = 'در حال ساخت…';
-    const r = await api('/create', 'POST', { ...body, service_id: +svc.value, template: tpl.value, telegram: tg.checked });
+    const r = await api('/create', 'POST', { ...body, service_id: +svc.value, template: tpl.value, telegram: tg.checked, rep_id: repSel.value || null });
+    if (repSel.value && r.ok.length) toast(`${r.ok.length} اکانت به لیست «${repSel.selectedOptions[0].textContent}» اضافه شد`);
     r.panelName = (st.panels.find(p => p.id === S.panel) || {}).name; S.last = r; showResults(out, r);
     if (r.telegram === 'queued') toast('QRها به تلگرام ادمین ارسال می‌شوند'); else if (r.telegram === 'no_bot') toast('ربات/ادمین تنظیم نشده؛ ارسال تلگرام انجام نشد', true);
     detect(mode === 'single' ? st.default_prefix : base.value.trim(), mode === 'single');   // شماره‌ی بعدی برای ساخت بعدی
@@ -336,7 +343,7 @@ async function vCreate() {
   mount(h('div', { class: 'card' }, h('h2', {}, 'ساخت اکانت'),
     h('div', { class: 'chips', style: 'padding-bottom:6px' }, chipS, chipG),
     st.panels.length > 1 ? field('ساخت روی پنل', psel) : null, field('تمپلت', tpl), grpBox, oneBox, gdBox, last, prev,
-    field('سرویس', svc), modeBox,
+    field('سرویس', svc), reps.some(r => !r.blocked) ? field('نماینده (اختیاری)', repSel) : null, modeBox,
     st.bot ? h('label', { class: 'chk', for: 'tg' }, tg, 'ارسال QR و لینک‌ها به تلگرام ادمین') : null,
     h('div', { class: 'btns' }, go_)), out);
   if (S.last) showResults(out, S.last);
@@ -548,6 +555,58 @@ function userItem(u, parent, tab) {
   const hq = (S.users && S.users.q || '').toLowerCase(), ix = hq ? u.username.toLowerCase().indexOf(hq) : -1;
   const nm = ix < 0 ? [u.username] : [u.username.slice(0, ix), h('mark', {}, u.username.slice(ix, ix + hq.length)), u.username.slice(ix + hq.length)];
   d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), nm), h('span', { class: 'sub' }, `${svcName} · ${usage(u)}`)), body);
+  return d;
+}
+
+/* ───────── رابط نماینده: فقط جستجو + مشاهده‌ی کاربرهای خودش + لینک و QR ───────── */
+async function repApp(me) {
+  $('#nav').hidden = true; $('#psel').hidden = true;
+  const conn = $('#conn'); conn.textContent = me.label || me.name; conn.className = 'pill ok';
+  const hd = $('header h1'); if (hd) hd.lastChild.textContent = 'پنل نماینده';
+  document.body.style.paddingBottom = 'calc(24px + env(safe-area-inset-bottom))';
+  const R = { q: '', off: 0 }; let seq = 0;
+  const list = h('div'), more = h('button', { class: 'btn', hidden: true }, 'بیشتر'), info = h('p', { class: 'hint' });
+  const search = h('input', { type: 'search', placeholder: 'جستجوی کاربر: نام یا بخشی از نام (مثلاً 150)…', dir: 'ltr', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
+  const clear = h('button', { class: 'clr', type: 'button', 'aria-label': 'پاک کردن', hidden: true }, '✕');
+  async function load(reset) {
+    const my = ++seq;
+    if (reset) { R.off = 0; list.style.opacity = .45; info.className = 'hint'; info.textContent = 'در حال جستجو…'; }
+    try {
+      const r = await api(`/rep/users?offset=${R.off}&limit=20&search=${encodeURIComponent(R.q)}`);
+      if (my !== seq) return;
+      if (reset) list.replaceChildren();
+      r.users.forEach(u => list.append(repItem(u)));
+      R.off += r.users.length + (r.missing || 0); more.hidden = R.off >= r.total;
+      info.className = 'hint';
+      info.textContent = r.total ? (R.q ? `${r.total} نتیجه برای «${R.q}»` : `${r.total} کاربر`) : (R.q ? `برای «${R.q}» کاربری پیدا نشد.` : 'هنوز کاربری به شما اختصاص داده نشده است.');
+    } catch (e) { if (my !== seq) return; info.textContent = e.message; info.className = 'err'; }
+    list.style.opacity = 1;
+  }
+  const apply = () => { const q = normQ(search.value); clear.hidden = !search.value; if (q === R.q && list.childElementCount) return; R.q = q; load(true); };
+  search.addEventListener('input', debounce(apply, 300));
+  search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); apply(); search.blur(); } });
+  clear.onclick = () => { search.value = ''; R.q = ''; clear.hidden = true; load(true); search.focus(); };
+  more.onclick = () => run(more, () => load(false));
+  mount(h('div', { class: 'sbox' }, search, clear), info, list, more); load(true);
+}
+
+function repItem(u) {
+  const d = h('details', { class: 'item s-' + u.status });
+  const left = u.limit ? gb(Math.max(0, u.limit - u.used)) : 'نامحدود';
+  const pct = u.limit ? Math.min(100, u.used * 100 / u.limit) : 0;
+  const q = h('div');
+  const msg = () => ['👤 نام کاربری: ' + u.username, '📦 حجم: ' + gb(u.limit) + ' (باقی‌مانده: ' + left + ')', '⏳ اعتبار: ' + u.expire_text, '🔗 لینک اشتراک:', u.sub].join('\n');
+  const tile = (l, v) => h('div', {}, h('span', {}, l), h('b', {}, v));
+  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username), h('span', { class: 'sub' }, usage(u))),
+    h('div', { class: 'body' },
+      h('div', { class: 'ustat' }, h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status)),
+      h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
+      h('div', { class: 'tiles' }, tile('مصرف', gb(u.used)), tile('باقی‌مانده', left), tile('اعتبار', u.expire_text)),
+      h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
+      h('div', { class: 'acts', style: 'grid-template-columns:repeat(3,1fr)' },
+        h('button', { class: 'btn sm', onclick: () => toggleQR(q, u.sub, u.username, '/api/rep/qr') }, '🖼 QR'),
+        h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 کپی لینک'),
+        h('button', { class: 'btn sm', onclick: () => copy(msg()) }, '💬 پیام'))));
   return d;
 }
 
@@ -790,6 +849,54 @@ async function vSet() {
     h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, 'بازیابی از فایل بکاپ'), fileI,
     h('p', { class: 'hint' }, 'فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
     h('div', { class: 'btns' }, rsB));
+  // ─── نماینده‌ها ───
+  let reps = []; try { reps = (await api('/reps')).reps; } catch { /* خطا: لیست خالی */ }
+  const repMsg = (name, pw) => `🔐 پنل نماینده\nآدرس: ${location.origin}/login\nنام کاربری: ${name}\nرمز: ${pw}`;
+  const rName = h('input', { placeholder: 'نام کاربری (انگلیسی)', dir: 'ltr', maxlength: 32, autocapitalize: 'off', autocomplete: 'off' });
+  const rPass = h('input', { placeholder: 'رمز (خالی = خودکار)', dir: 'ltr', maxlength: 64, autocomplete: 'off' });
+  const rLabel = h('input', { placeholder: 'نام نمایشی (اختیاری)', maxlength: 60 });
+  const rAdd = h('button', { class: 'btn pri' }, '➕ ساخت نماینده');
+  rAdd.onclick = () => run(rAdd, async () => {
+    const r = await api('/reps', 'POST', { name: rName.value.trim(), password: rPass.value, label: rLabel.value.trim() });
+    S.repNew = { name: r.name, password: r.password, title: `نماینده «${r.name}» ساخته شد` }; S.setOpen = 'reps'; toast('✅ نماینده ساخته شد'); await vSet(); });
+  const newBox = S.repNew ? (() => { const n = S.repNew; const msgText = repMsg(n.name, n.password);
+    const close = h('button', { class: 'btn sm', type: 'button' }, 'بستن'); close.onclick = () => { S.repNew = null; vSet(); };
+    return h('div', { class: 'banner ok', style: 'margin-bottom:10px' }, h('div', { style: 'margin-bottom:6px' }, `✅ ${n.title}`),
+      h('code', { style: 'white-space:pre-wrap;color:var(--tx);margin:6px 0', onclick: () => copy(msgText) }, msgText),
+      h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'رمز فقط همین یک بار نمایش داده می‌شود؛ پیام را کپی و برای نماینده بفرستید.'),
+      h('div', { class: 'btns', style: 'margin-top:0' }, h('button', { class: 'btn sm pri', type: 'button', onclick: () => copy(msgText) }, '📋 کپی پیام ورود'), close)); })() : null;
+  const repItem = r => {
+    const act = (label, cls, fn) => { const b = h('button', { class: 'btn sm ' + cls, type: 'button' }, label); b.onclick = () => run(b, fn); return b; };
+    let am = 'range';
+    const pre = h('input', { placeholder: 'پیشوند (MS_)', dir: 'ltr', maxlength: 28, autocapitalize: 'off' });
+    const fr = h('input', { type: 'number', min: 0, placeholder: 'از', dir: 'ltr', inputmode: 'numeric' }), to = h('input', { type: 'number', min: 0, placeholder: 'تا', dir: 'ltr', inputmode: 'numeric' });
+    const lst = h('textarea', { rows: 3, placeholder: 'MS_111 MS_112 MS_120 … (با فاصله، کاما یا خط جدید)', dir: 'ltr', autocapitalize: 'off' });
+    const rangeBox = h('div', { class: 'attach', style: 'grid-template-columns:1.4fr 1fr 1fr' }, pre, fr, to), listBox = h('div', { hidden: true }, lst);
+    const seg = h('div', { class: 'seg sm' }, [['range', 'بازه (MS_111 تا MS_150)'], ['list', 'لیست نام‌ها']].map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === am ? 'on' : '', onclick: () => { am = k; seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); rangeBox.hidden = k !== 'range'; listBox.hidden = k !== 'list'; } }, t)));
+    const spec = () => am === 'range' ? { prefix: pre.value.trim(), start: fr.value === '' ? null : +fr.value, end: to.value === '' ? null : +to.value } : { names: lst.value };
+    const done = async (m) => { S.setOpen = 'reps'; toast(m); await vSet(); };
+    return h('details', { class: 'item' + (r.blocked ? ' s-disabled' : '') },
+      h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), r.label ? `${r.label} · ${r.name}` : r.name), h('span', { class: 'sub' }, `${r.count} کاربر${r.blocked ? ' · ⛔ مسدود' : ''}`)),
+      h('div', { class: 'body' },
+        h('div', { class: 'psec' }, h('b', {}, 'افزودن کاربر به لیست این نماینده'), h('span', {}, 'روی پنل انتخاب‌شده')),
+        seg, rangeBox, listBox,
+        h('div', { class: 'btns' },
+          act('➕ افزودن به لیست', 'pri', async () => { const x = await api(`/reps/${r.id}/assign`, 'POST', spec()); await done(`${x.added} کاربر به ${r.name} اضافه شد`); }),
+          act('➖ حذف از لیست', '', async () => { const x = await api(`/reps/${r.id}/unassign`, 'POST', spec()); await done(`${x.removed} کاربر از لیست حذف شد`); })),
+        h('div', { class: 'psec' }, h('b', {}, 'حساب نماینده')),
+        h('div', { class: 'btns', style: 'margin-top:0' },
+          act('🔑 رمز جدید', '', async () => { const x = await api(`/reps/${r.id}/password`, 'POST', { password: '' }); S.repNew = { name: r.name, password: x.password, title: `رمز جدید برای «${r.name}»` }; await done('رمز جدید ساخته شد'); }),
+          act(r.blocked ? '✅ رفع مسدودی' : '⛔ مسدود کردن', r.blocked ? '' : 'bad', async () => { await api(`/reps/${r.id}/block`, 'POST', { blocked: !r.blocked }); await done(r.blocked ? 'مسدودی برداشته شد' : 'نماینده مسدود شد'); }),
+          act('🗑 حذف', 'bad', async () => { if (!confirm(`نماینده «${r.name}» و لیست کاربرهایش حذف شود؟ (خود کاربرها در پنل ربکا حذف نمی‌شوند)`)) return; await api(`/reps/${r.id}/delete`, 'POST'); await done('نماینده حذف شد'); })),
+        h('p', { class: 'hint' }, 'مسدود کردن، همان لحظه نماینده را از پنل بیرون می‌اندازد. «رمز جدید» رمز قبلی را از کار می‌اندازد.')));
+  };
+  const repBody = h('div', { class: 'acc-in' },
+    newBox, ...(reps.length ? reps.map(repItem) : [h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'هنوز نماینده‌ای نساخته‌اید.')]),
+    h('div', { class: 'psec' }, h('b', {}, '➕ نماینده‌ی جدید')),
+    h('div', { class: 'cols' }, h('div', {}, h('label', {}, 'نام کاربری'), rName), h('div', {}, h('label', {}, 'رمز'), rPass)),
+    h('div', {}, h('label', {}, 'نام نمایشی'), rLabel), h('div', { class: 'btns' }, rAdd),
+    h('p', { class: 'hint' }, 'نماینده با همین نام و رمز، از همان صفحه‌ی ورود وارد می‌شود و فقط صفحه‌ی «کاربران خودش» (مشاهده، لینک و QR) را می‌بیند.'));
+
   // کشوها (آکاردئون): بالای هر کشو نام بخش نوشته شده؛ فقط یکی باز می‌ماند و بعد از ذخیره هم باز می‌ماند
   const strip = card => { const t = card.querySelector(':scope > h2'); if (t) t.remove(); card.className = 'acc-in'; return card; };
   const drawers = [];
@@ -805,6 +912,7 @@ async function vSet() {
       h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
       h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)')))),
     drawer('bot', '🤖', 'ربات تلگرام', tok.value ? 'تنظیم شده' : 'تنظیم نشده', strip(h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)))),
+    drawer('reps', '👤', 'نماینده‌ها', reps.length ? `${reps.length} نماینده${reps.some(r => r.blocked) ? ' · ⛔' : ''}` : 'ندارید', repBody),
     drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
     drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن' : 'خودکار خاموش', strip(backupCard)),
     drawer('ssl', '🔒', 'SSL و پورت وب‌پنل', sslSub, strip(sslCard)),
@@ -812,6 +920,8 @@ async function vSet() {
 }
 
 (async () => {
+  let me; try { me = await api('/me'); } catch { return; }
+  if (me.role === 'rep') return repApp(me);
   renderNav();
   try { await refreshState(); await go(hasPanel() ? 'create' : 'set'); }
   catch (e) { mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
