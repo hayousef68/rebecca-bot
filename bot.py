@@ -301,9 +301,24 @@ async def confirm_step(update, context):
     text = (f"📝 <b>تأیید نهایی</b>\n\n🖥 پنل: <b>{esc(pn['name'])}</b>\n👥 تعداد: <b>{len(names)}</b>\n🔤 نام‌ها: <code>{esc(rng)}</code>\n"
             f"📌 تمپلت: {esc(cr['tpl'])}\n{esc(C.tpl_summary(t))}\n"
             f"📂 سرویس: {esc(cr['services'].get(cr['service_id'], cr['service_id']))}")
-    kb = cancel_kb([[B("✅ شروع ساخت", callback_data="c:go")]])
+    qr_on = cr.setdefault("qr", True)
+    text += f"\n🖼 ارسال QR به ربات: <b>{'روشن ✅' if qr_on else 'خاموش ⛔'}</b>"
+    kb = cancel_kb([[B(f"🖼 ارسال QR: {'✅ روشن' if qr_on else '⛔ خاموش'}", callback_data="c:qr")],
+                    [B("✅ شروع ساخت", callback_data="c:go")]])
     await show(update, context, text, kb)
     return C_CONFIRM
+
+
+@admin_only
+async def create_toggle_qr(update, context):
+    q = update.callback_query
+    await q.answer()
+    cr = context.user_data.get("cr")
+    if not cr or "names" not in cr:
+        await show(update, context, "⚠️ نشست منقضی شد. دوباره شروع کنید.", main_kb())
+        return END
+    cr["qr"] = not cr.get("qr", True)
+    return await confirm_step(update, context)
 
 
 @admin_only
@@ -317,6 +332,7 @@ async def create_go(update, context):
     cfg = load_config()
     tpl = cfg["templates"][cr["tpl"]]
     names, chat_id = cr["names"], update.effective_chat.id
+    send_qr = cr.get("qr", True)
     msg = q.message
     last = [0.0]
 
@@ -340,7 +356,7 @@ async def create_go(update, context):
     pname = (get_panel(cfg, cr["pid"]) or {}).get("name", "")
     header = f"🖥 {pname} | 💾 {tpl['gb'] or 'نامحدود'} GB | 📅 {tpl['days'] or 'نامحدود'} روز ({tpl['mode']}) | 📂 {cr['services'].get(cr['service_id'], cr['service_id'])}"
     try:
-        await C.send_results(context.bot, chat_id, results, header, cfg["max_qr"])
+        await C.send_results(context.bot, chat_id, results, header, cfg["max_qr"], send_qr)
     except Exception as e:  # noqa: BLE001
         log.exception("send_results")
         await context.bot.send_message(chat_id, f"⚠️ ساخت انجام شد ولی ارسال QR مشکل داشت: {esc(e)}", parse_mode=HTML)
@@ -1000,7 +1016,7 @@ def build_app() -> Application:
             C_START: [cb(create_start, pattern=r"^c:single$"), MessageHandler(txt, create_start)],
             C_COUNT: [MessageHandler(txt, create_count)],
             C_SERVICE: [cb(create_service, pattern=r"^srv:\d+$")],
-            C_CONFIRM: [cb(create_go, pattern=r"^c:go$")],
+            C_CONFIRM: [cb(create_go, pattern=r"^c:go$"), cb(create_toggle_qr, pattern=r"^c:qr$")],
             T_NAME: [MessageHandler(txt, tpl_new_name)], T_GB: [MessageHandler(txt, tpl_new_gb)],
             T_DAYS: [MessageHandler(txt, tpl_new_days)], T_EDIT: [MessageHandler(txt, tpl_edit_value)],
             S_URL: [MessageHandler(txt, setup_url)],
