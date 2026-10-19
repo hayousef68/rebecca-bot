@@ -107,3 +107,48 @@ async def monitor_loop(bot):
                         st["down"] = True
                         await notify(bot, f"🔴 پنل <b>{C.esc(p['name'])}</b> پاسخ نمی‌دهد.\n{C.esc(str(e) or e.__class__.__name__)}")
         await asyncio.sleep(max(60, mc["interval"]))
+
+
+# ───────────────────────────── غیرفعال‌سازی خودکارِ «واریز نشده» ─────────────────────────────
+async def unpaid_sweep(bot) -> int:
+    """کاربرانی که مهلتِ «واریز نشده»شان تمام شده را غیرفعال می‌کند؛ تعداد غیرفعال‌شده‌ها را برمی‌گرداند."""
+    cfg = C.load_config()
+    now, done = time.time(), 0
+    for pid, m in cfg["unpaid"]["pending"].items():
+        due = [(u, r) for u, r in m.items() if r["due"] <= now]
+        if not due:
+            continue
+        pn = C.get_panel(cfg, pid)
+        if not pn:                                            # پنل حذف شده؛ صف بی‌صاحب پاک شود
+            C.unpaid_clear(pid, [u for u, _ in due])
+            continue
+        api = C.get_api(pid)
+        if not api.is_configured():
+            continue
+        for uname, _rec in due:
+            try:
+                u = await api.request("GET", api.upath(uname))
+                if u.get("status") != "disabled":
+                    await api.request("PUT", api.upath(uname), json={"status": "disabled"})
+                    done += 1
+                    await notify(bot, f"⛔ <code>{C.esc(uname)}</code> ({C.esc(pn['name'])}) — مهلتِ «واریز نشده» تمام شد؛ غیرفعال شد.")
+                C.unpaid_clear(pid, uname)
+            except C.RebeccaError as e:
+                if e.status == 404:                           # کاربر دیگر وجود ندارد
+                    C.unpaid_clear(pid, uname)
+                else:
+                    log.warning("unpaid %s/%s: %s", pid, uname, e)   # بار بعد دوباره تلاش می‌شود
+            except Exception as e:  # noqa: BLE001
+                log.warning("unpaid %s/%s: %s", pid, uname, e)
+    return done
+
+
+async def unpaid_loop(bot):
+    """هر ۶۰ ثانیه صف «واریز نشده» را بررسی می‌کند (وقتی صف خالی است هیچ درخواستی به پنل نمی‌زند)."""
+    await asyncio.sleep(20)
+    while True:
+        try:
+            await unpaid_sweep(bot)
+        except Exception:  # noqa: BLE001
+            log.exception("unpaid_loop")
+        await asyncio.sleep(60)
