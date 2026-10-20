@@ -688,9 +688,36 @@ def _slim(u: dict, api, pend: dict | None = None) -> dict:
     }
 
 
+def _is_unlimited(u: dict) -> bool:
+    """حجم نامحدود (data_limit=0) یا زمان نامحدود (بدون تاریخ انقضا / مدت On-Hold صفر)."""
+    if not (u.get("data_limit") or 0):
+        return True
+    if u.get("status") == "on_hold":
+        return not int(u.get("on_hold_expire_duration") or 0)
+    return not int(u.get("expire") or 0)
+
+
+async def _unlimited_users(api, search: str, offset: int, limit: int) -> dict:
+    found, off, step = [], 0, 200
+    for _ in range(200):                                   # سقف ایمنی: ۴۰ هزار کاربر
+        params = {"offset": off, "limit": step}
+        if search.strip():
+            params["search"] = search.strip()
+        res = await api.request("GET", "/api/users", params=params)
+        batch = res.get("users", [])
+        found += [u for u in batch if _is_unlimited(u)]
+        off += step
+        if len(batch) < step or off >= int(res.get("total") or 0):
+            break
+    pend = C.unpaid_map(api.pid)
+    return {"users": [_slim(u, api, pend) for u in found[offset:offset + limit]], "total": len(found)}
+
+
 @app.get("/api/users", dependencies=[Depends(guard)])
 async def users(search: str = "", status: str = "", offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
                 api: RebeccaClient = Depends(P)):
+    if status == "unlimited":          # حجم یا زمان نامحدود: پنل فیلتر ندارد؛ همه را می‌خوانیم و اینجا جدا می‌کنیم
+        return await _unlimited_users(api, search, offset, limit)
     params = {"offset": offset, "limit": limit}
     if search.strip():
         params["search"] = search.strip()
