@@ -696,12 +696,15 @@ def render_user(u: dict, api):
             f"📊 مصرف: {C.fmt_gb(used)} / {C.fmt_gb(lim)}{pct}\n"
             f"⏳ اعتبار: {C.fmt_expire(u.get('expire'), st, u.get('on_hold_expire_duration'))}\n\n🔗 <code>{esc(sub)}</code>")
     tg = "✅ فعال‌سازی" if st == "disabled" else "⛔ غیرفعال‌سازی"
-    kb = M([
+    rows = [
         [B("🖼 QR", callback_data=f"u:qr:{pid}:{name}"), B("✏️ ویرایش", callback_data=f"u:edit:{pid}:{name}")],
         [B("🔄 صفر کردن مصرف", callback_data=f"u:rst:{pid}:{name}"), B("🔗 لینک جدید", callback_data=f"u:rev:{pid}:{name}")],
         [B(tg, callback_data=f"u:tg:{pid}:{name}"), B("🗑 حذف", callback_data=f"u:del:{pid}:{name}")],
-        [B("🔙 منوی اصلی", callback_data="back")],
-    ])
+    ]
+    if C.undo_latest(pid, name):          # نقطه‌ی برگشتِ ذخیره‌شده‌ی محلی (بدون درخواست به پنل)
+        rows.append([B("↩️ برگشت آخرین تمدید/ریست", callback_data=f"u:undo:{pid}:{name}")])
+    rows.append([B("🔙 منوی اصلی", callback_data="back")])
+    kb = M(rows)
     return text, kb
 
 
@@ -762,7 +765,21 @@ async def user_action(update, context):
             await api.request("DELETE", p)
             await q.answer("🗑 حذف شد", show_alert=True)
             return await home(update, context, f"✅ کاربر {esc(uname)} حذف شد.\n\n")
+        if act == "undo":
+            after, snap, warns = await C.undo_restore(api, uname)
+            await asyncio.to_thread(C.unpaid_clear, pid, uname)
+            try:
+                await asyncio.to_thread(sales.ovr_add_span, uname, float(snap["ts"]) - 120, time.time() + 60)
+            except Exception:  # noqa: BLE001
+                warns.append("حذف از گزارش فروش انجام نشد")
+            await q.answer("✅ به حالت قبل برگشت" + (" ⚠️ " + " | ".join(warns) if warns else ""), show_alert=True)
+            text, kb = render_user(after, api)
+            return await show(update, context, text, kb)
         if act == "rst":
+            try:
+                await asyncio.to_thread(C.undo_snapshot, pid, uname, await api.request("GET", p), "reset")
+            except Exception:  # noqa: BLE001
+                log.warning("undo snapshot before reset failed")
             await api.request("POST", p + "/reset")
             await q.answer("✅ مصرف صفر شد", show_alert=True)
         elif act == "rev":
@@ -1077,7 +1094,7 @@ def build_app() -> Application:
             cb(db_start, pattern=r"^db:start$"), cb(tpl_menu, pattern=r"^t:menu$"), cb(tpl_action, pattern=r"^t:(sel|del|mode|edit):\d+$"),
             cb(list_users, pattern=r"^l:"), cb(stats, pattern=r"^stats$"), cb(core_cb, pattern=r"^core:(ask|go):\w+$"),
             cb(clean_cb, pattern=r"^clean:(ask|go):\w+$"), cb(export_cb, pattern=r"^export$"),
-            cb(user_action, pattern=r"^u:(view|qr|rst|rev|tg|del|delok):"),
+            cb(user_action, pattern=r"^u:(view|qr|rst|rev|tg|del|delok|undo):"),
         ],
         states={
             C_TPL: [cb(create_pick_tpl, pattern=r"^c:t:\d+$")],
