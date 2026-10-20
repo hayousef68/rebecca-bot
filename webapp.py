@@ -430,6 +430,8 @@ class CreateReq(BaseModel):
     days: int | None = Field(default=None, ge=0, le=36500)       # جایگزین مدت تمپلت
     mode: str | None = Field(default=None, pattern="^(on_hold|active)$")
     rep_id: str | None = Field(default=None, max_length=20)          # نمایندگی که اکانت‌ها به لیستش اضافه می‌شوند
+    unpaid: bool = False                                             # ساخت «واریز نشده»: بعد از مهلت خودکار غیرفعال می‌شود
+    unpaid_hours: int | None = Field(default=None, ge=1, le=24 * 365)
 
 
 def _tg_bot(token: str):
@@ -469,6 +471,9 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
         if req.rep_id not in cfg["reps"]:
             raise HTTPException(404, "نماینده پیدا نشد.")
         await asyncio.to_thread(C.assign_users, req.rep_id, api.pid, [x["username"] for x in results])
+    if req.unpaid and results:
+        for x in results:
+            await asyncio.to_thread(C.unpaid_mark, api.pid, x["username"], req.unpaid_hours)
     tg = "off"
     if results:
         if cfg["bot_token"] and cfg["admin_ids"]:
