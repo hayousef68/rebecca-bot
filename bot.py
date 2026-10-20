@@ -30,7 +30,7 @@ END = ConversationHandler.END
 (C_TPL, C_BASE, C_START, C_COUNT, C_SERVICE, C_CONFIRM,
  T_NAME, T_GB, T_DAYS, T_EDIT,
  S_URL, S_SUB, S_USER, S_PASS,
- Q_SEARCH, E_GB, E_DAYS, C_PANEL, S_NAME) = range(19)
+ Q_SEARCH, E_GB, E_DAYS, C_PANEL, S_NAME, D_USER, D_PASS) = range(21)
 
 STATUS_ICON = {"active": "🟢", "disabled": "⚫", "expired": "🔴", "limited": "🟠", "on_hold": "⏳"}
 
@@ -95,7 +95,7 @@ def main_kb() -> M:
         [B("⚙️ تمپلت‌ها", callback_data="t:menu"), B("📊 وضعیت سرور", callback_data="stats")],
         [B("🧹 پاکسازی منقضی‌ها", callback_data=f"clean:ask:{pid}"), B("📥 خروجی لینک‌ها", callback_data="export")],
         [B("📈 گزارش فروش امروز", callback_data="rp:today"), B("📈 دیروز", callback_data="rp:yday")],
-        [B(f"🖥 پنل‌ها (فعال: {pn['name']})", callback_data="pn:list")],
+        [B(f"🖥 پنل‌ها (فعال: {pn['name']})", callback_data="pn:list"), B("🗄 اتصال دیتابیس", callback_data="db:start")],
     ])
 
 
@@ -952,6 +952,77 @@ async def report_cb(update, context):
 
 
 @nav
+async def setdb_cmd(update, context):
+    """/setdb بدون آرگومان: راهنما + وضعیت فعلی. /setdb HOST PORT USER PASS DBNAME: ذخیره و تست اتصال."""
+    msg = update.message
+    args = context.args or []
+    cur = load_config()["sales"].get("db") or {}
+    if len(args) != 5:
+        now = (f"✅ فعلی: <code>{esc(cur.get('host', '127.0.0.1'))}:{esc(cur.get('port', 3306))}</code> · کاربر <code>{esc(cur.get('user', ''))}</code> · دیتابیس <code>{esc(cur['name'])}</code>"
+               if cur.get("name") else "⚪ هنوز دیتابیسی تنظیم نشده.")
+        await msg.reply_html(
+            "🗄 <b>اتصال دیتابیس پنل ربکا</b>\n\n" + now + "\n\nبرای تنظیم، این دستور را با مشخصات خودتان بفرستید:\n"
+            "<code>/setdb HOST PORT USER PASS DBNAME</code>\n\nنمونه:\n<code>/setdb 127.0.0.1 3306 rebecca رمز_دیتابیس rebecca</code>\n\n"
+            "• HOST: اگر پنل روی همین سرور است <code>127.0.0.1</code>\n• PORT: معمولاً <code>3306</code>\n"
+            "• بعد از ارسال، پیام خودتان را پاک کنید (رمز داخلش است).", reply_markup=main_kb())
+        return
+    host, port, user, pw, name = args
+    if not port.isdigit() or not 0 < int(port) < 65536:
+        await msg.reply_html("⚠️ پورت باید عدد باشد، مثلاً <code>3306</code>.")
+        return
+    await apply_db(update, context, host, int(port), user, pw, name)
+
+
+async def apply_db(update, context, host, port, user, pw, name):
+    """اطلاعات دیتابیس را ذخیره و اتصال را تست می‌کند؛ در شکست، تنظیمات قبلی برمی‌گردد. پیام حاوی رمز پاک می‌شود."""
+    chat_id = update.effective_chat.id
+    old = dict(load_config()["sales"].get("db") or {})
+    update_config(lambda c: c["sales"].__setitem__("db", {"host": host, "port": port, "user": user, "password": pw, "name": name}))
+    if update.message:
+        try:
+            await update.message.delete()          # رمز داخل پیام است؛ اگر ممکن بود پاک شود
+        except TelegramError:
+            pass
+    try:
+        await asyncio.to_thread(lambda: sales._connect().close())
+    except Exception as e:  # noqa: BLE001
+        update_config(lambda c: c["sales"].__setitem__("db", old))
+        await context.bot.send_message(chat_id, f"❌ اتصال برقرار نشد؛ تنظیمات قبلی حفظ شد.\n<code>{esc(str(e)[:300])}</code>\n\n"
+                                       "اگر نام دیتابیس یا آدرس فرق دارد، از <code>/setdb HOST PORT USER PASS DBNAME</code> استفاده کنید.", parse_mode=HTML, reply_markup=main_kb())
+        return
+    await context.bot.send_message(chat_id, f"✅ به دیتابیس <code>{esc(name)}</code> وصل شد و ذخیره شد.\nبرای تست، «گزارش فروش امروز» را بزنید.", parse_mode=HTML, reply_markup=main_kb())
+
+
+@admin_only
+async def db_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    context.user_data.clear()
+    cur = load_config()["sales"].get("db") or {}
+    now = f"\n✅ فعلی: دیتابیس <code>{esc(cur['name'])}</code> · کاربر <code>{esc(cur.get('user', ''))}</code>" if cur.get("name") else ""
+    await show(update, context, "🗄 <b>اتصال دیتابیس پنل ربکا</b>" + now + "\n\n👤 نام کاربری دیتابیس را بفرستید:\n(آدرس <code>127.0.0.1</code>، پورت <code>3306</code> و نام دیتابیس <code>rebecca</code> خودکار گذاشته می‌شود)", cancel_kb())
+    return D_USER
+
+
+@admin_only
+async def db_user(update, context):
+    context.user_data["db"] = {"user": update.message.text.strip()}
+    await update.message.reply_html("🔑 رمز دیتابیس را بفرستید (پیام شما بعد از دریافت پاک می‌شود):", reply_markup=cancel_kb())
+    return D_PASS
+
+
+@admin_only
+async def db_pass(update, context):
+    d = context.user_data.pop("db", None)
+    if not d:
+        await update.message.reply_html("⚠️ نشست منقضی شد. دوباره شروع کنید.", reply_markup=main_kb())
+        return END
+    cur = load_config()["sales"].get("db") or {}
+    await apply_db(update, context, cur.get("host") or "127.0.0.1", int(cur.get("port") or 3306), d["user"], update.message.text.strip(), cur.get("name") or "rebecca")
+    return END
+
+
+@nav
 async def report_cmd(update, context):
     await sales_reply(update, context)
 
@@ -976,7 +1047,7 @@ async def on_error(update, context):
 
 
 async def post_init(app: Application):
-    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("cancel", "لغو عملیات جاری")])
+    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("setdb", "اتصال دیتابیس پنل"), BotCommand("cancel", "لغو عملیات جاری")])
     # ردیاب فروش و گزارش روزانه ۰۰:۰۰ (به وقت ایران)
     app.bot_data["bg"] = [
         asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot)),
@@ -995,7 +1066,7 @@ def build_app() -> Application:
     cb = CallbackQueryHandler
     conv = ConversationHandler(
         entry_points=[
-            CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), CommandHandler("report", report_cmd),
+            CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), CommandHandler("report", report_cmd), CommandHandler("setdb", setdb_cmd),
             cb(back_cb, pattern=r"^back$"), cb(report_cb, pattern=r"^rp:(today|yday)$"),
             cb(create_entry, pattern=r"^c:(quick|pick)$"),
             cb(tpl_new, pattern=r"^t:new$"), cb(tpl_edit_field, pattern=r"^te:(name|gb|days):\d+$"),
@@ -1003,7 +1074,7 @@ def build_app() -> Application:
             cb(edit_start, pattern=r"^u:edit:"),
             cb(panel_list, pattern=r"^pn:list$"), cb(panel_action, pattern=r"^pn:(set|del|delok):\w+$"),
             # مستقل‌ها: هرکدام گفتگوی باز را می‌بندند
-            cb(tpl_menu, pattern=r"^t:menu$"), cb(tpl_action, pattern=r"^t:(sel|del|mode|edit):\d+$"),
+            cb(db_start, pattern=r"^db:start$"), cb(tpl_menu, pattern=r"^t:menu$"), cb(tpl_action, pattern=r"^t:(sel|del|mode|edit):\d+$"),
             cb(list_users, pattern=r"^l:"), cb(stats, pattern=r"^stats$"), cb(core_cb, pattern=r"^core:(ask|go):\w+$"),
             cb(clean_cb, pattern=r"^clean:(ask|go):\w+$"), cb(export_cb, pattern=r"^export$"),
             cb(user_action, pattern=r"^u:(view|qr|rst|rev|tg|del|delok):"),
@@ -1019,6 +1090,7 @@ def build_app() -> Application:
             C_CONFIRM: [cb(create_go, pattern=r"^c:go$"), cb(create_toggle_qr, pattern=r"^c:qr$")],
             T_NAME: [MessageHandler(txt, tpl_new_name)], T_GB: [MessageHandler(txt, tpl_new_gb)],
             T_DAYS: [MessageHandler(txt, tpl_new_days)], T_EDIT: [MessageHandler(txt, tpl_edit_value)],
+            D_USER: [MessageHandler(txt, db_user)], D_PASS: [MessageHandler(txt, db_pass)],
             S_URL: [MessageHandler(txt, setup_url)],
             S_SUB: [cb(setup_sub, pattern=r"^s:skip$"), MessageHandler(txt, setup_sub)],
             S_USER: [MessageHandler(txt, setup_user)], S_PASS: [MessageHandler(txt, setup_pass)],
