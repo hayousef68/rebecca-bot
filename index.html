@@ -556,13 +556,7 @@ function userItem(u, parent, tab) {
 
   /* ─── تب پلن بعدی (شارژ خودکار): فهرست پلن‌ها؛ هر کدام بعد از اتمام، یک‌بار اضافه می‌شود ─── */
   const plans = u.next_plans || [];
-  let npMode = S.st.next_plan_mode || 'duration';
-  const NP_HINT = { duration: 'پلن با «مدت ثابت» ذخیره می‌شود؛ در پنل اصلی دقیقاً همان تعداد روزی که وارد کردید دیده می‌شود (مثلاً ۳۰). شمارش روز از لحظه‌ی فعال‌شدن پلن شروع می‌شود.',
-    chain: 'تاریخ پایان = پایان اشتراک فعلی + روزها. پنل اصلی «روزهای مانده تا آن تاریخ» را نشان می‌دهد؛ مثلاً اگر ۵ روز مانده باشد و ۳۰ بزنید، پنل ۳۵ نشان می‌دهد.' };
-  const npHint = h('p', { class: 'hint', style: 'margin:0 0 8px' }, NP_HINT[npMode]);
-  const npSeg = h('div', { class: 'seg sm' }, [['duration', '⏱ دقیقاً N روز'], ['chain', '📅 بعد از پایان فعلی']].map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === npMode ? 'on' : '',
-    onclick: () => { npMode = k; npSeg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); npHint.textContent = NP_HINT[k]; } }, t)));
-  const sendPlans = (list, okMsg) => api(P + 'next-plans', 'POST', { mode: npMode, plans: list.map(p => ({ idx: p.idx == null ? null : p.idx, gb: +p.gb || 0, days: +p.days || 0, add_remaining: !!p.add_remaining })) }).then(r => { toast(okMsg); swap(r, 'next'); });
+  const sendPlans = (list, okMsg) => api(P + 'next-plans', 'POST', { plans: list.map(p => ({ idx: p.idx == null ? null : p.idx, gb: +p.gb || 0, days: +p.days || 0, add_remaining: !!p.add_remaining })) }).then(r => { toast(okMsg); swap(r, 'next'); });
   const nG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
   const nD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
   const nrid = 'nr' + Math.random().toString(36).slice(2, 8);
@@ -579,8 +573,7 @@ function userItem(u, parent, tab) {
     if (fix) fix.onclick = () => run(fix, () => sendPlans(plans, '✅ پلن اصلاح شد'));
     return h('div', { class: 'plan' }, h('span', { class: 'n' }, i + 1), h('span', { class: 'v' }, `${fmtG(p.gb)} + ${fmtD(p.days)}`, p.add_remaining ? h('small', {}, ' · باقی‌مانده هم منتقل می‌شود') : null, p.broken ? h('small', { style: 'color:var(--warn)' }, ' · ⚠️ تاریخ پایان اشتباه (۱۹۷۰) — 🔧 را بزنید') : null), fix, x); };
   const paneNext = h('div', {},
-    h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'وقتی حجم یا زمان کاربر تمام شود، پلن اول «یک‌بار» خودکار به او اضافه می‌شود؛ بعد نوبت پلن بعدی.'),
-    h('div', { class: 'psec' }, h('b', {}, 'نوع شمارش روز (برای پلن‌های تازه)')), npSeg, npHint,
+    h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'وقتی حجم یا زمان کاربر تمام شود، پلن اول «یک‌بار» خودکار به او اضافه می‌شود؛ بعد نوبت پلن بعدی. تاریخ پایان هر پلن = پایان پلن قبلی (یا انقضای فعلی) + روزهای همان پلن.'),
     plans.length ? h('div', {}, plans.map(planRow)) : h('div', { class: 'banner' }, '⚪ پلن بعدی تعریف نشده'),
     h('div', { class: 'psec' }, h('b', {}, '➕ پلن جدید')),
     h('div', { class: 'attach' }, nG, nD, nAdd), nTpl,
@@ -867,6 +860,58 @@ function vTpl() {
     h('div', { class: 'card' }, h('h2', {}, 'تمپلت جدید'), field('نام', name), field('نوع', kd), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m), h('p', { class: 'hint' }, '۰ یعنی نامحدود.'), h('div', { class: 'btns' }, add)));
 }
 
+/* ───────── پلن بعدی (منتقل‌شده از تب کاربر به تنظیمات): جستجوی کاربر ← مدیریت پلن‌های بعدی ───────── */
+function npEditor() {
+  const box = h('div', { class: 'acc-in' }), res = h('div'), info = h('p', { class: 'hint' }, 'نام کاربری را جستجو و کاربر را انتخاب کنید.');
+  const search = h('input', { type: 'search', placeholder: 'نام کاربری (مثلاً MS_150 یا 150)…', dir: 'ltr', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
+  const entries = Object.entries((S.st && S.st.templates) || {});
+  let seq = 0;
+  const show = u => {
+    const P = `/user/${encodeURIComponent(u.username)}/`;
+    const onUser = r => show(r);
+  const plans = u.next_plans || [];
+  const sendPlans = (list, okMsg) => api(P + 'next-plans', 'POST', { plans: list.map(p => ({ idx: p.idx == null ? null : p.idx, gb: +p.gb || 0, days: +p.days || 0, add_remaining: !!p.add_remaining })) }).then(r => { toast(okMsg); onUser(r); });
+  const nG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
+  const nD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
+  const nrid = 'nr' + Math.random().toString(36).slice(2, 8);
+  const nRem = h('input', { type: 'checkbox', id: nrid });
+  const nTpl = h('select', {}, h('option', { value: '' }, 'پر کردن از تمپلت…'), entries.map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
+  nTpl.onchange = () => { const t = S.st.templates[nTpl.value]; if (t) { nG.value = t.gb; nD.value = t.days; } };
+  const nAdd = h('button', { class: 'btn sm pri', type: 'button' }, '➕ افزودن پلن');
+  nAdd.onclick = () => run(nAdd, async () => {
+    if (!+nG.value && !+nD.value) throw new Error('حجم یا مدت را وارد کنید.');
+    await sendPlans([...plans, { idx: null, gb: nG.value, days: nD.value, add_remaining: nRem.checked }], '✅ پلن بعدی اضافه شد'); });
+  const planRow = (p, i) => { const x = h('button', { class: 'x', type: 'button', 'aria-label': 'حذف' }, '✕');
+    x.onclick = () => { if (!confirm('این پلن بعدی حذف شود؟')) return; run(x, () => sendPlans(plans.filter((_, j) => j !== i), 'پلن حذف شد')); };
+    const fix = p.broken ? h('button', { class: 'x fix', type: 'button', title: 'اصلاح تاریخ پایان' }, '🔧') : null;
+    if (fix) fix.onclick = () => run(fix, () => sendPlans(plans, '✅ پلن اصلاح شد'));
+    return h('div', { class: 'plan' }, h('span', { class: 'n' }, i + 1), h('span', { class: 'v' }, `${fmtG(p.gb)} + ${fmtD(p.days)}`, p.add_remaining ? h('small', {}, ' · باقی‌مانده هم منتقل می‌شود') : null, p.broken ? h('small', { style: 'color:var(--warn)' }, ' · ⚠️ تاریخ پایان اشتباه (۱۹۷۰) — 🔧 را بزنید') : null), fix, x); };
+  const paneNext = h('div', {},
+    h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'وقتی حجم یا زمان کاربر تمام شود، پلن اول «یک‌بار» خودکار به او اضافه می‌شود؛ بعد نوبت پلن بعدی. تاریخ پایان هر پلن = پایان پلن قبلی (یا انقضای فعلی) + روزهای همان پلن.'),
+    plans.length ? h('div', {}, plans.map(planRow)) : h('div', { class: 'banner' }, '⚪ پلن بعدی تعریف نشده'),
+    h('div', { class: 'psec' }, h('b', {}, '➕ پلن جدید')),
+    h('div', { class: 'attach' }, nG, nD, nAdd), nTpl,
+    h('label', { class: 'chk', for: nrid }, nRem, 'حجم باقی‌مانده فعلی هم منتقل شود'),
+    u.np_raw ? h('details', { class: 'tech' }, h('summary', {}, 'جزئیات فنی (JSON پنل)'), h('code', {}, u.np_raw)) : null);
+  res.replaceChildren(h('div', { class: 'psec' }, h('b', {}, '👤 ' + u.username), h('span', {}, `${(u.next_plans || []).length} پلن بعدی`)), paneNext);
+  };
+  const find = async () => {
+    const my = ++seq, q = normQ(search.value);
+    if (!q) { res.replaceChildren(); info.textContent = 'نام کاربری را جستجو و کاربر را انتخاب کنید.'; return; }
+    info.textContent = 'در حال جستجو…';
+    try {
+      const r = await api(`/users?offset=0&limit=8&search=${encodeURIComponent(q)}`);
+      if (my !== seq) return;
+      info.textContent = r.total ? `${r.total} نتیجه${r.total > r.users.length ? ' (۸ مورد اول)' : ''}` : 'کاربری پیدا نشد.';
+      res.replaceChildren(...r.users.map(u => { const b = h('button', { class: 'btn sm', type: 'button', style: 'margin:0 0 6px 6px' }, `${u.username}${(u.next_plans || []).length ? ' •' : ''}`); b.onclick = () => show(u); return b; }));
+    } catch (e) { if (my === seq) info.textContent = e.message; }
+  };
+  search.addEventListener('input', debounce(find, 300));
+  search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); find(); search.blur(); } });
+  box.append(h('div', { class: 'sbox' }, search), info, res);
+  return box;
+}
+
 /* ───────── تنظیمات ───────── */
 async function vSet() {
   let c; try { c = await api('/settings'); } catch (e) { return mount(h('p', { class: 'err' }, e.message)); }
@@ -1077,6 +1122,7 @@ async function vSet() {
       h('p', { class: 'hint' }, 'در فرم «ساخت اکانت» همین اسم از قبل پر می‌شود و شماره‌ی بعدی خودکار پیدا می‌شود. فقط حرف انگلیسی، عدد و _ (مثلاً MS_).'), h('div', { class: 'btns' }, saveDp)))),
     drawer('unpaid', '💸', 'تمدید واریز نشده', `${c.unpaid_hours} ساعت${c.unpaid_count ? ` · ${c.unpaid_count} در انتظار` : ''}`, strip(h('div', { class: 'card' }, h('h2', {}, 'تمدید واریز نشده'), field('مهلت پیش‌فرض تا غیرفعال‌سازی خودکار (ساعت)', upHrs),
       h('p', { class: 'hint' }, 'موقع تمدید گزینه‌ی «واریز نشده» را بزنید؛ اگر تا پایان مهلت «✅ واریز شد» نزنید، کاربر خودکار غیرفعال می‌شود (چک هر ۱ دقیقه توسط ربات، و پیام به ادمین‌ها). مهلت را موقع هر تمدید هم می‌توانید جداگانه تغییر دهید.'), h('div', { class: 'btns' }, saveUp)))),
+    drawer('nextplan', '🔁', 'پلن بعدی', 'شارژ خودکار کاربر', npEditor()),
     drawer('reps', '👤', 'نماینده‌ها', reps.length ? `${reps.length} نماینده${reps.some(r => r.blocked) ? ' · ⛔' : ''}` : 'ندارید', repBody),
     drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
     drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن' : 'خودکار خاموش', strip(backupCard)),
