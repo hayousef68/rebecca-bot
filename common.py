@@ -1127,7 +1127,7 @@ async def apply_user_save(api, username: str, gb=None, days=None, service_id=Non
 
 
 _PLAN_DROP = ("id", "user_id")                      # فیلدهایی که هنگام نوشتن نباید فرستاده شوند
-_PLAN_DEFAULTS = {"add_remaining_traffic": False, "fire_on_either": True, "increase_data_limit": True, "start_on_first_connect": False}
+_PLAN_DEFAULTS = {"add_remaining_traffic": False, "fire_on_either": True, "increase_data_limit": False, "start_on_first_connect": False}
 
 
 def _raw_plans(u: dict) -> list[dict]:
@@ -1186,6 +1186,8 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
     u = await api.request("GET", ph)
     raw, view = _raw_plans(u), next_plans_view(u)
     legacy = "next_plans" not in u and "next_plan" in u          # ربکای قدیمی
+    mode = mode if mode in ("duration", "chain") else load_config()["next_plan_mode"]
+    dur_mode = mode == "duration"                                 # duration: همان N روزِ واردشده (از لحظه‌ی شروع پلن) | chain: تاریخ مطلق
     base, built, fresh = _plan_base(u), [], []
     for i, pl in enumerate(plans):
         gb, days, rem = float(pl.get("gb") or 0), int(pl.get("days") or 0), bool(pl.get("add_remaining"))
@@ -1193,7 +1195,7 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
             raise RebeccaError("حجم یا مدت پلن بعدی را وارد کنید.")
         idx = pl.get("idx")
         known = isinstance(idx, int) and 0 <= idx < len(raw)
-        if known and not view[idx]["broken"] and abs(view[idx]["gb"] - gb) < 0.01 and view[idx]["days"] == days and view[idx]["add_remaining"] == rem:
+        if known and not view[idx]["broken"] and (legacy or _is_dur(raw[idx]) == dur_mode) and abs(view[idx]["gb"] - gb) < 0.01 and view[idx]["days"] == days and view[idx]["add_remaining"] == rem:
             q = dict(raw[idx])                                    # بدون تغییر: همان‌طور که هست
             if not _is_dur(q, legacy) and int(q.get("expire") or 0):
                 base = float(q["expire"])
@@ -1201,9 +1203,12 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
             q = dict(raw[idx]) if known else {**_PLAN_DEFAULTS, **{k: v for k, v in (raw[0] if raw else {}).items() if k not in ("data_limit", "expire")}}
             q["data_limit"] = int(gb * GB) if gb > 0 else 0
             q["add_remaining_traffic"] = rem
-            if not known and not legacy:                          # پلن تازه: همان N روزی که وارد شد (مدت، از لحظه‌ی فعال‌شدن پلن)
-                q["start_on_first_connect"] = True
-                fresh.append(i)
+            if not legacy:
+                q["start_on_first_connect"] = dur_mode
+                if dur_mode:
+                    fresh.append(i)
+                if not known:
+                    q["increase_data_limit"] = False
             if _is_dur(q, legacy):
                 q["expire"] = days * 86400 if days > 0 else 0
             else:
