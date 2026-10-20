@@ -69,6 +69,10 @@ DEFAULT_CFG = {
             {"gb": 90, "months": 2, "price": 390000},
         ],
     },
+    # پلن بعدی: duration = «N روز» دقیقاً همان‌طور که وارد شد (پنل هم N نشان می‌دهد) | chain = تاریخ مطلق بعد از پایان اشتراک فعلی (پنل: روزهای باقی‌مانده + N)
+    "next_plan_mode": "duration",
+    # برگشت تمدید/ریست اشتباهی: فقط یک فایل محلی کوچک (renew_undo.json)، بدون هیچ درخواست اضافه به پنل؛ ریست دسته‌ای بزرگ‌تر از bulk_max عکس‌برداری نمی‌شود
+    "undo": {"enabled": True, "keep": 300, "days": 14, "bulk_max": 30},
     "backup": {"enabled": True},
     "monitor": {"enabled": True, "interval": 300},
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
@@ -198,6 +202,18 @@ def _normalize(data: dict) -> dict:
                 except (TypeError, ValueError):
                     sec[k] = dv
         cfg[key] = sec
+    if cfg.get("next_plan_mode") not in ("duration", "chain"):
+        cfg["next_plan_mode"] = DEFAULT_CFG["next_plan_mode"]
+    und = copy.deepcopy(DEFAULT_CFG["undo"])
+    if isinstance(cfg.get("undo"), dict):
+        und.update({k: v for k, v in cfg["undo"].items() if k in und})
+    und["enabled"] = bool(und["enabled"])
+    for k in ("keep", "days", "bulk_max"):
+        try:
+            und[k] = max(1, int(und[k]))
+        except (TypeError, ValueError):
+            und[k] = DEFAULT_CFG["undo"][k]
+    cfg["undo"] = und
     un = cfg.get("unpaid") if isinstance(cfg.get("unpaid"), dict) else {}
     try:
         hrs = min(24 * 365, max(1, int(un.get("hours", DEFAULT_CFG["unpaid"]["hours"]))))
@@ -1162,12 +1178,13 @@ def next_plans_view(u: dict) -> list[dict]:
     return out
 
 
-async def set_next_plans(api, username: str, plans: list[dict]):
+async def set_next_plans(api, username: str, plans: list[dict], mode: str | None = None):
     """جایگزینی کامل فهرست «پلن بعدی» (شارژ خودکار). هر پلن: {idx|None, gb, days, add_remaining}.
     idx = شماره‌ی پلن موجود. پلنِ بدون تغییر دست‌نخورده می‌ماند؛ تاریخ پایان پلن جدید = پایان پلن قبلی (یا انقضای فعلی) + روزها.
     بعد از نوشتن دوباره می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
     ph = api.upath(username)
     u = await api.request("GET", ph)
+    mode = mode if mode in ("duration", "chain") else load_config().get("next_plan_mode", "duration")
     raw, view = _raw_plans(u), next_plans_view(u)
     legacy = "next_plans" not in u and "next_plan" in u          # ربکای قدیمی
     base, built = _plan_base(u), []
@@ -1185,6 +1202,8 @@ async def set_next_plans(api, username: str, plans: list[dict]):
             q = dict(raw[idx]) if known else {**_PLAN_DEFAULTS, **{k: v for k, v in (raw[0] if raw else {}).items() if k not in ("data_limit", "expire")}}
             q["data_limit"] = int(gb * GB) if gb > 0 else 0
             q["add_remaining_traffic"] = rem
+            if not known and not legacy:                          # پلن تازه: نوع شمارش روز طبق mode (duration = همان N روز در پنل)
+                q["start_on_first_connect"] = (mode == "duration")
             if _is_dur(q, legacy):
                 q["expire"] = days * 86400 if days > 0 else 0
             else:
@@ -1237,10 +1256,121 @@ async def set_service(api, username: str, service_id: int):
     return after
 
 
+# ───────────────────────────── برگشت تمدید / ریست اشتباهی ─────────────────────────────
+_UNDO_LOCK = threading.Lock()
+_UNDO_CACHE: dict = {"sig": None, "data": []}
+
+
+def _undo_file() -> str:
+    return os.path.join(os.path.dirname(CONFIG_FILE) or ".", "renew_undo.json")
+
+
+def _undo_read() -> list[dict]:
+    path = _undo_file()
+    try:
+        st = os.stat(path)
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    if _UNDO_CACHE["sig"] == sig:
+        return _UNDO_CACHE["data"]
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        data = [x for x in data if isinstance(x, dict) and "u" in x and "ts" in x] if isinstance(data, list) else []
+    except (OSError, ValueError):
+        data = []
+    _UNDO_CACHE.update(sig=sig, data=data)
+    return data
+
+
+def _undo_write(items: list[dict]) -> None:
+    path = _undo_file()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    _UNDO_CACHE["sig"] = None
+
+
+def undo_snapshot(pid: str, username: str, before: dict, action: str = "renew") -> None:
+    """وضعیت کاربر را «قبل از» تمدید/ریست در فایل محلی نگه می‌دارد. هیچ درخواستی به پنل نمی‌زند و هیچ‌وقت خطا نمی‌دهد."""
+    try:
+        uc = load_config()["undo"]
+        if not uc["enabled"] or not isinstance(before, dict):
+            return
+        now = time.time()
+        snap = {
+            "pid": str(pid or ""), "u": str(username), "ts": now, "act": action,
+            "used": int(before.get("used_traffic") or 0), "limit": int(before.get("data_limit") or 0),
+            "expire": int(before.get("expire") or 0), "hold": int(before.get("on_hold_expire_duration") or 0),
+            "status": str(before.get("status") or ""), "legacy": "next_plans" not in before,
+            "np": [{k: v for k, v in p.items() if k not in _PLAN_DROP} for p in _raw_plans(before)],
+        }
+        with _UNDO_LOCK:
+            cut = now - uc["days"] * 86400
+            items = [x for x in _undo_read() if float(x.get("ts", 0)) >= cut] + [snap]
+            _undo_write(items[-uc["keep"]:])
+    except Exception:  # noqa: BLE001
+        log.exception("undo_snapshot")
+
+
+def undo_latest(pid: str, username: str) -> dict | None:
+    """آخرین نقطه‌ی برگشت این کاربر (یا None)."""
+    try:
+        cut = time.time() - load_config()["undo"]["days"] * 86400
+        for x in reversed(_undo_read()):
+            if x.get("u") == username and str(x.get("pid", "")) == str(pid or "") and float(x.get("ts", 0)) >= cut:
+                return x
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def undo_drop(snap: dict) -> None:
+    with _UNDO_LOCK:
+        _undo_write([x for x in _undo_read() if not (x.get("u") == snap.get("u") and x.get("ts") == snap.get("ts") and x.get("pid") == snap.get("pid"))])
+
+
+async def undo_restore(api, username: str) -> tuple[dict, dict, list[str]]:
+    """آخرین تمدید/ریست کاربر را برمی‌گرداند: (کاربر بعد از برگشت، نقطه‌ی برگشت، هشدارها).
+    مدت/انقضا، وضعیت و پلن‌های بعدی دقیقاً به حالت قبل برمی‌گردند. پنل اجازه‌ی نوشتن «مصرف» را نمی‌دهد؛ پس حجم کل طوری تنظیم می‌شود
+    که «حجم باقی‌مانده» همان قبل از تمدید شود (حجم کل = باقی‌مانده‌ی قبلی + مصرف فعلی). فقط ۲–۴ درخواست سبک، آن هم فقط وقتی دکمه زده شود."""
+    snap = undo_latest(getattr(api, "pid", ""), username)
+    if not snap:
+        raise RebeccaError("نقطه‌ی برگشتی برای این کاربر نیست (تمدید قبل از فعال شدن این قابلیت بوده یا قدیمی‌تر از مدت نگه‌داری است).")
+    p = api.upath(username)
+    cur = await api.request("GET", p)
+    warns: list[str] = []
+    lim, used = int(snap["limit"]), int(snap["used"])
+    body: dict = {"data_limit": (max(0, lim - used) + int(cur.get("used_traffic") or 0)) if lim > 0 else 0}
+    st = snap.get("status")
+    if st == "on_hold":
+        body.update(status="on_hold", on_hold_expire_duration=int(snap["hold"]) or 30 * 86400, expire=0)
+    elif st in ("active", "disabled"):
+        body.update(status=st, expire=int(snap["expire"]))
+    else:                                                     # limited / expired: وضعیت را خود پنل از روی حجم و تاریخ تعیین می‌کند
+        body["expire"] = int(snap["expire"])
+    await api.request("PUT", p, json=body)
+    want = snap.get("np") or []
+    have = [{k: v for k, v in x.items() if k not in _PLAN_DROP} for x in _raw_plans(cur)]
+    if want != have:
+        try:
+            put = {"next_plan": want[0] if want else None} if snap.get("legacy") else {"next_plans": want}
+            await api.request("PUT", p, json=put)
+        except Exception as e:  # noqa: BLE001
+            warns.append(f"پلن‌های بعدی برنگشتند: {e}")
+    after = await api.request("GET", p)
+    await asyncio.to_thread(undo_drop, snap)
+    return after, snap, warns
+
+
 async def renew_user(api, username: str, tpl: dict, reset_usage: bool = True):
     """حجم/مدت جدید طبق تمپلت. با reset_usage مصرف صفر می‌شود (ابتدا ریست، بعد وضعیت تا On-Hold خراب نشود)."""
     p = api.upath(username)
     before = await api.request("GET", p)
+    await asyncio.to_thread(undo_snapshot, getattr(api, "pid", ""), username, before, "renew" if reset_usage else "renew-keep")
     if reset_usage:
         await api.request("POST", p + "/reset")
     res = await api.request("PUT", p, json=build_renew_payload(tpl))
@@ -1274,6 +1404,8 @@ async def bulk_apply(api, names, action: str, *, service_id=None, tpl=None, conc
                 elif action == "renew":
                     await renew_user(api, n, tpl)
                 elif action == "reset":
+                    if len(names) <= load_config()["undo"]["bulk_max"]:      # ریست دسته‌ای بزرگ: عکس‌برداری نمی‌کنیم تا پنل سنگین نشود
+                        await asyncio.to_thread(undo_snapshot, getattr(api, "pid", ""), n, await api.request("GET", p), "reset")
                     await api.request("POST", p + "/reset")
                 elif action in ("disable", "enable"):
                     await api.request("PUT", p, json={"status": "disabled" if action == "disable" else "active"})
