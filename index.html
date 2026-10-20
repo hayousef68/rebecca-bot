@@ -97,6 +97,7 @@ code,.code{display:block;direction:ltr;text-align:left;font-family:ui-monospace,
 .rnote{display:block;font-size:12px;color:var(--ac);margin-top:2px;word-break:break-word}
 .tag.paid{color:var(--ok);border-color:#3ecf8e55;background:#3ecf8e14}.paidchk{margin:8px 0 0;font-size:13px}
 .notebox{display:flex;gap:6px;margin:10px 0 0}.notebox .noteIn{flex:1;min-width:0}
+.shareapps{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px}.shareapps .btn{text-align:center;text-decoration:none}
 img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:14px;background:#fff;padding:8px}
 .err{color:var(--bad);font-size:12px;margin-top:6px}
 .toast{position:fixed;inset:auto 16px calc(100px + env(safe-area-inset-bottom)) 16px;z-index:9;margin:auto;max-width:420px;background:var(--s2);border:1px solid var(--line);
@@ -644,6 +645,16 @@ function repItem(u) {
   const q = h('div');
   const msg = () => ['👤 نام کاربری: ' + u.username, '📦 حجم: ' + gb(u.limit) + ' (باقی‌مانده: ' + left + ')', '⏳ اعتبار: ' + u.expire_text, '🔗 لینک اشتراک:', u.sub].join('\n');
   const tile = (l, v) => h('div', {}, h('span', {}, l), h('b', {}, v));
+  const apps = h('div', { class: 'shareapps', hidden: true });
+  const share = async () => {                                   // منوی اشتراک‌گذاری گوشی (تلگرام، واتساپ، پیامک و ...)
+    const text = msg();
+    if (navigator.share) { try { await navigator.share({ text }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+    if (!apps.hidden) { apps.hidden = true; return; }           // روی دسکتاپ/HTTP: لینک مستقیم پیام‌رسان‌ها
+    const t = encodeURIComponent(text), A = (href, label) => h('a', { class: 'btn sm', href, target: '_blank', rel: 'noopener' }, label);
+    apps.replaceChildren(A('https://t.me/share/url?url=' + encodeURIComponent(u.sub) + '&text=' + encodeURIComponent(text.replace(u.sub, '').trim()), '✈️ تلگرام'), A('https://wa.me/?text=' + t, '🟢 واتساپ'), A('sms:?&body=' + t, '✉️ پیامک'),
+      h('button', { class: 'btn sm', type: 'button', onclick: () => copy(text) }, '📋 کپی پیام'));
+    apps.hidden = false;
+  };
   const noteTxt = h('span', { class: 'rnote', hidden: !u.note }, u.note ? '📝 ' + u.note : '');
   const noteIn = h('input', { type: 'text', class: 'noteIn', maxlength: 100, value: u.note || '', placeholder: 'اسم یا یادداشت (مثلاً اسم مشتری)…', autocomplete: 'off' });
   const noteBtn = h('button', { class: 'btn sm pri', type: 'button' }, '💾 ذخیره');
@@ -669,7 +680,8 @@ function repItem(u) {
       h('div', { class: 'acts', style: 'grid-template-columns:repeat(3,1fr)' },
         h('button', { class: 'btn sm', onclick: () => toggleQR(q, u.sub, u.username, '/api/rep/qr') }, '🖼 QR'),
         h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 کپی لینک'),
-        h('button', { class: 'btn sm', onclick: () => copy(msg()) }, '💬 پیام'))));
+        h('button', { class: 'btn sm', onclick: () => share() }, '📤 اشتراک‌گذاری')),
+      apps));
   return d;
 }
 
