@@ -1184,10 +1184,9 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
     بعد از نوشتن دوباره می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
     ph = api.upath(username)
     u = await api.request("GET", ph)
-    mode = mode if mode in ("duration", "chain") else load_config().get("next_plan_mode", "duration")
     raw, view = _raw_plans(u), next_plans_view(u)
     legacy = "next_plans" not in u and "next_plan" in u          # ربکای قدیمی
-    base, built = _plan_base(u), []
+    base, built, fresh = _plan_base(u), [], []
     for i, pl in enumerate(plans):
         gb, days, rem = float(pl.get("gb") or 0), int(pl.get("days") or 0), bool(pl.get("add_remaining"))
         if gb <= 0 and days <= 0:
@@ -1202,8 +1201,9 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
             q = dict(raw[idx]) if known else {**_PLAN_DEFAULTS, **{k: v for k, v in (raw[0] if raw else {}).items() if k not in ("data_limit", "expire")}}
             q["data_limit"] = int(gb * GB) if gb > 0 else 0
             q["add_remaining_traffic"] = rem
-            if not known and not legacy:                          # پلن تازه: نوع شمارش روز طبق mode (duration = همان N روز در پنل)
-                q["start_on_first_connect"] = (mode == "duration")
+            if not known and not legacy:                          # پلن تازه: همان N روزی که وارد شد (مدت، از لحظه‌ی فعال‌شدن پلن)
+                q["start_on_first_connect"] = True
+                fresh.append(i)
             if _is_dur(q, legacy):
                 q["expire"] = days * 86400 if days > 0 else 0
             else:
@@ -1220,6 +1220,22 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
     after = await api.request("GET", ph)
     if len(next_plans_view(after)) != len(built):
         raise RebeccaError("پنل پلن بعدی را ذخیره نکرد (نسخه‌ی ربکا یا فیلدها سازگار نیست). جزئیات فنی را بفرستید.")
+    # اگر ربکا علامت «مدت» را نگه نداشت، expire (مثلاً 2592000) را تاریخ می‌خواند و «۰ روز» می‌شود → پلن را با تاریخ مطلق دوباره می‌نویسیم
+    got = _raw_plans(after)
+    bad = [i for i in fresh if i < len(got) and not got[i].get("start_on_first_connect") and 0 < int(got[i].get("expire") or 0) < 10 ** 9]
+    if bad:
+        fixed, base = [], _plan_base(after)
+        for i, p in enumerate(got):
+            q = {k: v for k, v in p.items() if k not in _PLAN_DROP}
+            ex = int(q.get("expire") or 0)
+            if i in bad:
+                q["expire"] = int(base) + ex
+                base = float(q["expire"])
+            elif not _is_dur(q) and ex >= 10 ** 9:
+                base = float(ex)
+            fixed.append(q)
+        await api.request("PUT", ph, json={"next_plans": fixed})
+        after = await api.request("GET", ph)
     return after
 
 
