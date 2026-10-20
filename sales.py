@@ -154,9 +154,152 @@ def _attach_rows(a, b, off: int, svc: dict) -> list[dict]:
         if not (a <= at < b):
             continue
         sid = x.get("sid")
-        out.append({"kind": "next" if x.get("k") == "next" else "attach", "at": at, "username": x.get("u", ""), "data_limit": float(x.get("gb", 0)) * GB, "expire": None,
+        kd = "next" if x.get("k") == "next" else "attach"
+        out.append({"kind": kd, "eid": f"{kd}|{x.get('u', '')}|{int(float(x['ts']))}", "at": at, "username": x.get("u", ""), "data_limit": float(x.get("gb", 0)) * GB, "expire": None,
                     "hold": None, "service_id": sid, "service_name": svc.get(sid, ""), "created_at": None, "_off": off,
                     "months": 2 if int(x.get("days") or 0) > 45 else 1, "days": int(x.get("days") or 0)})
+    return out
+
+
+# ───────────────────────────── اصلاح دستی فروش (حذف / ویرایش) ─────────────────────────────
+# ردیف‌های دیتابیس ربکا فقط‌خواندنی‌اند؛ پس حذف/ویرایش یک فروش در فایل کوچک sales_overrides.json ذخیره می‌شود و
+# موقع ساخت گزارش اعمال می‌شود (هیچ درخواستی به پنل/دیتابیس نمی‌زند و هر لحظه قابل برگشت است).
+#   hide : {eid: {"v": True|False, "ts": زمان ثبت}}   — True = حذف از گزارش، False = نمایش اجباری
+#   edit : {eid: {"gb": int|None, "months": 1|2|None, "type": "ham"|"single"|None, "ts": ...}}
+#   spans: [{"u": username, "from": ts, "to": ts, "ts": ...}] — تمدیدهای این کاربر در این بازه حذف‌اند (برگشت تمدید)
+_OVR_LOCK = threading.Lock()
+_OVR_KEEP_DAYS = 400
+_OVR_CACHE: dict = {"sig": None, "data": None}
+
+
+def _ovr_file() -> str:
+    from common import CONFIG_FILE
+    return os.path.join(os.path.dirname(CONFIG_FILE), "sales_overrides.json")
+
+
+def _ovr_empty() -> dict:
+    return {"hide": {}, "edit": {}, "spans": []}
+
+
+def _load_ovr() -> dict:
+    path = _ovr_file()
+    try:
+        st = os.stat(path)
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return _ovr_empty()
+    if _OVR_CACHE["sig"] == sig and _OVR_CACHE["data"] is not None:
+        return _OVR_CACHE["data"]
+    data = _ovr_empty()
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            for k in ("hide", "edit"):
+                if isinstance(raw.get(k), dict):
+                    data[k] = raw[k]
+            if isinstance(raw.get("spans"), list):
+                data["spans"] = [x for x in raw["spans"] if isinstance(x, dict) and "u" in x and "from" in x and "to" in x]
+    except (OSError, ValueError):
+        pass
+    _OVR_CACHE.update(sig=sig, data=data)
+    return data
+
+
+def _save_ovr(data: dict) -> None:
+    cut = _time.time() - _OVR_KEEP_DAYS * 86400
+    data["hide"] = {k: v for k, v in data["hide"].items() if float((v or {}).get("ts", cut + 1)) >= cut}
+    data["edit"] = {k: v for k, v in data["edit"].items() if float((v or {}).get("ts", cut + 1)) >= cut}
+    data["spans"] = [x for x in data["spans"] if float(x.get("ts", cut + 1)) >= cut][-500:]
+    path = _ovr_file()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, path)
+    _OVR_CACHE["sig"] = None
+
+
+def _ovr_mutate(fn) -> None:
+    with _OVR_LOCK:
+        data = json.loads(json.dumps(_load_ovr()))   # کپی عمیق؛ کش دست‌نخورده می‌ماند
+        fn(data)
+        _save_ovr(data)
+
+
+def ovr_hide(eid: str, hidden: bool = True) -> None:
+    """حذف (hidden=True) یا بازگرداندن (False) یک فروش در گزارش."""
+    _ovr_mutate(lambda d: d["hide"].__setitem__(str(eid), {"v": bool(hidden), "ts": _time.time()}))
+
+
+def ovr_edit(eid: str, gb: int | None = None, months: int | None = None, typ: str | None = None) -> None:
+    """ویرایش حجم/مدت/نوع (همکاری یا تکی) یک فروش. فقط مقادیرِ غیر None عوض می‌شوند و بقیه‌ی ویرایش‌های قبلی همان فروش حفظ می‌ماند."""
+    def fn(d):
+        cur = d["edit"].get(str(eid)) or {}
+        rec = {"gb": gb if gb is not None else cur.get("gb"), "months": months if months is not None else cur.get("months"),
+               "type": typ if typ is not None else cur.get("type"), "ts": _time.time()}
+        if rec["gb"] is None and rec["months"] is None and rec["type"] is None:
+            d["edit"].pop(str(eid), None)
+        else:
+            d["edit"][str(eid)] = rec
+    _ovr_mutate(fn)
+
+
+def ovr_edit_clear(eid: str) -> None:
+    """لغو همه‌ی ویرایش‌های یک فروش (برمی‌گردد به مقدار اصلی دیتابیس)."""
+    _ovr_mutate(lambda d: d["edit"].pop(str(eid), None))
+
+
+def ovr_add_span(username: str, t_from: float, t_to: float) -> None:
+    """بعد از «برگشت تمدید»: تمدید/ریست/پیوست همان کاربر در این بازه از فروش حذف شود."""
+    _ovr_mutate(lambda d: d["spans"].append({"u": str(username), "from": float(t_from), "to": float(t_to), "ts": _time.time()}))
+
+
+def _eid(r: dict) -> str:
+    at = r.get("at")
+    stamp = at.strftime("%Y%m%d%H%M%S") if isinstance(at, datetime) else str(at)
+    return f"{r.get('kind')}|{r.get('username')}|{stamp}"
+
+
+def _ts_of(r: dict, off: int) -> float:
+    at = r.get("at")
+    if not isinstance(at, datetime):
+        return 0.0
+    return (at - timedelta(minutes=off)).replace(tzinfo=timezone.utc).timestamp()
+
+
+def _apply_overrides(rows: list[dict], off: int, include_hidden: bool) -> list[dict]:
+    ov = _load_ovr()
+    hide, edit, spans = ov["hide"], ov["edit"], ov["spans"]
+    if not (hide or edit or spans) and not include_hidden:
+        for r in rows:
+            r["eid"] = r.get("eid") or _eid(r)
+        return rows
+    cfg = load_config()["sales"]
+    out = []
+    for r in rows:
+        r["eid"] = eid = r.get("eid") or _eid(r)
+        ts = _ts_of(r, off)
+        r["ts"] = ts
+        h = hide.get(eid)
+        if isinstance(h, dict):
+            hidden = bool(h.get("v"))
+        else:
+            hidden = r["kind"] != "new" and any(s["u"] == r["username"] and float(s["from"]) <= ts <= float(s["to"]) for s in spans)
+        e = edit.get(eid)
+        if isinstance(e, dict):
+            r["orig"] = {"gb": round((r.get("data_limit") or 0) / GB), "months": int(r["months"]) if r.get("months") else _months(r), "ham": _is_hamkari(r, cfg)}
+            if e.get("gb"):
+                r["data_limit"] = float(e["gb"]) * GB
+            if e.get("months") in (1, 2):
+                r["months"] = int(e["months"])
+            if e.get("type") in ("ham", "single"):
+                r["force_type"] = e["type"]
+            r["edited"] = True
+        if hidden:
+            if not include_hidden:
+                continue
+            r["hidden"] = True
+        out.append(r)
     return out
 
 
@@ -245,15 +388,15 @@ async def next_number(api, prefix: str, use_db: bool = True) -> dict:
     return _pick_next(rows, prefix)
 
 
-def fetch_events(day: str, partial: bool) -> list[dict]:
-    return _fetch(*_bounds_db(day, partial))
+def fetch_events(day: str, partial: bool, include_hidden: bool = False) -> list[dict]:
+    return _fetch(*_bounds_db(day, partial), include_hidden=include_hidden)
 
 
-def fetch_events_range(d1: str, d2: str, partial: bool) -> list[dict]:
-    return _fetch(*_bounds_days(d1, d2, partial))
+def fetch_events_range(d1: str, d2: str, partial: bool, include_hidden: bool = False) -> list[dict]:
+    return _fetch(*_bounds_days(d1, d2, partial), include_hidden=include_hidden)
 
 
-def _fetch(a, b) -> list[dict]:
+def _fetch(a, b, include_hidden: bool = False) -> list[dict]:
     s = _schema()
     off = int(load_config()["sales"].get("db_tz_offset_minutes", 0))
     U, R = _ident(s["users"]), _ident(s["resets"])
@@ -288,11 +431,13 @@ def _fetch(a, b) -> list[dict]:
     rows = [r for r in rows if not (r["kind"] == "renew" and r["username"] in created and isinstance(r["at"], datetime)
                                     and abs((r["at"] - created[r["username"]]).total_seconds()) <= 120)]
     rows.sort(key=lambda r: r["at"] if isinstance(r["at"], datetime) else datetime.min)
-    return rows
+    return _apply_overrides(rows, off, include_hidden)
 
 
 # ───────────────────────────── طبقه‌بندی و قیمت ─────────────────────────────
 def _is_hamkari(r: dict, cfg: dict) -> bool:
+    if r.get("force_type") in ("ham", "single"):      # ویرایش دستی نوع فروش
+        return r["force_type"] == "ham"
     if r["service_id"] in [int(x) for x in cfg.get("hamkari_service_ids", []) if str(x).lstrip("-").isdigit()]:
         return True
     names = [str(n).lower() for n in cfg.get("hamkari_service_names", [])]
@@ -317,6 +462,8 @@ def _norm(x) -> str:
 
 def _is_ignored(r: dict, cfg: dict) -> bool:
     """سرویس‌هایی مثل Tes (تست رایگان) فروش حساب نمی‌شوند."""
+    if r.get("force_type") in ("ham", "single"):      # اگر دستی نوع فروش تعیین شده، دیگر «تست» حساب نمی‌شود
+        return False
     names = [_norm(n) for n in cfg.get("ignore_service_names", [])]
     sn = _norm(r.get("service_name"))
     return bool(sn) and any(n and n in sn for n in names)
@@ -554,6 +701,59 @@ def set_plan(gb: int, months: int, price: int) -> None:
     update_config(mut)
 
 
+def resolve_range(day: str = "today", d_from: str = "", d_to: str = "") -> tuple[str, str]:
+    """انتخاب گزارش (today|yesterday|week|month|lmonth|YYYY-MM-DD یا from/to) ← (روز شروع، روز پایان) میلادی. خطا: ValueError."""
+    today = tehran_day()
+    if d_from and d_to:
+        shift_day(d_from, 0); shift_day(d_to, 0)
+        a, b = sorted((d_from, d_to))
+        return a, min(b, today)
+    if day == "week":
+        return shift_day(today, -6), today
+    if day == "month":
+        return jmonth_start(today), today
+    if day == "lmonth":
+        m = jmonths(2)[1]
+        return m["from"], m["to"]
+    d = {"today": today, "yesterday": shift_day(today, -1)}.get(day, day)
+    shift_day(d, 0)
+    return d, d
+
+
+def events_list(d1: str, d2: str, limit: int = 300) -> list[dict]:
+    """تک‌تک فروش‌های بازه (جدیدترین اول) برای صفحه‌ی ویرایش گزارش؛ شامل حذف‌شده‌ها تا قابل برگشت باشند."""
+    today = tehran_day()
+    cfg = load_config()["sales"]
+    rows = _fetch(*_bounds_days(d1, d2, d2 >= today), include_hidden=True)
+    per_gb, rate, skip_extra = int(cfg["hamkari_per_gb"]), fallback_rate(cfg), cfg.get("attach_extra_mode", "skip") == "skip"
+    out = []
+    for r in reversed(rows[-limit:]):
+        gb = round((r.get("data_limit") or 0) / GB)
+        m = int(r["months"]) if r.get("months") else _months(r)
+        if _is_hamkari(r, cfg):
+            typ, price = "ham", gb * per_gb
+        elif _is_ignored(r, cfg):
+            typ, price = "ignored", 0
+        else:
+            typ = "single"
+            hit = next((p for p in cfg["single_prices"] if int(p["gb"]) == gb and int(p["months"]) == m), None)
+            if hit:
+                price = int(hit["price"])
+            elif r["kind"] in ("attach", "next") and skip_extra:
+                price = 0
+            else:
+                price = int(round(gb * rate))
+        ts = r.get("ts") or 0
+        local = datetime.fromtimestamp(ts, TEHRAN) if ts else None
+        out.append({
+            "eid": r["eid"], "kind": r["kind"], "kind_fa": _KIND_FA.get(r["kind"], r["kind"]), "username": r["username"],
+            "gb": gb, "months": m, "type": typ, "service": r.get("service_name") or "", "price": price if gb > 0 else 0,
+            "time": local.strftime("%H:%M") if local else "", "day": jdate(local.strftime("%Y-%m-%d"), False) if local else "",
+            "hidden": bool(r.get("hidden")), "edited": bool(r.get("edited")), "orig": r.get("orig"),
+        })
+    return out
+
+
 # ───────────────────────────── سازگاری با bot.py (بدون پولینگ) ─────────────────────────────
 async def poll_all():
     return None  # دیگر لازم نیست؛ گزارش مستقیم از دیتابیس خوانده می‌شود
@@ -605,6 +805,7 @@ def full_backup_bytes() -> bytes:
         "created": datetime.now(TEHRAN).isoformat(timespec="seconds"),
         "config": cfg,
         "attach_log": _load_attach(),
+        "sales_overrides": _load_ovr(),
     }
     return json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8")
 
