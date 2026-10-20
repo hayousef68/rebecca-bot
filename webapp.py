@@ -540,7 +540,7 @@ async def rep_users(offset: int = Query(0, ge=0, le=100000), limit: int = Query(
                 if not api.is_configured():
                     return None
                 d = _slim_rep(await api.request("GET", api.upath(u)), api)
-                d["pid"], d["note"] = pid, note_of(pid, u)
+                d["pid"], d["note"], d["paid"] = pid, note_of(pid, u), bool(cfg["rep_paid"].get(pid, {}).get(u))
                 return d
             except C.RebeccaError:        # حذف‌شده از پنل یا خطای موقت
                 return None
@@ -567,6 +567,27 @@ async def rep_note(r: RepNoteReq, rep=Depends(rep_guard)):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "note": note}
+
+
+class RepPaidReq(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    pid: str = Field(default="", max_length=20)
+    paid: bool
+
+
+@app.post("/api/rep/paid")
+async def rep_paid(r: RepPaidReq, rep=Depends(rep_guard)):
+    """نماینده علامت می‌زند که پول این کاربر را از مشتری گرفته است."""
+    rid = rep[0]
+    cfg = load_config()
+    pids = [p for p, m in cfg["rep_users"].items() if m.get(r.username) == rid and (not r.pid or p == r.pid)]
+    if not pids:
+        raise HTTPException(404, "این کاربر در لیست شما نیست.")
+    try:
+        paid = await asyncio.to_thread(C.set_rep_paid, rid, pids[0], r.username, r.paid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "paid": paid}
 
 
 @app.get("/api/rep/qr")
@@ -1108,7 +1129,7 @@ async def backup_restore(r: RestoreReq):
     if not (new.get("web") or {}).get("hash"):          # بکاپ بدون رمز وب: رمز فعلی حفظ شود
         new["web"] = cur["web"]
     if "reps" not in data:                              # بکاپ قدیمی (قبل از نماینده‌ها): نماینده‌های فعلی پاک نشوند
-        new["reps"], new["rep_users"], new["rep_notes"] = cur["reps"], cur["rep_users"], cur["rep_notes"]
+        new["reps"], new["rep_users"], new["rep_notes"], new["rep_paid"] = cur["reps"], cur["rep_users"], cur["rep_notes"], cur["rep_paid"]
     web_changed = (new["web"].get("hash"), new["web"].get("user")) != (cur["web"].get("hash"), cur["web"].get("user"))
     safety = None
     if os.path.exists(C.CONFIG_FILE):
