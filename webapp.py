@@ -270,6 +270,7 @@ async def state():
         "templates": cfg["templates"], "active": cfg["active_template"], "active_group": cfg.get("active_group_template", ""), "max_batch": cfg["max_batch"],
         "default_prefix": cfg["default_prefix"], "multi_panel": len(cfg["panels"]) > 1, "unpaid_hours": cfg["unpaid"]["hours"],
         "ham_names": cfg.get("sales", {}).get("hamkari_service_names", ["hamkari"]),
+        "next_plan_mode": cfg.get("next_plan_mode", "duration"), "undo": cfg["undo"]["enabled"],
     }
 
 
@@ -334,6 +335,43 @@ async def report_events(day: str = "today"):
     except ValueError:
         raise HTTPException(400, "تاریخ نامعتبر")
     return {"day": d, "text": await asyncio.to_thread(sales.build_events, d, False, d == today, 300)}
+
+
+def _rep_range(day: str, d_from: str, d_to: str) -> tuple[str, str]:
+    try:
+        return sales.resolve_range(day, d_from, d_to)
+    except ValueError:
+        raise HTTPException(400, "تاریخ نامعتبر؛ today / yesterday / week / month / lmonth / YYYY-MM-DD")
+
+
+@app.get("/api/report/list", dependencies=[Depends(guard)])
+async def report_list(day: str = "today", date_from: str = Query("", alias="from", max_length=10), date_to: str = Query("", alias="to", max_length=10)):
+    """فهرست تک‌تک فروش‌های بازه برای حذف/ویرایش (حذف‌شده‌ها هم با علامت می‌آیند تا قابل بازگرداندن باشند)."""
+    d1, d2 = _rep_range(day, date_from, date_to)
+    return {"from": d1, "to": d2, "events": await asyncio.to_thread(sales.events_list, d1, d2)}
+
+
+class SaleEventReq(BaseModel):
+    eid: str = Field(min_length=3, max_length=120, pattern=r"^[A-Za-z0-9_|\-]+$")
+    op: str = Field(pattern="^(hide|show|edit|reset)$")        # hide=حذف از گزارش | show=بازگرداندن | edit=ویرایش | reset=لغو ویرایش
+    gb: int | None = Field(default=None, ge=1, le=100000)
+    months: int | None = Field(default=None, ge=1, le=2)
+    type: str | None = Field(default=None, pattern="^(ham|single)$")
+
+
+@app.post("/api/report/event", dependencies=[Depends(guard)])
+async def report_event(r: SaleEventReq):
+    if r.op == "hide":
+        await asyncio.to_thread(sales.ovr_hide, r.eid, True)
+    elif r.op == "show":
+        await asyncio.to_thread(sales.ovr_hide, r.eid, False)
+    elif r.op == "reset":
+        await asyncio.to_thread(sales.ovr_edit_clear, r.eid)
+    else:
+        if r.gb is None and r.months is None and r.type is None:
+            raise HTTPException(400, "حداقل یکی از حجم، مدت یا نوع را مشخص کنید.")
+        await asyncio.to_thread(sales.ovr_edit, r.eid, r.gb, r.months, r.type)
+    return {"ok": True}
 
 
 class PlanReq(BaseModel):
@@ -711,7 +749,19 @@ def _slim(u: dict, api, pend: dict | None = None) -> dict:
         "next_plans": C.next_plans_view(u),
         "np_raw": json.dumps(C._raw_plans(u), ensure_ascii=False)[:1500] if C._raw_plans(u) else "",
         "unpaid_due": int(rec["due"]) if rec and st != "disabled" else 0,      # زمان غیرفعال‌سازی خودکار (timestamp)؛ ۰ = ندارد
+        "undo": _undo_view(C.undo_latest(getattr(api, "pid", ""), u.get("username") or "")),
     }
+
+
+def _undo_view(snap: dict | None) -> dict | None:
+    """خلاصه‌ی نقطه‌ی برگشت برای نمایش در دکمه‌ی «برگشت تمدید» (فقط خواندن از فایل محلی)."""
+    if not snap:
+        return None
+    lim, used = int(snap["limit"]), int(snap["used"])
+    st = snap.get("status")
+    days = int(snap["hold"]) // 86400 if st == "on_hold" else (max(0, -(-(int(snap["expire"]) - int(time.time())) // 86400)) if snap.get("expire") else 0)
+    return {"ts": int(snap["ts"]), "act": snap.get("act", "renew"), "left_gb": round(max(0, lim - used) / C.GB, 2) if lim else 0, "limit_gb": round(lim / C.GB, 2),
+            "unlimited_gb": not lim, "days": days, "unlimited_days": st != "on_hold" and not snap.get("expire"), "status": st}
 
 
 def _is_unlimited(u: dict) -> bool:
@@ -831,6 +881,7 @@ class PlanItem(BaseModel):
 
 class NextPlansReq(BaseModel):
     plans: list[PlanItem] = Field(default_factory=list, max_length=10)
+    mode: str | None = Field(default=None, pattern="^(duration|chain)$")      # خالی = تنظیم next_plan_mode
 
 
 @app.post("/api/user/{uname}/save", dependencies=[Depends(guard)])
@@ -841,7 +892,7 @@ async def user_save(uname: str, r: SaveReq, api: RebeccaClient = Depends(P)):
 
 @app.post("/api/user/{uname}/next-plans", dependencies=[Depends(guard)])
 async def user_next_plans(uname: str, r: NextPlansReq, api: RebeccaClient = Depends(P)):
-    res = await C.set_next_plans(api, uname, [p.model_dump() for p in r.plans])
+    res = await C.set_next_plans(api, uname, [p.model_dump() for p in r.plans], r.mode)
     for pl in r.plans:                      # هر پلنِ تازه‌اضافه‌شده همان روز در فروش ثبت می‌شود
         if pl.idx is None and pl.gb > 0:
             try:
@@ -858,10 +909,27 @@ async def user_paid(uname: str, api: RebeccaClient = Depends(P)):
     return _slim(await api.request("GET", api.upath(uname)), api)
 
 
+@app.post("/api/user/{uname}/undo", dependencies=[Depends(guard)])
+async def user_undo(uname: str, api: RebeccaClient = Depends(P)):
+    """برگشت آخرین تمدید/ریست: حجم باقی‌مانده، مدت/انقضا، وضعیت و پلن‌های بعدی مثل قبل می‌شود و همان تمدید از گزارش فروش حذف می‌شود."""
+    after, snap, warns = await C.undo_restore(api, uname)
+    await asyncio.to_thread(C.unpaid_clear, api.pid, uname)
+    try:                         # تمدید/ریست/پیوستِ ثبت‌شده از لحظه‌ی عکس‌برداری تا حالا، از فروش حذف شود
+        await asyncio.to_thread(sales.ovr_add_span, uname, float(snap["ts"]) - 120, time.time() + 60)
+    except Exception:  # noqa: BLE001
+        log.exception("undo sales span")
+        warns.append("حذف از گزارش فروش انجام نشد؛ از «ویرایش فروش‌ها» دستی حذف کنید.")
+    return {"user": _slim(after, api), "warnings": warns}
+
+
 @app.post("/api/user/{uname}/{action}", dependencies=[Depends(guard)])
 async def user_action(uname: str, action: str, body: EditReq | None = None, api: RebeccaClient = Depends(P)):
     p = api.upath(uname)
     if action == "reset":
+        try:                     # یک GET سبک برای نقطه‌ی برگشت؛ اگر ناموفق بود ریست بدون آن انجام می‌شود
+            await asyncio.to_thread(C.undo_snapshot, api.pid, uname, await api.request("GET", p), "reset")
+        except Exception:  # noqa: BLE001
+            log.warning("undo snapshot before reset failed")
         await api.request("POST", p + "/reset")
         return {"ok": True}
     if action == "revoke":
