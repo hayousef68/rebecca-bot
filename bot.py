@@ -981,7 +981,7 @@ async def post_init(app: Application):
     app.bot_data["bg"] = [
         asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot)),
         asyncio.create_task(ops.reminder_loop(app.bot)), asyncio.create_task(ops.monitor_loop(app.bot)),
-        asyncio.create_task(ops.unpaid_loop(app.bot)),
+        asyncio.create_task(ops.unpaid_loop(app.bot)), asyncio.create_task(sales.backup_loop(app.bot)),   # بکاپ اصلی روزانه ۱۲:۰۰
     ]
 
 
