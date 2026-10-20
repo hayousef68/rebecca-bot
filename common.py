@@ -69,8 +69,8 @@ DEFAULT_CFG = {
             {"gb": 90, "months": 2, "price": 390000},
         ],
     },
-    # پلن بعدی: duration = «N روز» دقیقاً همان‌طور که وارد شد (پنل هم N نشان می‌دهد) | chain = تاریخ مطلق بعد از پایان اشتراک فعلی (پنل: روزهای باقی‌مانده + N)
-    "next_plan_mode": "duration",
+    # پلن بعدی: chain (پیش‌فرض) = N روز بعد از پایان اشتراک فعلی (پلن وقتی حجم/زمان تمام شد شروع می‌شود؛ پنل: روز باقی‌مانده + N) | duration = N روز از لحظه‌ی ذخیره
+    "next_plan_mode": "chain",
     # برگشت تمدید/ریست اشتباهی: فقط یک فایل محلی کوچک (renew_undo.json)، بدون هیچ درخواست اضافه به پنل؛ ریست دسته‌ای بزرگ‌تر از bulk_max عکس‌برداری نمی‌شود
     "undo": {"enabled": True, "keep": 300, "days": 14, "bulk_max": 30},
     "backup": {"enabled": True},
@@ -1141,7 +1141,7 @@ def _raw_plans(u: dict) -> list[dict]:
 
 def _is_dur(p: dict, legacy: bool = False) -> bool:
     """expire این پلن «مدت به ثانیه» است (نه تاریخ مطلق)؟ — نسخه‌ی قدیمی یا شروع از اولین اتصال."""
-    return bool(legacy or p.get("start_on_first_connect"))
+    return bool(legacy or (p.get("start_on_first_connect") and 0 < int(p.get("expire") or 0) < 10 ** 9))
 
 
 def _is_broken(p: dict, legacy: bool = False) -> bool:
@@ -1159,62 +1159,62 @@ def _plan_base(u: dict) -> float:
     return max(float(exp), now) if exp else now
 
 
-def next_plans_view(u: dict) -> list[dict]:
+def next_plans_view(u: dict, mode: str | None = None) -> list[dict]:
     """پلن‌های بعدی برای نمایش: [{idx, gb, days, add_remaining}] به ترتیب اجرا.
-    در ربکا ≥0.2 مقدار expire یک «تاریخ مطلق» است؛ روز = فاصله‌ی آن تا پلن قبلی (یا انقضای فعلی)."""
+    در ربکا، expire پلن یک «تاریخ مطلق» است و خودِ پنل «روز» را برابر (expire − همین الان) نشان می‌دهد.
+    mode=duration (پیش‌فرض): روز = فاصله‌ی expire تا همین الان (دقیقاً مثل پنل) | chain: فاصله تا پلن قبلی / انقضای فعلی."""
+    mode = mode if mode in ("duration", "chain") else load_config()["next_plan_mode"]
     legacy = "next_plans" not in u
-    base, out = _plan_base(u), []
+    now, base, out = time.time(), _plan_base(u), []
     for i, p in enumerate(_raw_plans(u)):
         dl, ex = int(p.get("data_limit") or 0), int(p.get("expire") or 0)
         if _is_dur(p, legacy) or _is_broken(p, legacy):
             days = ex // 86400
         elif ex:
-            days = max(0, round((ex - base) / 86400))
+            days = max(0, round((ex - (now if mode == "duration" else base)) / 86400))
             base = float(ex)
         else:
             days = 0
         out.append({"idx": i, "gb": round(dl / GB, 2), "days": days, "add_remaining": bool(p.get("add_remaining_traffic")),
-                    "broken": _is_broken(p, legacy)})
+                    "broken": _is_dur(p, legacy) or _is_broken(p, legacy)})
     return out
 
 
 async def set_next_plans(api, username: str, plans: list[dict], mode: str | None = None):
     """جایگزینی کامل فهرست «پلن بعدی» (شارژ خودکار). هر پلن: {idx|None, gb, days, add_remaining}.
-    idx = شماره‌ی پلن موجود. پلنِ بدون تغییر دست‌نخورده می‌ماند؛ تاریخ پایان پلن جدید = پایان پلن قبلی (یا انقضای فعلی) + روزها.
+    idx = شماره‌ی پلن موجود. پلنِ بدون تغییر دست‌نخورده می‌ماند؛ duration: همین الان + N روز (پنل همان N را نشان می‌دهد) | chain: پایان پلن قبلی/انقضای فعلی + N.
     بعد از نوشتن دوباره می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
     ph = api.upath(username)
     u = await api.request("GET", ph)
-    raw, view = _raw_plans(u), next_plans_view(u)
-    legacy = "next_plans" not in u and "next_plan" in u          # ربکای قدیمی
     mode = mode if mode in ("duration", "chain") else load_config()["next_plan_mode"]
-    dur_mode = mode == "duration"                                 # duration: همان N روزِ واردشده (از لحظه‌ی شروع پلن) | chain: تاریخ مطلق
-    base, built, fresh = _plan_base(u), [], []
+    # ربکا هنگام اجرای پلن، expire را مستقیماً روی کاربر می‌نویسد (تاریخ مطلق) و start_on_first_connect فقط شرط اجراست، نه «مدت».
+    # پس duration = «از همین الان + N روز» (پنل هم همان N را نشان می‌دهد) | chain = بعد از پایان اشتراک فعلی + N روز
+    raw, view = _raw_plans(u), next_plans_view(u, mode)
+    legacy = "next_plans" not in u and "next_plan" in u          # ربکای قدیمی
+    now = time.time()
+    base, built = (now if mode == "duration" else _plan_base(u)), []
     for i, pl in enumerate(plans):
         gb, days, rem = float(pl.get("gb") or 0), int(pl.get("days") or 0), bool(pl.get("add_remaining"))
         if gb <= 0 and days <= 0:
             raise RebeccaError("حجم یا مدت پلن بعدی را وارد کنید.")
         idx = pl.get("idx")
         known = isinstance(idx, int) and 0 <= idx < len(raw)
-        if known and not view[idx]["broken"] and (legacy or _is_dur(raw[idx]) == dur_mode) and abs(view[idx]["gb"] - gb) < 0.01 and view[idx]["days"] == days and view[idx]["add_remaining"] == rem:
+        same = (known and not view[idx]["broken"] and abs(view[idx]["gb"] - gb) < 0.01
+                and view[idx]["days"] == days and view[idx]["add_remaining"] == rem)
+        if same:
             q = dict(raw[idx])                                    # بدون تغییر: همان‌طور که هست
-            if not _is_dur(q, legacy) and int(q.get("expire") or 0):
+            if mode == "chain" and not _is_dur(q, legacy) and int(q.get("expire") or 0):
                 base = float(q["expire"])
         else:
             q = dict(raw[idx]) if known else {**_PLAN_DEFAULTS, **{k: v for k, v in (raw[0] if raw else {}).items() if k not in ("data_limit", "expire")}}
             q["data_limit"] = int(gb * GB) if gb > 0 else 0
             q["add_remaining_traffic"] = rem
             if not legacy:
-                q["start_on_first_connect"] = dur_mode
-                if dur_mode:
-                    fresh.append(i)
-                if not known:
-                    q["increase_data_limit"] = False
-            if _is_dur(q, legacy):
-                q["expire"] = days * 86400 if days > 0 else 0
-            else:
-                q["expire"] = int(base) + days * 86400 if days > 0 else 0
-                if days > 0:
-                    base = float(q["expire"])
+                q["start_on_first_connect"] = False               # مدت نیست؛ تاریخ مطلق است
+                q["increase_data_limit"] = False                  # پنل خودش هم هیچ‌وقت این را روشن نمی‌فرستد (روشن = حجم به حجم فعلی اضافه می‌شود)
+            q["expire"] = int(base) + days * 86400 if days > 0 else 0
+            if days > 0 and mode == "chain":
+                base = float(q["expire"])
         for k in _PLAN_DROP:
             q.pop(k, None)
         if "position" in q:
@@ -1225,22 +1225,6 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
     after = await api.request("GET", ph)
     if len(next_plans_view(after)) != len(built):
         raise RebeccaError("پنل پلن بعدی را ذخیره نکرد (نسخه‌ی ربکا یا فیلدها سازگار نیست). جزئیات فنی را بفرستید.")
-    # اگر ربکا علامت «مدت» را نگه نداشت، expire (مثلاً 2592000) را تاریخ می‌خواند و «۰ روز» می‌شود → پلن را با تاریخ مطلق دوباره می‌نویسیم
-    got = _raw_plans(after)
-    bad = [i for i in fresh if i < len(got) and not got[i].get("start_on_first_connect") and 0 < int(got[i].get("expire") or 0) < 10 ** 9]
-    if bad:
-        fixed, base = [], _plan_base(after)
-        for i, p in enumerate(got):
-            q = {k: v for k, v in p.items() if k not in _PLAN_DROP}
-            ex = int(q.get("expire") or 0)
-            if i in bad:
-                q["expire"] = int(base) + ex
-                base = float(q["expire"])
-            elif not _is_dur(q) and ex >= 10 ** 9:
-                base = float(ex)
-            fixed.append(q)
-        await api.request("PUT", ph, json={"next_plans": fixed})
-        after = await api.request("GET", ph)
     return after
 
 
@@ -1249,6 +1233,8 @@ async def rebase_plans(api, username: str, before: dict):
     تا بعد از تمدید/تغییر، پلن بعدی عقب‌تر از انقضای جدید نیفتد. اگر چیزی عوض نشد None برمی‌گرداند."""
     raw = _raw_plans(before)
     legacy = "next_plans" not in before
+    if load_config()["next_plan_mode"] != "chain":      # duration: پلن «از همین الان + N روز» است و با تمدید جابه‌جا نمی‌شود
+        return None
     if legacy or not any(not _is_dur(p) and int(p.get("expire") or 0) >= 10 ** 9 for p in raw):
         return None
     ph = api.upath(username)
