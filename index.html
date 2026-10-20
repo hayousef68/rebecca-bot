@@ -162,6 +162,11 @@ mark{background:#f0b42940;color:var(--ac);border-radius:4px;padding:0 2px}
 .plan .v{flex:1;font-weight:700;font-size:13px}.plan .v small{font-weight:400;color:var(--mu);font-size:11px}
 .plan .x.fix{background:#f5a5241a;color:var(--warn)}
 .plan .x{border:0;background:#f2706b1a;color:var(--bad);width:30px;height:30px;border-radius:9px;cursor:pointer}
+.ev{display:flex;gap:8px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin-bottom:6px}
+.ev.off{opacity:.55}.ev.off .evi b{text-decoration:line-through}.ev .evi{flex:1;min-width:0;font-size:13px;line-height:1.7}
+.ev .x{border:0;background:var(--s2);color:var(--tx);width:32px;height:32px;border-radius:9px;cursor:pointer;flex:none}.ev .x.d{background:#f2706b1a;color:var(--bad)}
+.evf{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:-2px 0 8px;padding:8px;border:1px dashed var(--line);border-radius:12px}.evf .btns{grid-column:1/-1;margin:0}
+.undo-box{margin:10px 0 0;padding:10px 12px;border:1px solid #5aa9ff88;background:#5aa9ff1a;border-radius:12px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-size:12.5px;color:var(--info)}
 .tech{margin-top:10px}.tech summary{font-size:11.5px;color:var(--mu);cursor:pointer}.tech code{font-size:11px;margin:6px 0 0;white-space:pre-wrap}
 
 .acts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:2px}.acts .btn{width:100%;padding:0 4px;white-space:nowrap}
@@ -551,7 +556,13 @@ function userItem(u, parent, tab) {
 
   /* ─── تب پلن بعدی (شارژ خودکار): فهرست پلن‌ها؛ هر کدام بعد از اتمام، یک‌بار اضافه می‌شود ─── */
   const plans = u.next_plans || [];
-  const sendPlans = (list, okMsg) => api(P + 'next-plans', 'POST', { plans: list.map(p => ({ idx: p.idx == null ? null : p.idx, gb: +p.gb || 0, days: +p.days || 0, add_remaining: !!p.add_remaining })) }).then(r => { toast(okMsg); swap(r, 'next'); });
+  let npMode = S.st.next_plan_mode || 'duration';
+  const NP_HINT = { duration: 'پلن با «مدت ثابت» ذخیره می‌شود؛ در پنل اصلی دقیقاً همان تعداد روزی که وارد کردید دیده می‌شود (مثلاً ۳۰). شمارش روز از لحظه‌ی فعال‌شدن پلن شروع می‌شود.',
+    chain: 'تاریخ پایان = پایان اشتراک فعلی + روزها. پنل اصلی «روزهای مانده تا آن تاریخ» را نشان می‌دهد؛ مثلاً اگر ۵ روز مانده باشد و ۳۰ بزنید، پنل ۳۵ نشان می‌دهد.' };
+  const npHint = h('p', { class: 'hint', style: 'margin:0 0 8px' }, NP_HINT[npMode]);
+  const npSeg = h('div', { class: 'seg sm' }, [['duration', '⏱ دقیقاً N روز'], ['chain', '📅 بعد از پایان فعلی']].map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === npMode ? 'on' : '',
+    onclick: () => { npMode = k; npSeg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); npHint.textContent = NP_HINT[k]; } }, t)));
+  const sendPlans = (list, okMsg) => api(P + 'next-plans', 'POST', { mode: npMode, plans: list.map(p => ({ idx: p.idx == null ? null : p.idx, gb: +p.gb || 0, days: +p.days || 0, add_remaining: !!p.add_remaining })) }).then(r => { toast(okMsg); swap(r, 'next'); });
   const nG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
   const nD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
   const nrid = 'nr' + Math.random().toString(36).slice(2, 8);
@@ -568,7 +579,8 @@ function userItem(u, parent, tab) {
     if (fix) fix.onclick = () => run(fix, () => sendPlans(plans, '✅ پلن اصلاح شد'));
     return h('div', { class: 'plan' }, h('span', { class: 'n' }, i + 1), h('span', { class: 'v' }, `${fmtG(p.gb)} + ${fmtD(p.days)}`, p.add_remaining ? h('small', {}, ' · باقی‌مانده هم منتقل می‌شود') : null, p.broken ? h('small', { style: 'color:var(--warn)' }, ' · ⚠️ تاریخ پایان اشتباه (۱۹۷۰) — 🔧 را بزنید') : null), fix, x); };
   const paneNext = h('div', {},
-    h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'وقتی حجم یا زمان کاربر تمام شود، پلن اول «یک‌بار» خودکار به او اضافه می‌شود؛ بعد نوبت پلن بعدی. تاریخ پایان هر پلن = پایان پلن قبلی (یا انقضای فعلی) + روزهای همان پلن.'),
+    h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'وقتی حجم یا زمان کاربر تمام شود، پلن اول «یک‌بار» خودکار به او اضافه می‌شود؛ بعد نوبت پلن بعدی.'),
+    h('div', { class: 'psec' }, h('b', {}, 'نوع شمارش روز (برای پلن‌های تازه)')), npSeg, npHint,
     plans.length ? h('div', {}, plans.map(planRow)) : h('div', { class: 'banner' }, '⚪ پلن بعدی تعریف نشده'),
     h('div', { class: 'psec' }, h('b', {}, '➕ پلن جدید')),
     h('div', { class: 'attach' }, nG, nD, nAdd), nTpl,
@@ -583,6 +595,18 @@ function userItem(u, parent, tab) {
     act(u.status === 'disabled' ? '✅ فعال‌سازی' : '⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد'), del),
     h('p', { class: 'hint' }, '«لینک جدید» لینک اشتراک قبلی را از کار می‌اندازد.'));
 
+  /* ─── برگشت تمدید/ریست اشتباهی (از نقطه‌ی ذخیره‌شده‌ی محلی؛ بدون بار اضافه روی پنل) ─── */
+  const undoBox = () => {
+    const x = u.undo, b = h('button', { class: 'btn sm pri', type: 'button', style: 'flex:none' }, '↩️ برگشت');
+    const mins = Math.max(1, Math.round((Date.now() / 1000 - x.ts) / 60));
+    const ago = mins >= 1440 ? `${Math.floor(mins / 1440)} روز` : mins >= 60 ? `${Math.floor(mins / 60)} ساعت` : `${mins} دقیقه`;
+    const what = x.act === 'reset' ? 'ریست' : 'تمدید';
+    const back = `${x.unlimited_gb ? 'حجم نامحدود' : 'باقی‌مانده ' + fmtG(x.left_gb)} · ${x.unlimited_days ? 'زمان نامحدود' : fmtD(x.days)}`;
+    b.onclick = () => { if (!confirm(`${what} «${u.username}» به حالت قبل برگردد؟\n\n↩️ ${back}\n\nمصرف صفر می‌ماند و حجم کل طوری تنظیم می‌شود که «باقی‌مانده» همان قبل باشد. پلن‌های بعدی و وضعیت هم برمی‌گردند و این ${what} از گزارش فروش حذف می‌شود.`)) return;
+      run(b, async () => { const r = await api(P + 'undo', 'POST'); toast(r.warnings.length ? '⚠️ ' + r.warnings.join(' | ') : '✅ به حالت قبل برگشت', !!r.warnings.length); swap(r.user, 'renew'); }); };
+    return h('div', { class: 'undo-box' }, h('span', {}, `↩️ ${what} ${ago} پیش — برگشت به: ${back}`), b);
+  };
+
   /* ─── چیدمان ─── */
   const panes = { renew: paneRenew, edit: paneEdit, next: paneNext, more: paneMore };
   const TABS = [['renew', '⚡ تمدید'], ['edit', '✏️ ویرایش'], ['next', '🔁 پلن بعدی'], ['more', '⋯ بیشتر']];
@@ -592,6 +616,7 @@ function userItem(u, parent, tab) {
 
   body.append(
     h('div', { class: 'ustat' }, h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status), h('span', { class: 'sub' }, `سرویس: ${svcName}`)),
+    u.undo ? undoBox() : null,
     u.unpaid_due ? (() => { const b = h('button', { class: 'btn sm pri', type: 'button' }, '✅ واریز شد');
       b.onclick = () => run(b, async () => { const r = await api(P + 'paid', 'POST'); toast('✅ ثبت شد؛ غیرفعال‌سازی خودکار لغو شد'); swap(r, 'renew'); });
       return h('div', { class: 'unpaid-box' }, h('span', {}, `💸 واریز نشده — ${fmtLeftT(u.unpaid_due)} دیگر غیرفعال می‌شود`), b); })() : null,
@@ -735,15 +760,58 @@ async function vHome() {
   };
   const refB = h('button', { class: 'chip', type: 'button' }, '🔄 بروزرسانی');
   refB.onclick = () => { loadStats(); loadSales(); loadRep(curRep); };
-  let curRep = 'today';
+  let curRep = 'today', curQ = 'day=today';
   const rep = h('pre', { style: 'white-space:pre-wrap;font:inherit;line-height:1.9;margin:8px 0 0' }, 'در حال بارگذاری…');
-  const loadRep = async d => { curRep = d; try { rep.textContent = (await api('/report?day=' + d)).text; } catch (e) { rep.textContent = e.message; } };
+  const loadRep = async d => { curRep = d; curQ = 'day=' + d; try { rep.textContent = (await api('/report?day=' + d)).text; } catch (e) { rep.textContent = e.message; } if (!edBox.hidden) loadEd(); };
   const monthSel = h('select', {}, h('option', { value: '' }, 'انتخاب ماه شمسی…'));
   api('/report/months').then(r => r.months.forEach(m => monthSel.append(h('option', { value: m.from + '|' + m.to }, m.label)))).catch(() => {});
   const pickMonth = () => { if (!monthSel.value) return toast('یک ماه انتخاب کنید', true); const [f, t] = monthSel.value.split('|'); loadRange(f, t); };
   const dFrom = h('input', { type: 'date', dir: 'ltr', 'aria-label': 'از تاریخ' }), dTo = h('input', { type: 'date', dir: 'ltr', 'aria-label': 'تا تاریخ' });
   const pickRange = () => { if (!dFrom.value || !dTo.value) return toast('هر دو تاریخ را انتخاب کنید', true); loadRange(dFrom.value, dTo.value); };
-  const loadRange = async (f, t) => { rep.textContent = 'در حال بارگذاری…'; try { rep.textContent = (await api(`/report?from=${f}&to=${t}`)).text; } catch (e) { rep.textContent = e.message; } };
+  const loadRange = async (f, t) => { curQ = `from=${f}&to=${t}`; rep.textContent = 'در حال بارگذاری…'; try { rep.textContent = (await api(`/report?from=${f}&to=${t}`)).text; } catch (e) { rep.textContent = e.message; } if (!edBox.hidden) loadEd(); };
+
+  /* ─── ویرایش/حذف تک‌تک فروش‌ها (فقط گزارش عوض می‌شود؛ به اکانت‌ها و پنل دست نمی‌زند) ─── */
+  const TYPE_FA = { ham: '🤝 همکاری', single: '👤 تکی', ignored: '🚫 تست (حساب نمی‌شود)' };
+  const edList = h('div');
+  const edBox = h('div', { hidden: true }, h('p', { class: 'hint', style: 'margin:10px 0 6px' }, 'برای بازه‌ی انتخاب‌شده در بالا: هر فروش را حذف یا ویرایش کنید. حذف‌شده‌ها خاکستری می‌مانند و با «بازگرداندن» دوباره حساب می‌شوند.'), edList);
+  const sendEv = async (body, ok) => {
+    await api('/report/event', 'POST', body); toast(ok);
+    await Promise.all([loadEd(), (async () => { try { rep.textContent = (await api('/report?' + curQ)).text; } catch {} })(), loadSales()]);
+  };
+  const evRow = e => {
+    const gI = h('input', { type: 'number', min: 1, value: e.gb, dir: 'ltr', inputmode: 'numeric', 'aria-label': 'حجم (GB)' });
+    const mS = h('select', {}, h('option', { value: 1 }, 'یک‌ماهه'), h('option', { value: 2 }, 'دوماهه')); mS.value = e.months;
+    const natT = e.type === 'ham' ? 'ham' : 'single';
+    const tS = h('select', {}, h('option', { value: 'single' }, '👤 تکی'), h('option', { value: 'ham' }, '🤝 همکاری')); tS.value = natT;
+    const sv = h('button', { class: 'btn sm pri', type: 'button' }, '💾 ذخیره');
+    sv.onclick = () => run(sv, async () => {
+      const body = { eid: e.eid, op: 'edit' };
+      if (Math.round(+gI.value) !== e.gb) body.gb = Math.round(+gI.value);
+      if (+mS.value !== e.months) body.months = +mS.value;
+      if (tS.value !== natT) body.type = tS.value;
+      if (body.gb !== undefined && !(body.gb >= 1)) throw new Error('حجم باید حداقل ۱ گیگ باشد.');
+      if (body.gb === undefined && body.months === undefined && body.type === undefined) throw new Error('چیزی تغییر نکرده است.');
+      await sendEv(body, '✅ فروش ویرایش شد');
+    });
+    const rs = e.edited ? h('button', { class: 'btn sm', type: 'button' }, '↺ مقدار اصلی') : null;
+    if (rs) rs.onclick = () => run(rs, () => sendEv({ eid: e.eid, op: 'reset' }, '✅ به مقدار اصلی برگشت'));
+    const form = h('div', { class: 'evf', hidden: true }, field('حجم GB', gI), field('مدت', mS), field('نوع', tS), h('div', { class: 'btns' }, sv, rs));
+    const act = e.hidden ? (() => { const b = h('button', { class: 'btn sm', type: 'button' }, '↩️ بازگرداندن'); b.onclick = () => run(b, () => sendEv({ eid: e.eid, op: 'show' }, '✅ دوباره در گزارش حساب می‌شود')); return [b]; })()
+      : (() => { const ed = h('button', { class: 'x', type: 'button', 'aria-label': 'ویرایش' }, '✏️'), del = h('button', { class: 'x d', type: 'button', 'aria-label': 'حذف' }, '🗑');
+        ed.onclick = () => { form.hidden = !form.hidden; };
+        del.onclick = () => { if (!confirm(`این فروش از گزارش حذف شود؟\n\n${e.kind_fa} · ${e.username} · ${e.gb} گیگ\n(به اکانت دست نمی‌خورد؛ هر وقت خواستید برمی‌گردد)`)) return; run(del, () => sendEv({ eid: e.eid, op: 'hide' }, '🗑 از گزارش حذف شد')); };
+        return [ed, del]; })();
+    const info = h('div', { class: 'evi' }, h('div', {}, h('b', { dir: 'ltr' }, e.username), h('span', { class: 'sub' }, `  ${e.kind_fa} · ${e.day} ${e.time}`)),
+      h('div', { class: 'sub' }, `${e.gb} گیگ · ${e.months === 1 ? 'یک' : 'دو'}ماهه · ${TYPE_FA[e.type] || e.type} · `, h('b', {}, e.hidden ? 'حذف‌شده' : fa(e.price) + ' تومان'), e.edited ? ' · ✏️ ویرایش‌شده' : ''));
+    return h('div', {}, h('div', { class: 'ev' + (e.hidden ? ' off' : '') }, info, ...act), form);
+  };
+  const loadEd = async () => {
+    edList.replaceChildren(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
+    try { const r = await api('/report/list?' + curQ); edList.replaceChildren(...(r.events.length ? r.events.map(evRow) : [h('div', { class: 'banner' }, 'فروشی در این بازه نیست')])); }
+    catch (e) { edList.replaceChildren(h('p', { class: 'err' }, e.message)); }
+  };
+  const edBtn = h('button', { class: 'btn' }, '✏️ ویرایش / حذف فروش‌ها');
+  edBtn.onclick = () => { edBox.hidden = !edBox.hidden; if (!edBox.hidden) loadEd(); };
   const detBtn = h('button', { class: 'btn' }, '🔎 جزئیات امروز');
   detBtn.onclick = () => run(detBtn, async () => { rep.textContent = (await api('/report/events?day=today')).text; });
   const sendBtn = h('button', { class: 'btn pri' }, '📤 ارسال گزارش امروز به ربات');
@@ -752,7 +820,7 @@ async function vHome() {
     h('div', { class: 'chips', style: 'padding-bottom:4px' }, h('button', { class: 'chip on', onclick: () => loadRep('today') }, 'امروز'), h('button', { class: 'chip', onclick: () => loadRep('yesterday') }, 'دیروز'), h('button', { class: 'chip', onclick: () => loadRep('week') }, '۷ روز'), h('button', { class: 'chip', onclick: () => loadRep('month') }, 'ماه جاری'), h('button', { class: 'chip', onclick: () => loadRep('lmonth') }, 'ماه گذشته')),
     h('div', { class: 'row', style: 'margin-bottom:8px' }, monthSel, h('button', { class: 'btn sm', onclick: pickMonth }, 'نمایش ماه')),
     h('div', { class: 'row', style: 'margin-bottom:8px;align-items:center' }, dFrom, dTo, h('button', { class: 'btn sm', onclick: pickRange }, 'نمایش بازه')),
-    rep, h('div', { class: 'btns' }, sendBtn, detBtn), h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
+    rep, h('div', { class: 'btns' }, sendBtn, detBtn, edBtn), edBox, h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
   loadStats(); loadSales(); loadRep('today');
   mount(saleBox, h('div', { class: 'sec' }, h('h2', {}, 'وضعیت پنل'), refB),
     usersBox, sysBox, extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
@@ -975,54 +1043,4 @@ async function vSet() {
         r.locked ? h('div', { class: 'banner', style: 'margin-bottom:8px' }, '🔒 این حساب بعد از چند بار رمز اشتباه موقتاً غیرفعال شده است.',
           h('div', { class: 'btns', style: 'margin-top:8px' }, act('🔓 فعال‌سازی مجدد', 'pri', async () => { await api(`/reps/${r.id}/unlock`, 'POST'); await done('حساب نماینده دوباره فعال شد'); }))) : null,
         h('label', {}, 'تغییر رمز به‌صورت دستی'), pwI,
-        h('div', { class: 'btns' },
-          act('💾 ثبت رمز دستی', 'pri', async () => { const v = pwI.value; if (v.length < 6) throw new Error('رمز حداقل ۶ کاراکتر باشد.'); const x = await api(`/reps/${r.id}/password`, 'POST', { password: v }); S.repNew = { name: r.name, password: x.password, title: `رمز «${r.name}» تغییر کرد` }; await done('رمز نماینده تغییر کرد'); })),
-        h('div', { class: 'btns', style: 'margin-top:0' },
-          act('🎲 رمز تصادفی', '', async () => { const x = await api(`/reps/${r.id}/password`, 'POST', { password: '' }); S.repNew = { name: r.name, password: x.password, title: `رمز جدید برای «${r.name}»` }; await done('رمز تصادفی ساخته شد'); }),
-          act(r.blocked ? '✅ رفع مسدودی' : '⛔ مسدود کردن', r.blocked ? '' : 'bad', async () => { await api(`/reps/${r.id}/block`, 'POST', { blocked: !r.blocked }); await done(r.blocked ? 'مسدودی برداشته شد' : 'نماینده مسدود شد'); }),
-          act('🗑 حذف', 'bad', async () => { if (!confirm(`نماینده «${r.name}» و لیست کاربرهایش حذف شود؟ (خود کاربرها در پنل ربکا حذف نمی‌شوند)`)) return; await api(`/reps/${r.id}/delete`, 'POST'); await done('نماینده حذف شد'); })),
-        h('p', { class: 'hint' }, 'مسدود کردن، همان لحظه نماینده را از پنل بیرون می‌اندازد. تغییر رمز (دستی یا تصادفی) رمز قبلی را از کار می‌اندازد و قفل ورود را هم برمی‌دارد. ۵ بار رمز اشتباه پیاپی، حساب را قفل می‌کند تا شما دوباره فعالش کنید.')));
-  };
-  const repBody = h('div', { class: 'acc-in' },
-    newBox, ...(reps.length ? reps.map(repItem) : [h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'هنوز نماینده‌ای نساخته‌اید.')]),
-    h('div', { class: 'psec' }, h('b', {}, '➕ نماینده‌ی جدید')),
-    h('div', { class: 'cols' }, h('div', {}, h('label', {}, 'نام کاربری'), rName), h('div', {}, h('label', {}, 'رمز'), rPass)),
-    h('div', {}, h('label', {}, 'نام نمایشی'), rLabel), h('div', { class: 'btns' }, rAdd),
-    h('p', { class: 'hint' }, 'نماینده با همین نام و رمز، از همان صفحه‌ی ورود وارد می‌شود و فقط صفحه‌ی «کاربران خودش» (مشاهده، لینک و QR) را می‌بیند.'));
-
-  // کشوها (آکاردئون): بالای هر کشو نام بخش نوشته شده؛ فقط یکی باز می‌ماند و بعد از ذخیره هم باز می‌ماند
-  const strip = card => { const t = card.querySelector(':scope > h2'); if (t) t.remove(); card.className = 'acc-in'; return card; };
-  const drawers = [];
-  const drawer = (key, icon, title, sub, ...nodes) => {
-    const d = h('details', { class: 'item acc', 'data-k': key }, h('summary', {}, h('span', { class: 'ic' }, icon), h('span', { class: 'nm' }, title), h('span', { class: 'sub' }, sub)), h('div', { class: 'body acc-body' }, ...nodes));
-    d.open = S.setOpen === key;
-    d.addEventListener('toggle', () => { if (d.open) { S.setOpen = key; drawers.forEach(x => { if (x !== d) x.open = false; }); } else if (S.setOpen === key) S.setOpen = null; });
-    drawers.push(d); return d;
-  };
-  mount(
-    drawer('panels', '🖥', 'پنل‌های ربکا', `${c.panels.length} پنل`, ...list,
-    h('div', { class: 'card' }, ptitle, field('نام پنل', nm), field('آدرس پنل', url), field('دامنه سابسکریپشن', sub), field('نام کاربری ادمین', user), field('رمز عبور', pass),
-      h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
-      h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)')))),
-    drawer('bot', '🤖', 'ربات تلگرام', tok.value ? 'تنظیم شده' : 'تنظیم نشده', strip(h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)))),
-    drawer('newuser', '🆕', 'کاربر جدید', `پیش‌فرض: ${c.default_prefix}`, strip(h('div', { class: 'card' }, h('h2', {}, 'کاربر جدید'), field('اسم پیش‌فرض (پیشوند نام کاربری)', dpre),
-      h('p', { class: 'hint' }, 'در فرم «ساخت اکانت» همین اسم از قبل پر می‌شود و شماره‌ی بعدی خودکار پیدا می‌شود. فقط حرف انگلیسی، عدد و _ (مثلاً MS_).'), h('div', { class: 'btns' }, saveDp)))),
-    drawer('unpaid', '💸', 'تمدید واریز نشده', `${c.unpaid_hours} ساعت${c.unpaid_count ? ` · ${c.unpaid_count} در انتظار` : ''}`, strip(h('div', { class: 'card' }, h('h2', {}, 'تمدید واریز نشده'), field('مهلت پیش‌فرض تا غیرفعال‌سازی خودکار (ساعت)', upHrs),
-      h('p', { class: 'hint' }, 'موقع تمدید گزینه‌ی «واریز نشده» را بزنید؛ اگر تا پایان مهلت «✅ واریز شد» نزنید، کاربر خودکار غیرفعال می‌شود (چک هر ۱ دقیقه توسط ربات، و پیام به ادمین‌ها). مهلت را موقع هر تمدید هم می‌توانید جداگانه تغییر دهید.'), h('div', { class: 'btns' }, saveUp)))),
-    drawer('reps', '👤', 'نماینده‌ها', reps.length ? `${reps.length} نماینده${reps.some(r => r.blocked) ? ' · ⛔' : ''}` : 'ندارید', repBody),
-    drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
-    drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن' : 'خودکار خاموش', strip(backupCard)),
-    drawer('ssl', '🔒', 'SSL و پورت وب‌پنل', sslSub, strip(sslCard)),
-    drawer('pw', '🔑', 'رمز وب‌پنل', `کاربر: ${c.web_user}`, strip(h('div', { class: 'card' }, h('h2', {}, `رمز وب‌پنل (کاربر: ${c.web_user})`), field('رمز جدید', wp), h('div', { class: 'btns' }, saveW)))));
-}
-
-(async () => {
-  let me; try { me = await api('/me'); } catch { return; }
-  if (me.role === 'rep') return repApp(me);
-  renderNav();
-  try { await refreshState(); await go(hasPanel() ? 'create' : 'set'); }
-  catch (e) { mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
-})();
-</script>
-</body>
-</html>
+        h('div', { class: 'btns
