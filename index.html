@@ -1043,4 +1043,55 @@ async function vSet() {
         r.locked ? h('div', { class: 'banner', style: 'margin-bottom:8px' }, '🔒 این حساب بعد از چند بار رمز اشتباه موقتاً غیرفعال شده است.',
           h('div', { class: 'btns', style: 'margin-top:8px' }, act('🔓 فعال‌سازی مجدد', 'pri', async () => { await api(`/reps/${r.id}/unlock`, 'POST'); await done('حساب نماینده دوباره فعال شد'); }))) : null,
         h('label', {}, 'تغییر رمز به‌صورت دستی'), pwI,
-        h('div', { class: 'btns
+        h('div', { class: 'btns' },
+          act('💾 ثبت رمز دستی', 'pri', async () => { const v = pwI.value; if (v.length < 6) throw new Error('رمز حداقل ۶ کاراکتر باشد.'); const x = await api(`/reps/${r.id}/password`, 'POST', { password: v }); S.repNew = { name: r.name, password: x.password, title: `رمز «${r.name}» تغییر کرد` }; await done('رمز نماینده تغییر کرد'); })),
+        h('div', { class: 'btns', style: 'margin-top:0' },
+          act('🎲 رمز تصادفی', '', async () => { const x = await api(`/reps/${r.id}/password`, 'POST', { password: '' }); S.repNew = { name: r.name, password: x.password, title: `رمز جدید برای «${r.name}»` }; await done('رمز تصادفی ساخته شد'); }),
+          act(r.blocked ? '✅ رفع مسدودی' : '⛔ مسدود کردن', r.blocked ? '' : 'bad', async () => { await api(`/reps/${r.id}/block`, 'POST', { blocked: !r.blocked }); await done(r.blocked ? 'مسدودی برداشته شد' : 'نماینده مسدود شد'); }),
+          act('🗑 حذف', 'bad', async () => { if (!confirm(`نماینده «${r.name}» و لیست کاربرهایش حذف شود؟ (خود کاربرها در پنل ربکا حذف نمی‌شوند)`)) return; await api(`/reps/${r.id}/delete`, 'POST'); await done('نماینده حذف شد'); })),
+        h('p', { class: 'hint' }, 'مسدود کردن، همان لحظه نماینده را از پنل بیرون می‌اندازد. تغییر رمز (دستی یا تصادفی) رمز قبلی را از کار می‌اندازد و قفل ورود را هم برمی‌دارد. ۵ بار رمز اشتباه پیاپی، حساب را قفل می‌کند تا شما دوباره فعالش کنید.')));
+  };
+  const repBody = h('div', { class: 'acc-in' },
+    newBox, ...(reps.length ? reps.map(repItem) : [h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'هنوز نماینده‌ای نساخته‌اید.')]),
+    h('div', { class: 'psec' }, h('b', {}, '➕ نماینده‌ی جدید')),
+    h('div', { class: 'cols' }, h('div', {}, h('label', {}, 'نام کاربری'), rName), h('div', {}, h('label', {}, 'رمز'), rPass)),
+    h('div', {}, h('label', {}, 'نام نمایشی'), rLabel), h('div', { class: 'btns' }, rAdd),
+    h('p', { class: 'hint' }, 'نماینده با همین نام و رمز، از همان صفحه‌ی ورود وارد می‌شود و فقط صفحه‌ی «کاربران خودش» (مشاهده، لینک و QR) را می‌بیند.'));
+
+  // کشوها (آکاردئون): بالای هر کشو نام بخش نوشته شده؛ فقط یکی باز می‌ماند و بعد از ذخیره هم باز می‌ماند
+  const strip = card => { const t = card.querySelector(':scope > h2'); if (t) t.remove(); card.className = 'acc-in'; return card; };
+  const drawers = [];
+  const drawer = (key, icon, title, sub, ...nodes) => {
+    const d = h('details', { class: 'item acc', 'data-k': key }, h('summary', {}, h('span', { class: 'ic' }, icon), h('span', { class: 'nm' }, title), h('span', { class: 'sub' }, sub)), h('div', { class: 'body acc-body' }, ...nodes));
+    d.open = S.setOpen === key;
+    d.addEventListener('toggle', () => { if (d.open) { S.setOpen = key; drawers.forEach(x => { if (x !== d) x.open = false; }); } else if (S.setOpen === key) S.setOpen = null; });
+    drawers.push(d); return d;
+  };
+  mount(
+    drawer('panels', '🖥', 'پنل‌های ربکا', `${c.panels.length} پنل`, ...list,
+    h('div', { class: 'card' }, ptitle, field('نام پنل', nm), field('آدرس پنل', url), field('دامنه سابسکریپشن', sub), field('نام کاربری ادمین', user), field('رمز عبور', pass),
+      h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
+      h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)')))),
+    drawer('bot', '🤖', 'ربات تلگرام', tok.value ? 'تنظیم شده' : 'تنظیم نشده', strip(h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)))),
+    drawer('newuser', '🆕', 'کاربر جدید', `پیش‌فرض: ${c.default_prefix}`, strip(h('div', { class: 'card' }, h('h2', {}, 'کاربر جدید'), field('اسم پیش‌فرض (پیشوند نام کاربری)', dpre),
+      h('p', { class: 'hint' }, 'در فرم «ساخت اکانت» همین اسم از قبل پر می‌شود و شماره‌ی بعدی خودکار پیدا می‌شود. فقط حرف انگلیسی، عدد و _ (مثلاً MS_).'), h('div', { class: 'btns' }, saveDp)))),
+    drawer('unpaid', '💸', 'تمدید واریز نشده', `${c.unpaid_hours} ساعت${c.unpaid_count ? ` · ${c.unpaid_count} در انتظار` : ''}`, strip(h('div', { class: 'card' }, h('h2', {}, 'تمدید واریز نشده'), field('مهلت پیش‌فرض تا غیرفعال‌سازی خودکار (ساعت)', upHrs),
+      h('p', { class: 'hint' }, 'موقع تمدید گزینه‌ی «واریز نشده» را بزنید؛ اگر تا پایان مهلت «✅ واریز شد» نزنید، کاربر خودکار غیرفعال می‌شود (چک هر ۱ دقیقه توسط ربات، و پیام به ادمین‌ها). مهلت را موقع هر تمدید هم می‌توانید جداگانه تغییر دهید.'), h('div', { class: 'btns' }, saveUp)))),
+    drawer('reps', '👤', 'نماینده‌ها', reps.length ? `${reps.length} نماینده${reps.some(r => r.blocked) ? ' · ⛔' : ''}` : 'ندارید', repBody),
+    drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
+    drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن' : 'خودکار خاموش', strip(backupCard)),
+    drawer('ssl', '🔒', 'SSL و پورت وب‌پنل', sslSub, strip(sslCard)),
+    drawer('pw', '🔑', 'رمز وب‌پنل', `کاربر: ${c.web_user}`, strip(h('div', { class: 'card' }, h('h2', {}, `رمز وب‌پنل (کاربر: ${c.web_user})`), field('رمز جدید', wp), h('div', { class: 'btns' }, saveW)))));
+}
+
+(async () => {
+  renderNav();                                   // تب‌ها همیشه اول رسم شوند، حتی اگر چیز دیگری خطا بدهد
+  let me = { role: 'admin' };
+  try { me = await api('/me'); } catch (e) { toast('بررسی نقش ناموفق بود: ' + e.message, true); }
+  if (me.role === 'rep') return repApp(me);
+  try { await refreshState(); await go(hasPanel() ? 'create' : 'set'); }
+  catch (e) { mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
+})();
+</script>
+</body>
+</html>
