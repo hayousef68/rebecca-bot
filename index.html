@@ -310,6 +310,12 @@ async function vCreate() {
   let tgPref = null; try { tgPref = localStorage.getItem('rb_tg'); } catch { /* بدون ذخیره‌سازی */ }
   const tg = h('input', { type: 'checkbox', id: 'tg', checked: st.bot && tgPref !== '0' });
   tg.addEventListener('change', () => { try { localStorage.setItem('rb_tg', tg.checked ? '1' : '0'); } catch { /* ignore */ } });
+  const cuId = 'cu' + Math.random().toString(36).slice(2, 8);                       // «واریز نشده» برای ساخت تکی (پیش‌فرض: خاموش)
+  const cuC = h('input', { type: 'checkbox', id: cuId });
+  const cuH = h('input', { type: 'number', min: 1, max: 8760, value: st.unpaid_hours || 24, dir: 'ltr', inputmode: 'numeric' });
+  const cuRow = h('div', { class: 'uh', hidden: true }, 'غیرفعال شدن خودکار بعد از', cuH, 'ساعت');
+  cuC.addEventListener('change', () => { cuRow.hidden = !cuC.checked; });
+  const cuBox = h('div', { class: 'unpaid-opt' }, h('label', { class: 'chk', for: cuId }, cuC, '💸 واریز نشده (اگر پرداخت نشد، خودکار غیرفعال شود)'), cuRow);
   const prev = h('p', { class: 'hint' }), last = h('p', { class: 'hint' });
   const out = h('div');
   let mode = 'single';   // هر بار که صفحه باز می‌شود، پیش‌فرض ساخت تکی است
@@ -338,7 +344,7 @@ async function vCreate() {
     } catch (e) { if (my === seq) last.textContent = 'تشخیص خودکار ممکن نشد: ' + e.message; }
     upd();
   };
-  const setMode = m => { mode = S.cmode = m; fillTplOpts(m); fillTpl(); svcTouched = false; autoSvc(m); upd(); };
+  const setMode = m => { mode = S.cmode = m; cuBox.hidden = m !== 'single'; fillTplOpts(m); fillTpl(); svcTouched = false; autoSvc(m); upd(); };
   chipS.onclick = () => setMode('single'); chipG.onclick = () => setMode('group');
   base.addEventListener('input', debounce(() => { upd(); if (/^[A-Za-z0-9_]{1,28}$/.test(base.value.trim())) detect(base.value.trim(), true); }, 450));
   [start, count, one].forEach(i => i.addEventListener('input', upd));
@@ -352,7 +358,7 @@ async function vCreate() {
     if (mode === 'single') { if (!one.value.trim()) throw new Error('نام کاربری را وارد کنید.'); if (cg.value === '' || cd.value === '' || +cg.value < 0 || +cd.value < 0) throw new Error('حجم و مدت را وارد کنید (۰ = نامحدود).'); body = { base: one.value.trim(), start: null, count: 1, gb: +cg.value, days: +cd.value, mode: cm.value }; }
     else { if (!base.value.trim() || start.value === '') throw new Error('پیشوند و عدد شروع را وارد کنید.'); body = { base: base.value.trim(), start: +start.value, count: Math.max(1, +count.value || 1) }; }
     go_.textContent = 'در حال ساخت…';
-    const r = await api('/create', 'POST', { ...body, service_id: +svc.value, template: tpl.value, send_qr: tg.checked, rep_id: repSel.value || null });
+    const r = await api('/create', 'POST', { ...body, service_id: +svc.value, template: tpl.value, send_qr: tg.checked, rep_id: repSel.value || null, ...(mode === 'single' && cuC.checked ? { unpaid: true, unpaid_hours: Math.max(1, Math.round(+cuH.value) || 24) } : {}) });
     if (repSel.value && r.ok.length) toast(`${r.ok.length} اکانت به لیست «${repSel.selectedOptions[0].textContent}» اضافه شد`);
     r.panelName = (st.panels.find(p => p.id === S.panel) || {}).name; S.last = r; showResults(out, r);
     if (r.telegram === 'queued') toast(tg.checked ? 'لینک و QR به تلگرام ادمین ارسال می‌شوند' : 'لینک‌ها (بدون QR) به تلگرام ادمین ارسال می‌شوند'); else if (r.telegram === 'no_bot' && st.bot) toast('ربات/ادمین تنظیم نشده؛ ارسال تلگرام انجام نشد', true);
@@ -361,7 +367,7 @@ async function vCreate() {
   mount(h('div', { class: 'card' }, h('h2', {}, 'ساخت اکانت'),
     h('div', { class: 'chips', style: 'padding-bottom:6px' }, chipS, chipG),
     st.panels.length > 1 ? field('ساخت روی پنل', psel) : null, field('تمپلت', tpl), grpBox, oneBox, gdBox, last, prev,
-    field('سرویس', svc), reps.some(r => !r.blocked) ? field('نماینده (اختیاری)', repSel) : null, modeBox,
+    field('سرویس', svc), reps.some(r => !r.blocked) ? field('نماینده (اختیاری)', repSel) : null, modeBox, cuBox,
     st.bot ? h('label', { class: 'chk', for: 'tg' }, tg, 'ارسال QR همراه لینک‌ها (لینک‌ها همیشه به تلگرام ادمین ارسال می‌شوند)') : null,
     h('div', { class: 'btns' }, go_)), out);
   if (S.last) showResults(out, S.last);
