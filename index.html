@@ -1085,10 +1085,9 @@ async function vSet() {
 }
 
 (async () => {
-  renderNav();                                   // تب‌ها همیشه اول رسم شوند، حتی اگر چیز دیگری خطا بدهد
-  let me = { role: 'admin' };
-  try { me = await api('/me'); } catch (e) { toast('بررسی نقش ناموفق بود: ' + e.message, true); }
+  let me; try { me = await api('/me'); } catch { return; }
   if (me.role === 'rep') return repApp(me);
+  renderNav();
   try { await refreshState(); await go(hasPanel() ? 'create' : 'set'); }
   catch (e) { mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
 })();
