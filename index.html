@@ -411,7 +411,7 @@ async function vUsers() {
   const list = h('div'), pg = h('div', { class: 'pager', hidden: true }), info = h('p', { class: 'hint' });
   const search = h('input', { type: 'search', placeholder: 'جستجو: نام کاربری (مثلاً MS_150 یا 150)…', value: U.q, autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
   const clear = h('button', { class: 'clr', type: 'button', 'aria-label': 'پاک کردن', hidden: !U.q }, '✕');
-  const chips = h('div', { class: 'chips' }, [['', 'همه'], ['active', 'فعال شده'], ['on_hold', 'خام'], ['expired', 'منقضی'], ['limited', 'محدود'], ['disabled', 'غیرفعال']].map(([k, t]) =>
+  const chips = h('div', { class: 'chips' }, [['', 'همه'], ['active', 'فعال شده'], ['on_hold', 'خام'], ['expired', 'منقضی'], ['limited', 'محدود'], ['disabled', 'غیرفعال'], ['unlimited', '♾ حجم/زمان نامحدود']].map(([k, t]) =>
     h('button', { class: 'chip' + (U.status === k ? ' on' : ''), onclick: () => { U.status = k; vUsers(); } }, t)));
   async function load(reset) {
     const my = ++seq;                                           // جلوگیری از نمایش نتیجه‌ی قدیمی وقتی سریع تایپ می‌کنید
