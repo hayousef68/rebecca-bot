@@ -76,6 +76,7 @@ DEFAULT_CFG = {
     "web": {"user": "admin", "salt": "", "hash": "", "secret": ""},
     "reps": {},          # نمایندگان: {id: {name, label, salt, hash, blocked, created}}
     "rep_users": {},     # کاربرهای هر نماینده: {panel_id: {username: rep_id}}
+    "rep_paid": {},      # کاربرهایی که نماینده «پرداخت شد» زده: {panel_id: {username: timestamp}}
     "rep_notes": {},     # اسم/یادداشت نماینده برای هر کاربرش: {panel_id: {username: note}}
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
@@ -231,6 +232,19 @@ def _normalize(data: dict) -> dict:
             if v:
                 rn[str(pid)] = v
     cfg["rep_notes"] = rn
+    rp = {}
+    for pid, m in (cfg.get("rep_paid") if isinstance(cfg.get("rep_paid"), dict) else {}).items():
+        if isinstance(m, dict):
+            v = {}
+            for u, ts in m.items():
+                if str(u) in ru.get(str(pid), {}):
+                    try:
+                        v[str(u)] = int(ts) or 1
+                    except (TypeError, ValueError):
+                        v[str(u)] = 1
+            if v:
+                rp[str(pid)] = v
+    cfg["rep_paid"] = rp
     for k in ("max_batch", "max_qr", "web_port"):
         try:
             cfg[k] = int(cfg[k])
@@ -597,7 +611,8 @@ def assign_users(rid: str, pid: str, names: list[str]) -> int:
         notes = c["rep_notes"].get(pid, {})
         for u in names:
             if m.get(u) != rid:
-                notes.pop(u, None)            # کاربر از نماینده‌ی دیگری منتقل شد: یادداشت قبلی مال او بود
+                notes.pop(u, None)            # کاربر از نماینده‌ی دیگری منتقل شد: یادداشت و «پرداخت شد»ِ قبلی مال او بود
+                c["rep_paid"].get(pid, {}).pop(u, None)
             m[u] = rid
     update_config(mut)
     return len(names)
@@ -612,6 +627,7 @@ def unassign_users(rid: str, pid: str, names: list[str]) -> int:
             if m.get(u) == rid:
                 del m[u]
                 c["rep_notes"].get(pid, {}).pop(u, None)
+                c["rep_paid"].get(pid, {}).pop(u, None)
                 n.append(u)
     update_config(mut)
     return len(n)
@@ -631,6 +647,20 @@ def set_rep_note(rid: str, pid: str, username: str, note: str) -> str:
             m.pop(username, None)
     update_config(mut)
     return note
+
+
+def set_rep_paid(rid: str, pid: str, username: str, paid: bool) -> bool:
+    """علامت «پرداخت شد» (مشتری پول را به نماینده داده) برای یکی از کاربرهای خود نماینده."""
+    def mut(c):
+        if c["rep_users"].get(pid, {}).get(username) != rid:
+            raise ValueError("این کاربر در لیست شما نیست.")
+        m = c["rep_paid"].setdefault(pid, {})
+        if paid:
+            m[username] = int(time.time())
+        else:
+            m.pop(username, None)
+    update_config(mut)
+    return bool(paid)
 
 
 def rep_owner(cfg: dict, pid: str, username: str) -> str | None:
