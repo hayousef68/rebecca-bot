@@ -584,11 +584,13 @@ async def rep_users(offset: int = Query(0, ge=0, le=100000), limit: int = Query(
                     return None
                 d = _slim_rep(await api.request("GET", api.upath(u)), api)
                 d["pid"], d["note"], d["paid"] = pid, note_of(pid, u), bool(cfg["rep_paid"].get(pid, {}).get(u))
+                rec = cfg["unpaid"]["pending"].get(pid, {}).get(u)      # مهلت پرداخت فعال (زمان غیرفعال‌سازی خودکار)
+                d["deadline_due"] = int(rec["due"]) if rec and d["status"] != "disabled" else 0
                 return d
             except C.RebeccaError:        # حذف‌شده از پنل یا خطای موقت
                 return None
     res = [x for x in await asyncio.gather(*(one(p, u) for p, u in page)) if x]
-    return {"users": res, "total": len(items), "missing": len(page) - len(res)}
+    return {"users": res, "total": len(items), "missing": len(page) - len(res), "unpaid_hours": cfg["unpaid"]["hours"]}
 
 
 class RepNoteReq(BaseModel):
@@ -630,7 +632,34 @@ async def rep_paid(r: RepPaidReq, rep=Depends(rep_guard)):
         paid = await asyncio.to_thread(C.set_rep_paid, rid, pids[0], r.username, r.paid)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if paid:                                                       # پرداخت شد ← مهلت پرداخت (اگر فعال بود) لغو می‌شود
+        await asyncio.to_thread(C.unpaid_clear, pids[0], r.username)
     return {"ok": True, "paid": paid}
+
+
+class RepDeadlineReq(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    pid: str = Field(default="", max_length=20)
+    enabled: bool
+    hours: int | None = Field(default=None, ge=1, le=24 * 365)
+
+
+@app.post("/api/rep/deadline")
+async def rep_deadline(r: RepDeadlineReq, rep=Depends(rep_guard)):
+    """مهلت پرداخت: با فعال‌کردن، بعد از `hours` ساعت اگر پرداخت نشده باشد اشتراک خودکار غیرفعال می‌شود."""
+    rid = rep[0]
+    cfg = load_config()
+    pids = [p for p, m in cfg["rep_users"].items() if m.get(r.username) == rid and (not r.pid or p == r.pid)]
+    if not pids:
+        raise HTTPException(404, "این کاربر در لیست شما نیست.")
+    pid = pids[0]
+    if not r.enabled:
+        await asyncio.to_thread(C.unpaid_clear, pid, r.username)
+        return {"ok": True, "due": 0}
+    if cfg["rep_paid"].get(pid, {}).get(r.username):
+        raise HTTPException(400, "این کاربر «پرداخت شد» علامت خورده؛ اول علامت پرداخت را بردارید.")
+    due = await asyncio.to_thread(C.unpaid_mark, pid, r.username, r.hours)
+    return {"ok": True, "due": due}
 
 
 @app.get("/api/rep/qr")
