@@ -645,7 +645,6 @@ async function repApp(me) {
     list.style.opacity = .45; info.className = 'hint'; info.textContent = 'در حال بارگذاری…';
     try {
       const r = await api(`/rep/users?offset=${R.off}&limit=${PAGE}&search=${encodeURIComponent(R.q)}`);
-      if (r.unpaid_hours) S.repHours = r.unpaid_hours;
       if (my !== seq) return;
       list.replaceChildren();
       r.users.forEach(u => list.append(repItem(u)));
@@ -689,34 +688,27 @@ function repItem(u) {
   noteBtn.onclick = saveNote;
   const paidTag = h('em', { class: 'tag paid', hidden: !u.paid }, '💰 پرداخت شد');
   const paidCb = h('input', { type: 'checkbox', id: 'pd' + u.username, checked: !!u.paid });
-  /* مهلت پرداخت: فعال با زمان؛ بعد از تمام شدن زمان، اشتراک خودکار غیرفعال می‌شود */
-  const dlC = h('input', { type: 'checkbox', id: 'dl' + u.username, checked: !!u.deadline_due });
-  const dlN = h('input', { type: 'number', min: 1, max: 8760, value: (S.repHours || 24), dir: 'ltr', inputmode: 'numeric' });
-  const dlU = h('select', {}, h('option', { value: 1 }, 'ساعت'), h('option', { value: 24 }, 'روز'));
-  const dlRow = h('div', { class: 'uh' }, h('span', {}, 'مهلت:'), dlN, dlU);
-  const dlInfo = h('span', { class: 'tag unp' });
-  const dlBox = h('div', { class: 'unpaid-opt' }, h('label', { class: 'chk', for: 'dl' + u.username }, dlC, '⏳ مهلت پرداخت (اگر پرداخت نشد، خودکار غیرفعال شود)'), dlRow, dlInfo);
-  const renderDl = () => { dlC.checked = !!u.deadline_due; dlRow.hidden = !!u.deadline_due; dlInfo.hidden = !u.deadline_due;
-    dlInfo.textContent = u.deadline_due ? `⏳ ${fmtLeftT(u.deadline_due)} دیگر غیرفعال می‌شود` : ''; };
-  dlC.addEventListener('change', () => {
-    const on = dlC.checked, hrs = Math.max(1, Math.round((+dlN.value || 24) * +dlU.value));
-    if (on && u.paid) { dlC.checked = false; toast('اول علامت «پرداخت شد» را بردارید.', true); return; }
-    dlC.disabled = true;
-    api('/rep/deadline', 'POST', { username: u.username, pid: u.pid, enabled: on, hours: on ? hrs : null })
-      .then(r => { u.deadline_due = r.due || 0; renderDl(); toast(on ? '⏳ مهلت پرداخت فعال شد' : 'مهلت پرداخت لغو شد'); })
-      .catch(e => { dlC.checked = !on; toast(e.message, true); }).finally(() => { dlC.disabled = false; }); });
-  renderDl();
+  const stBadge = h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status);
+  const stBtn = h('button', { class: 'btn sm', type: 'button' });
+  const renderSt = () => { const off = u.status === 'disabled'; stBadge.className = 'badge s-' + u.status; stBadge.textContent = STATUS_FA[u.status] || u.status;
+    stBtn.textContent = off ? '✅ فعال‌سازی اشتراک' : '⛔ غیرفعال‌سازی اشتراک'; };
+  stBtn.onclick = () => { const en = u.status === 'disabled'; if (!en && !confirm('اشتراک ' + u.username + ' غیرفعال شود؟')) return;
+    stBtn.disabled = true;
+    api('/rep/status', 'POST', { username: u.username, pid: u.pid, enabled: en })
+      .then(r => { u.status = r.status; renderSt(); toast(en ? '✅ اشتراک فعال شد' : '⛔ اشتراک غیرفعال شد'); })
+      .catch(e => toast(e.message, true)).finally(() => { stBtn.disabled = false; }); };
+  renderSt();
   paidCb.addEventListener('change', () => { const want = paidCb.checked; paidCb.disabled = true;
     api('/rep/paid', 'POST', { username: u.username, pid: u.pid, paid: want })
-      .then(r => { u.paid = r.paid; paidTag.hidden = !r.paid; if (r.paid) { u.deadline_due = 0; renderDl(); } toast(r.paid ? '💰 ثبت شد: پرداخت شد' : 'علامت پرداخت برداشته شد'); })
+      .then(r => { u.paid = r.paid; paidTag.hidden = !r.paid; toast(r.paid ? '💰 ثبت شد: پرداخت شد' : 'علامت پرداخت برداشته شد'); })
       .catch(e => { paidCb.checked = !want; toast(e.message, true); }).finally(() => { paidCb.disabled = false; }); });
   noteIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveNote(); } });
   d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username, stTag(u.status), paidTag, noteTxt), h('span', { class: 'sub' }, usage(u))),
     h('div', { class: 'body' },
-      h('div', { class: 'ustat' }, h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status)),
+      h('div', { class: 'ustat' }, stBadge),
       h('div', { class: 'notebox' }, noteIn, noteBtn),
       h('label', { class: 'chk paidchk', for: 'pd' + u.username }, paidCb, '💰 پرداخت شد'),
-      dlBox,
+      stBtn,
       h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
       h('div', { class: 'tiles' }, tile('مصرف', gb(u.used)), tile('باقی‌مانده', left), tile('اعتبار', u.expire_text)),
       h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
