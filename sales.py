@@ -210,7 +210,8 @@ def _save_ovr(data: dict) -> None:
     cut = _time.time() - _OVR_KEEP_DAYS * 86400
     data["hide"] = {k: v for k, v in data["hide"].items() if float((v or {}).get("ts", cut + 1)) >= cut}
     data["edit"] = {k: v for k, v in data["edit"].items() if float((v or {}).get("ts", cut + 1)) >= cut}
-    data["spans"] = [x for x in data["spans"] if float(x.get("ts", cut + 1)) >= cut][-500:]
+    keep = [x for x in data["spans"] if float(x.get("ts", cut + 1)) >= cut]
+    data["spans"] = [x for x in keep if not x.get("any")][-500:] + [x for x in keep if x.get("any")][-20000:]     # بازه‌های کیف پول نماینده کم نمی‌شوند تا فروش قدیمی دوباره ظاهر نشود
     path = _ovr_file()
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -249,9 +250,13 @@ def ovr_edit_clear(eid: str) -> None:
     _ovr_mutate(lambda d: d["edit"].pop(str(eid), None))
 
 
-def ovr_add_span(username: str, t_from: float, t_to: float) -> None:
-    """بعد از «برگشت تمدید»: تمدید/ریست/پیوست همان کاربر در این بازه از فروش حذف شود."""
-    _ovr_mutate(lambda d: d["spans"].append({"u": str(username), "from": float(t_from), "to": float(t_to), "ts": _time.time()}))
+def ovr_add_span(username: str, t_from: float, t_to: float, any_kind: bool = False) -> None:
+    """بعد از «برگشت تمدید»: تمدید/ریست/پیوست همان کاربر در این بازه از فروش حذف شود.
+    any_kind=True: «ساخت» را هم حذف می‌کند (ساخت/تمدید با کیف پول نماینده که جزو فروش نیست)."""
+    rec = {"u": str(username), "from": float(t_from), "to": float(t_to), "ts": _time.time()}
+    if any_kind:
+        rec["any"] = True
+    _ovr_mutate(lambda d: d["spans"].append(rec))
 
 
 def _eid(r: dict) -> str:
@@ -284,7 +289,7 @@ def _apply_overrides(rows: list[dict], off: int, include_hidden: bool) -> list[d
         if isinstance(h, dict):
             hidden = bool(h.get("v"))
         else:
-            hidden = r["kind"] != "new" and any(s["u"] == r["username"] and float(s["from"]) <= ts <= float(s["to"]) for s in spans)
+            hidden = any(s["u"] == r["username"] and float(s["from"]) <= ts <= float(s["to"]) and (s.get("any") or r["kind"] != "new") for s in spans)
         e = edit.get(eid)
         if isinstance(e, dict):
             r["orig"] = {"gb": round((r.get("data_limit") or 0) / GB), "months": int(r["months"]) if r.get("months") else _months(r), "ham": _is_hamkari(r, cfg)}
@@ -530,12 +535,31 @@ def classify(rows: list[dict], cfg: dict) -> dict:
     return {"ham": ham, "single": single, "extra": extra, "ignored": ignored, "skipped": skipped}
 
 
+def wallet_income(d1: str, d2: str, partial: bool) -> tuple[int, int]:
+    """مجموع و تعداد شارژهای کیف پول نماینده‌ها در بازه‌ی روزهای تهران (جزو فروش حساب می‌شود)."""
+    a = date.fromisoformat(d1)
+    b = date.fromisoformat(d2)
+    s = datetime(a.year, a.month, a.day, tzinfo=TEHRAN).timestamp()
+    e = (datetime(b.year, b.month, b.day, tzinfo=TEHRAN) + timedelta(days=1)).timestamp()
+    if partial:
+        e = min(e, _time.time())
+    items = [x for x in load_config().get("wallet_income", []) if s <= float(x["ts"]) < e]
+    return sum(int(x["amount"]) for x in items), len(items)
+
+
+def _with_wallet(d: dict, d1: str, d2: str, partial: bool) -> dict:
+    w, n = wallet_income(d1, d2, partial)
+    d["wallet"], d["wallet_n"] = w, n
+    d["income"] += w
+    return d
+
+
 def compute(day: str, partial: bool) -> dict:
-    return compute_rows(fetch_events(day, partial))
+    return _with_wallet(compute_rows(fetch_events(day, partial)), day, day, partial)
 
 
 def compute_range(d1: str, d2: str, partial: bool) -> dict:
-    return compute_rows(fetch_events_range(d1, d2, partial))
+    return _with_wallet(compute_rows(fetch_events_range(d1, d2, partial)), d1, d2, partial)
 
 
 def compute_rows(rows: list[dict]) -> dict:
@@ -598,6 +622,9 @@ def _render(title: str, d: dict, html: bool) -> str:
     if cl["ignored"]:
         L.append("")
         L.append(f"🚫 نادیده‌گرفته (تست/غیرفروشی): {sum(cl['ignored'].values())} مورد")
+    if d.get("wallet_n"):
+        L.append("")
+        L.append(f"💳 شارژ کیف پول نماینده‌ها: {d['wallet_n']} مورد ← {_t(d['wallet'])} تومان")
     L.append("")
     L.append(f"💰 جمع کل فروش: {_t(d['income'])} تومان")
     if d.get("mult", 1) != 1:
@@ -687,7 +714,7 @@ def summary(kind: str = "today") -> dict:
         agg[(gb, m)] = agg.get((gb, m), 0) + n
     extra = [{"gb": gb, "months": m, "count": n, "suggest": int(round(gb * d["rate"]))} for (gb, m), n in sorted(agg.items())]
     att = sum(n for c, i in ((cl["ham"], 1), (cl["single"], 2), (cl["extra"], 2)) for k, n in c.items() if k[i] in ("attach", "next"))
-    return {"income": int(round(d["income"])), "cost": int(round(d["cost"])), "profit": int(round(d["income"] - d["cost"])),
+    return {"wallet": int(d.get("wallet", 0)), "income": int(round(d["income"])), "cost": int(round(d["cost"])), "profit": int(round(d["income"] - d["cost"])),
             "new": news, "renew": total - news, "attach": att, "skipped": sum(cl["skipped"].values()), "ham_gb": d["ham_gb"], "ignored": sum(cl["ignored"].values()), "extra": extra}
 
 
