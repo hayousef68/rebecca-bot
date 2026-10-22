@@ -28,6 +28,7 @@ GB = 1024 ** 3
 REP_NOTE_MAX = 100
 WALLET_LOG_MAX = 100
 TOPUP_MAX = 300
+WALLET_INCOME_MAX = 20000
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 
 DEFAULT_TEMPLATES = {
@@ -83,6 +84,7 @@ DEFAULT_CFG = {
     "reps": {},          # نمایندگان: {id: {name, label, salt, hash, blocked, created}}
     "rep_users": {},     # کاربرهای هر نماینده: {panel_id: {username: rep_id}}
     "rep_paid": {},      # کاربرهایی که نماینده «پرداخت شد» زده: {panel_id: {username: timestamp}}
+    "wallet_income": [],  # شارژهای کیف پول نماینده‌ها (تأیید درخواست یا شارژ دستی ادمین) که جزو فروش همان روز حساب می‌شوند: [{ts, rid, amount}]
     "topups": [],        # درخواست‌های افزایش موجودی نماینده‌ها: [{id, rid, amount, note, ts, status: pending|approved|rejected, done}]
     "rep_notes": {},     # اسم/یادداشت نماینده برای هر کاربرش: {panel_id: {username: note}}
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
@@ -255,6 +257,14 @@ def _normalize(data: dict) -> dict:
         except (TypeError, ValueError, KeyError):
             continue
     cfg["topups"] = tu[-TOPUP_MAX:]
+    wi = []
+    for x in (cfg.get("wallet_income") if isinstance(cfg.get("wallet_income"), list) else []):
+        try:
+            if isinstance(x, dict) and int(x.get("amount") or 0) > 0:
+                wi.append({"ts": float(x["ts"]), "rid": str(x.get("rid") or ""), "amount": int(x["amount"])})
+        except (TypeError, ValueError, KeyError):
+            continue
+    cfg["wallet_income"] = wi[-WALLET_INCOME_MAX:]
     ru = {}
     for pid, m in (cfg.get("rep_users") if isinstance(cfg.get("rep_users"), dict) else {}).items():
         if isinstance(m, dict):
@@ -720,6 +730,8 @@ def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "") -
             raise ValueError("سقف موجودی رد می‌شود.")
         c["reps"][rid]["balance"] = nb
         _wlog(c, rid, kind, amount, note)
+        if kind == "charge" and amount > 0:                      # شارژ دستی ادمین ← فروش امروز
+            c["wallet_income"].append({"ts": time.time(), "rid": rid, "amount": amount})
         out["b"] = nb
     update_config(mut)
     return out["b"]
@@ -761,6 +773,7 @@ def topup_resolve(tid: str, approve: bool, amount: int | None = None) -> dict:
                 raise ValueError("مبلغ نامعتبر است.")
             c["reps"][t["rid"]]["balance"] += amt
             _wlog(c, t["rid"], "topup", amt, "تأیید درخواست افزایش موجودی")
+            c["wallet_income"].append({"ts": time.time(), "rid": t["rid"], "amount": amt})     # تأیید درخواست ← فروش امروز
             t["amount"] = amt
         t["status"] = "approved" if approve else "rejected"
         t["done"] = int(time.time())
