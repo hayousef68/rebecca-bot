@@ -244,6 +244,10 @@ async function copy(text) {
   catch { const a = h('textarea', { value: text, style: 'position:fixed;opacity:0' }); document.body.append(a); a.select(); document.execCommand('copy'); a.remove(); }
   toast('کپی شد');
 }
+const mv = el => +String(el.value).replace(/[\u06F0-\u06F9\u0660-\u0669]/g, d => d.charCodeAt(0) & 15).replace(/[^\d]/g, '') || 0;      // مقدار عددیِ ورودی مبلغ (کامای سه‌رقمی حذف می‌شود)
+const moneyIn = (v, ph, extra = {}) => { const el = h('input', { type: 'text', inputmode: 'numeric', dir: 'ltr', autocomplete: 'off', placeholder: ph || 'مبلغ (تومان)', ...extra });
+  const fmt = () => { const n = mv(el); el.value = n ? n.toLocaleString('en-US') : ''; };
+  el.addEventListener('input', fmt); if (v) { el.value = v; fmt(); } return el; };                                                              // نمایش 1,000,000 هنگام تایپ
 const toman = n => (+n || 0).toLocaleString('en-US') + ' تومان';
 const gb = b => !b ? 'نامحدود' : '\u2066' + (b / 1073741824).toFixed(2) + ' GB\u2069';
 function toggleQR(box, sub, name, path) {
@@ -738,10 +742,10 @@ async function repApp(me) {
     let w; try { w = await refreshBal(); } catch (e) { return mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
     const TYPE_FA = { charge: '➕ شارژ ادمین', deduct: '➖ کسر ادمین', topup: '✅ افزایش موجودی', purchase: '🛒 خرید اکانت', refund: '↩️ بازگشت وجه' };
     const ST_FA = { pending: '⏳ در انتظار بررسی', approved: '✅ تأیید شد', rejected: '✖ رد شد' };
-    const amt = h('input', { type: 'number', min: 1000, step: 1000, placeholder: 'مبلغ (تومان)', dir: 'ltr', inputmode: 'numeric' });
+    const amt = moneyIn(0, 'مبلغ (تومان) مثلاً 1,000,000');
     const nt = h('input', { placeholder: 'توضیح / شماره پیگیری واریز (اختیاری)', maxlength: 200 });
     const sendB = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' }, '📨 ارسال درخواست به ادمین');
-    sendB.onclick = () => run(sendB, async () => { const v = Math.round(+amt.value); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.'); await api('/rep/topup', 'POST', { amount: v, note: nt.value.trim() }); toast('✅ درخواست برای ادمین ارسال شد'); await views.wallet(); });
+    sendB.onclick = () => run(sendB, async () => { const v = mv(amt); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.'); await api('/rep/topup', 'POST', { amount: v, note: nt.value.trim() }); toast('✅ درخواست برای ادمین ارسال شد'); await views.wallet(); });
     const lgRow = e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')));
     mount(h('div', { class: 'card bigbal' }, h('span', {}, 'موجودی کیف پول'), h('b', {}, toman(w.balance))),
       h('div', { class: 'card' }, h('h2', {}, 'درخواست افزایش موجودی'), field('مبلغ', amt), field('توضیح', nt), sendB, h('p', { class: 'hint' }, 'بعد از واریز، درخواست را ثبت کنید؛ ادمین بررسی و کیف پول شما را شارژ می‌کند.')),
@@ -950,21 +954,21 @@ function vTpl() {
   // هر تمپلت یک ردیف قابل ویرایش درجا
   const mkItem = ([n, t]) => {
     const isG = t.kind === 'group', on = n === (isG ? st.active_group : st.active);
-    const nm = h('input', { value: n, maxlength: 40 }), g = num(t.gb, 'GB', 'any'), d = num(t.days, 'روز'), m = modeSel(t.mode), kd = kindSel(t.kind), pr = num(t.price || 0, 'تومان');
+    const nm = h('input', { value: n, maxlength: 40 }), g = num(t.gb, 'GB', 'any'), d = num(t.days, 'روز'), m = modeSel(t.mode), kd = kindSel(t.kind), pr = moneyIn(t.price || 0, 'تومان');
     return h('details', { class: 'item', style: on ? 'border-color:var(--ac)' : '' },
       h('summary', {}, h('span', { class: 'nm' }, (on ? '✅ ' : '') + n), h('span', { class: 'sub' }, `${t.gb || '∞'}GB · ${t.days || '∞'}d · ${t.mode === 'active' ? 'Active' : 'On-Hold'}`)),
       h('div', { class: 'body', style: 'padding-top:12px' }, field('نام', nm), field('نوع (تعیین‌کننده‌ی سرویس)', kd), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m), field('قیمت برای نماینده‌ها (تومان) — ۰ = غیرقابل فروش', pr),
         h('div', { class: 'btns' },
-          mk('💾 ذخیره', async () => { await api('/templates', 'POST', { name: nm.value.trim(), old_name: n, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value, price: Math.max(0, Math.round(+pr.value) || 0) }); toast('ذخیره شد'); await reload(); }, 'pri'),
+          mk('💾 ذخیره', async () => { await api('/templates', 'POST', { name: nm.value.trim(), old_name: n, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value, price: mv(pr) }); toast('ذخیره شد'); await reload(); }, 'pri'),
           on ? null : mk('✅ پیش‌فرض این نوع', async () => { await api('/templates/active', 'POST', { name: n }); await reload(); }),
-          mk('📄 کپی', async () => { await api('/templates', 'POST', { name: (n + ' کپی').slice(0, 40), old_name: null, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value, price: Math.max(0, Math.round(+pr.value) || 0) }); await reload(); }),
+          mk('📄 کپی', async () => { await api('/templates', 'POST', { name: (n + ' کپی').slice(0, 40), old_name: null, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value, price: mv(pr) }); await reload(); }),
           mk('🗑', async () => { if (!confirm(`«${n}» حذف شود؟`)) return; await api('/templates/delete', 'POST', { name: n }); await reload(); }, 'bad'))));
   };
   const ents = Object.entries(st.templates), sing = ents.filter(([, t]) => t.kind !== 'group').map(mkItem), grp = ents.filter(([, t]) => t.kind === 'group').map(mkItem);
   const sec = t => h('div', { class: 'sec', style: 'margin-top:16px' }, h('h2', {}, t));
   // افزودن سریع
-  const name = h('input', { placeholder: 'نام (مثلاً ۶۰ گیگ دوماهه)', maxlength: 40 }), g = num(60, 'GB', 'any'), d = num(60, 'روز'), m = modeSel('on_hold'), kd = kindSel('single'), npr = num(0, 'تومان');
-  const add = mk('➕ افزودن تمپلت', async () => { if (!name.value.trim()) throw new Error('نام را وارد کنید.'); await api('/templates', 'POST', { name: name.value.trim(), old_name: null, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value, price: Math.max(0, Math.round(+npr.value) || 0) }); toast('اضافه شد'); await reload(); }, 'pri');
+  const name = h('input', { placeholder: 'نام (مثلاً ۶۰ گیگ دوماهه)', maxlength: 40 }), g = num(60, 'GB', 'any'), d = num(60, 'روز'), m = modeSel('on_hold'), kd = kindSel('single'), npr = moneyIn(0, 'تومان');
+  const add = mk('➕ افزودن تمپلت', async () => { if (!name.value.trim()) throw new Error('نام را وارد کنید.'); await api('/templates', 'POST', { name: name.value.trim(), old_name: null, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value, price: mv(npr) }); toast('اضافه شد'); await reload(); }, 'pri');
   mount(h('p', { class: 'hint', style: 'margin:0 2px' }, `${ents.length} تمپلت — برای ویرایش روی هر مورد بزنید`),
     sec(`👤 تکی — سرویس ms (${sing.length})`), ...(sing.length ? sing : [h('p', { class: 'hint' }, 'تمپلت تکی ندارید.')]),
     sec(`👥 همکاری — سرویس hamkari (${grp.length})`), ...(grp.length ? grp : [h('p', { class: 'hint' }, 'تمپلت همکاری ندارید؛ ساخت گروهی از تمپلت‌های تکی استفاده می‌کند.')]),
@@ -1193,7 +1197,7 @@ async function vSet() {
     const seg = h('div', { class: 'seg sm' }, [['range', 'بازه (MS_111 تا MS_150)'], ['list', 'لیست نام‌ها']].map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === am ? 'on' : '', onclick: () => { am = k; seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); rangeBox.hidden = k !== 'range'; listBox.hidden = k !== 'list'; } }, t)));
     const spec = () => am === 'range' ? { prefix: pre.value.trim(), start: fr.value === '' ? null : +fr.value, end: to.value === '' ? null : +to.value } : { names: lst.value };
     const done = async (m) => { S.setOpen = 'reps'; toast(m); await vSet(); };
-    const wAmt = h('input', { type: 'number', min: 1, placeholder: 'مبلغ (تومان)', dir: 'ltr', inputmode: 'numeric' }), wNote = h('input', { placeholder: 'توضیح (اختیاری)', maxlength: 120 }), logBox = h('div', { hidden: true });
+    const wAmt = moneyIn(0, 'مبلغ (تومان)'), wNote = h('input', { placeholder: 'توضیح (اختیاری)', maxlength: 120 }), logBox = h('div', { hidden: true });
     const tplBox = h('div', {}, Object.entries((S.st && S.st.templates) || {}).map(([n, t]) => h('label', { class: 'chk', style: 'display:flex;gap:8px;align-items:center;margin:4px 0' },
       h('input', { type: 'checkbox', value: n, checked: (r.tpls || []).includes(n) }), h('span', {}, `${n} · ${t.gb ? t.gb + 'GB' : '∞'} · ${t.days ? t.days + 'روز' : '∞'} · ${t.kind === 'group' ? 'همکاری' : 'تکی'} — `, h('b', { style: t.price ? 'color:var(--ac)' : 'color:var(--warn)' }, t.price ? toman(t.price) : '⚠️ بدون قیمت (قابل خرید نیست)')))));
     const panSel = h('select', {}, h('option', { value: '' }, '— پنل فعال —'), ((S.st && S.st.panels) || []).map(pn => h('option', { value: pn.id, selected: pn.id === r.panel }, pn.name)));
@@ -1209,8 +1213,8 @@ async function vSet() {
         h('div', { class: 'psec' }, h('b', {}, '💰 کیف پول'), h('span', {}, 'موجودی: ' + toman(r.balance))),
         h('div', { class: 'attach', style: 'grid-template-columns:1fr 1.4fr' }, wAmt, wNote),
         h('div', { class: 'btns' },
-          act('➕ شارژ', 'pri', async () => { const v = Math.round(+wAmt.value); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await api(`/reps/${r.id}/wallet`, 'POST', { amount: v, note: wNote.value.trim() }); await done('✅ شارژ شد · موجودی: ' + toman(x.balance)); }),
-          act('➖ کسر', 'bad', async () => { const v = Math.round(+wAmt.value); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await api(`/reps/${r.id}/wallet`, 'POST', { amount: -v, note: wNote.value.trim() }); await done('کسر شد · موجودی: ' + toman(x.balance)); }),
+          act('➕ شارژ', 'pri', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await api(`/reps/${r.id}/wallet`, 'POST', { amount: v, note: wNote.value.trim() }); await done('✅ شارژ شد · موجودی: ' + toman(x.balance)); }),
+          act('➖ کسر', 'bad', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await api(`/reps/${r.id}/wallet`, 'POST', { amount: -v, note: wNote.value.trim() }); await done('کسر شد · موجودی: ' + toman(x.balance)); }),
           act('🧾 تراکنش‌ها', '', async () => { const x = await api(`/reps/${r.id}/log`); logBox.hidden = !logBox.hidden; logBox.replaceChildren(...(x.log.length ? x.log.map(e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')))) : [h('p', { class: 'hint' }, 'تراکنشی ثبت نشده.')])); })),
         logBox,
         h('div', { class: 'psec' }, h('b', {}, '🧩 تمپلت‌های فعال این نماینده'), h('span', {}, 'فقط تمپلت‌های دارای قیمت قابل خرید است')),
@@ -1230,8 +1234,8 @@ async function vSet() {
         h('p', { class: 'hint' }, 'مسدود کردن، همان لحظه نماینده را از پنل بیرون می‌اندازد. تغییر رمز (دستی یا تصادفی) رمز قبلی را از کار می‌اندازد و قفل ورود را هم برمی‌دارد. ۵ بار رمز اشتباه پیاپی، حساب را قفل می‌کند تا شما دوباره فعالش کنید.')));
   };
   const tuBox = (topups.length ? h('div', { class: 'banner', style: 'margin-bottom:10px' }, h('b', {}, `💰 ${topups.length} درخواست افزایش موجودی`),
-    ...topups.map(t => { const amt = h('input', { type: 'number', value: t.amount, min: 1, dir: 'ltr', inputmode: 'numeric', style: 'margin-top:6px' });
-      const bt = (label, cls, ap) => { const b = h('button', { class: 'btn sm ' + cls, type: 'button' }, label); b.onclick = () => run(b, async () => { await api('/topups/' + t.id, 'POST', { approve: ap, amount: ap ? Math.round(+amt.value) : null }); S.setOpen = 'reps'; toast(ap ? '✅ تأیید و شارژ شد' : 'رد شد'); await vSet(); }); return b; };
+    ...topups.map(t => { const amt = moneyIn(t.amount, 'مبلغ', { style: 'margin-top:6px' });
+      const bt = (label, cls, ap) => { const b = h('button', { class: 'btn sm ' + cls, type: 'button' }, label); b.onclick = () => run(b, async () => { await api('/topups/' + t.id, 'POST', { approve: ap, amount: ap ? mv(amt) : null }); S.setOpen = 'reps'; toast(ap ? '✅ تأیید و شارژ شد' : 'رد شد'); await vSet(); }); return b; };
       return h('div', { style: 'margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)' }, h('div', {}, `${t.rep} — ${toman(t.amount)}`), t.note ? h('div', { class: 'hint', style: 'margin:2px 0' }, '📝 ' + t.note) : null,
         h('div', { class: 'hint', style: 'margin:2px 0' }, new Date(t.ts * 1000).toLocaleString('fa-IR')), amt, h('div', { class: 'btns', style: 'margin-top:6px' }, bt('✅ تأیید و شارژ', 'pri', true), bt('✖ رد', 'bad', false))); })) : null);
   const repBody = h('div', { class: 'acc-in' },
