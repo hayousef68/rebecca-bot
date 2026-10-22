@@ -75,7 +75,7 @@ DEFAULT_CFG = {
     "next_plan_mode": "chain",
     # برگشت تمدید/ریست اشتباهی: فقط یک فایل محلی کوچک (renew_undo.json)، بدون هیچ درخواست اضافه به پنل؛ ریست دسته‌ای بزرگ‌تر از bulk_max عکس‌برداری نمی‌شود
     "undo": {"enabled": True, "keep": 300, "days": 14, "bulk_max": 30},
-    "backup": {"enabled": True},
+    "backup": {"enabled": True, "interval_min": 1440},   # interval_min: ۱۴۴۰ = روزانه ساعت ۱۲:۰۰؛ کمتر از آن = هر N دقیقه (فقط وقتی چیزی عوض شده)
     "monitor": {"enabled": True, "interval": 300},
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
     "unpaid": {"hours": 24, "pending": {}},   # تمدیدهای «واریز نشده»: pending = {panel_id: {username: {"due": ts, "set": ts}}}
@@ -203,6 +203,8 @@ def _normalize(data: dict) -> dict:
             else:
                 try:
                     sec[k] = max(1, int(sec[k]))
+                    if key == "backup" and k == "interval_min":
+                        sec[k] = min(1440, max(5, sec[k]))
                 except (TypeError, ValueError):
                     sec[k] = dv
         cfg[key] = sec
