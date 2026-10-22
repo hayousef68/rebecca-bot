@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -710,7 +711,6 @@ async function repApp(me) {
     const opts = w.templates.map(t => { const r = h('input', { type: 'radio', name: 'tpl', value: t.name, checked: t.name === pick });
       const row = h('label', { class: 'tplopt' + (t.name === pick ? ' on' : '') }, r, h('div', { class: 'tn' }, t.name, h('div', { class: 'tp' }, `${t.gb ? t.gb + ' GB' : 'نامحدود'} · ${t.days ? t.days + ' روز' : 'نامحدود'}`)), h('b', {}, toman(t.price)));
       r.onchange = () => { pick = t.name; opts.forEach(o => o.classList.toggle('on', o === row)); upd(); }; return row; });
-    const uname = h('input', { placeholder: 'خالی = نام خودکار', dir: 'ltr', maxlength: 32, autocapitalize: 'off', autocomplete: 'off' });
     const note = h('input', { placeholder: 'اسم مشتری (اختیاری)', maxlength: 100 });
     const go = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' });
     const out = h('div');
@@ -718,17 +718,17 @@ async function repApp(me) {
     go.onclick = () => run(go, async () => {
       const t = w.templates.find(x => x.name === pick);
       if (!confirm(`اکانت «${t.name}» به مبلغ ${toman(t.price)} ساخته شود؟`)) return;
-      const r = await api('/rep/buy', 'POST', { template: pick, username: uname.value.trim(), note: note.value.trim() });
+      const r = await api('/rep/buy', 'POST', { template: pick, note: note.value.trim() });
       w.balance = r.balance; balB.textContent = toman(r.balance); head.lastChild.textContent = toman(r.balance); upd();
       const qb = h('div'), sub = r.sub;
       out.replaceChildren(h('div', { class: 'card' }, h('h2', {}, '✅ اکانت ساخته شد'), h('p', { style: 'margin:0 0 6px' }, '👤 ', h('b', { dir: 'ltr' }, r.username)), h('code', { onclick: () => copy(sub) }, sub || '—'), qb,
         h('div', { class: 'acts', style: 'grid-template-columns:repeat(3,1fr)' }, h('button', { class: 'btn sm', type: 'button', onclick: () => toggleQR(qb, sub, r.username, '/api/rep/qr') }, '🖼 QR'),
           h('button', { class: 'btn sm', type: 'button', onclick: () => copy(sub) }, '📋 کپی لینک'),
           h('button', { class: 'btn sm', type: 'button', onclick: () => copy(['👤 نام کاربری: ' + r.username, '🔗 لینک اشتراک:', sub].join('\n')) }, '📤 کپی پیام'))));
-      uname.value = ''; note.value = ''; toast('✅ اکانت ساخته شد');
+      note.value = ''; toast('✅ اکانت ساخته شد');
     });
     upd();
-    mount(head, h('div', { class: 'card' }, h('h2', {}, 'انتخاب تمپلت'), ...opts, field('نام کاربری (اختیاری)', uname), field('یادداشت', note), go), out);
+    mount(head, h('div', { class: 'card' }, h('h2', {}, 'انتخاب تمپلت'), ...opts, field('یادداشت', note), h('p', { class: 'hint' }, 'نام کاربری خودکار و طبق شماره‌گذاری پنل تعیین می‌شود.'), go), out);
   };
 
   views.wallet = async () => {
