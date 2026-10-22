@@ -674,12 +674,15 @@ async function repApp(me) {
   search.addEventListener('input', debounce(apply, 300));
   search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); apply(); search.blur(); } });
   clear.onclick = () => { search.value = ''; R.q = ''; clear.hidden = true; load(true); search.focus(); };
-  const showUsers = () => { mount(h('div', { class: 'sbox' }, search, clear), info, list, pg); load(true); };
+  const topBar = () => h('div', { class: 'card', style: 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px' },
+    h('div', {}, h('span', { style: 'font-size:11px;color:var(--mu);display:block' }, '💳 موجودی کیف پول'), h('b', { class: 'balval', style: 'color:var(--ac);font-size:16px' }, wallet.balance == null ? '…' : toman(wallet.balance))),
+    h('button', { class: 'btn pri sm', type: 'button', onclick: () => show('buy') }, '➕ ساخت اکانت جدید'));
+  const showUsers = () => { mount(topBar(), h('div', { class: 'sbox' }, search, clear), info, list, pg); load(true); };
 
   /* ───── منوی کشویی نماینده + کیف پول ───── */
   const wallet = { balance: null };
   const balB = h('b', {}, '…');
-  const refreshBal = async () => { try { const w = await api('/rep/wallet'); wallet.balance = w.balance; REP.tpls = w.templates; balB.textContent = toman(w.balance); return w; } catch (e) { balB.textContent = '—'; throw e; } };
+  const refreshBal = async () => { try { const w = await api('/rep/wallet'); wallet.balance = w.balance; REP.tpls = w.templates; balB.textContent = toman(w.balance); document.querySelectorAll('.balval').forEach(e => { e.textContent = toman(w.balance); }); return w; } catch (e) { balB.textContent = '—'; throw e; } };
   const scrim = h('div', { class: 'scrim' }), drawer = h('aside', { class: 'drawer', 'aria-label': 'منو' });
   const closeMenu = () => { drawer.classList.remove('on'); scrim.classList.remove('on'); };
   const openMenu = () => { drawer.classList.add('on'); scrim.classList.add('on'); refreshBal().catch(() => {}); };
@@ -696,7 +699,7 @@ async function repApp(me) {
   if (hd) hd.prepend(menuBtn);
   document.body.append(scrim, drawer);
 
-  views.users = showUsers; REP.setBal = b => { wallet.balance = b; balB.textContent = toman(b); }; REP.reload = () => load(false);
+  views.users = showUsers; REP.setBal = b => { wallet.balance = b; balB.textContent = toman(b); document.querySelectorAll('.balval').forEach(e => { e.textContent = toman(b); }); }; REP.reload = () => load(false);
 
   views.buy = async () => {
     mount(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
