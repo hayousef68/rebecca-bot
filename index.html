@@ -1020,7 +1020,7 @@ function npEditor() {
 
 /* ───────── تنظیمات ───────── */
 async function vSet() {
-  let c; try { c = await api('/settings'); } catch (e) { return mount(h('p', { class: 'err' }, e.message)); }
+  let c; try { c = await api('/settings'); await refreshState(); } catch (e) { return mount(h('p', { class: 'err' }, e.message)); }   // refreshState: تمپلت‌ها و قیمت‌های به‌روز برای انتخاب تمپلت نماینده
   const i = (v, p = '', t = 'text') => h('input', { type: t, value: v ?? '', placeholder: p, dir: 'ltr', autocomplete: 'off' });
   const refresh = async () => { await refreshState(); await vSet(); };
   // فرم افزودن/ویرایش پنل
@@ -1190,7 +1190,7 @@ async function vSet() {
     const done = async (m) => { S.setOpen = 'reps'; toast(m); await vSet(); };
     const wAmt = h('input', { type: 'number', min: 1, placeholder: 'مبلغ (تومان)', dir: 'ltr', inputmode: 'numeric' }), wNote = h('input', { placeholder: 'توضیح (اختیاری)', maxlength: 120 }), logBox = h('div', { hidden: true });
     const tplBox = h('div', {}, Object.entries((S.st && S.st.templates) || {}).map(([n, t]) => h('label', { class: 'chk', style: 'display:flex;gap:8px;align-items:center;margin:4px 0' },
-      h('input', { type: 'checkbox', value: n, checked: (r.tpls || []).includes(n) }), `${n} — ${t.price ? toman(t.price) : '⚠️ بدون قیمت'}`)));
+      h('input', { type: 'checkbox', value: n, checked: (r.tpls || []).includes(n) }), h('span', {}, `${n} · ${t.gb ? t.gb + 'GB' : '∞'} · ${t.days ? t.days + 'روز' : '∞'} · ${t.kind === 'group' ? 'همکاری' : 'تکی'} — `, h('b', { style: t.price ? 'color:var(--ac)' : 'color:var(--warn)' }, t.price ? toman(t.price) : '⚠️ بدون قیمت (قابل خرید نیست)')))));
     const panSel = h('select', {}, h('option', { value: '' }, '— پنل فعال —'), ((S.st && S.st.panels) || []).map(pn => h('option', { value: pn.id, selected: pn.id === r.panel }, pn.name)));
     const pwI = h('input', { placeholder: 'رمز جدید دستی (حداقل ۶ کاراکتر)', dir: 'ltr', maxlength: 64, autocomplete: 'off', autocapitalize: 'off' });
     return h('details', { class: 'item' + (r.blocked || r.locked ? ' s-disabled' : '') },
