@@ -1136,7 +1136,11 @@ async function vSet() {
   } catch (e) { sslCard = h('div', { class: 'card' }, h('h2', {}, '🔒 SSL و پورت وب‌پنل'), h('p', { class: 'err' }, e.message)); }
   // بکاپ و بازیابی
   const autoB = h('input', { type: 'checkbox', id: 'autob', checked: c.backup_enabled });
-  autoB.onchange = () => api('/backup/settings', 'POST', { enabled: autoB.checked }).then(() => toast(autoB.checked ? 'بکاپ شبانه روشن شد' : 'بکاپ شبانه خاموش شد')).catch(e => { autoB.checked = !autoB.checked; toast(e.message, true); });
+  const IV = [[5, 'هر ۵ دقیقه'], [15, 'هر ۱۵ دقیقه'], [30, 'هر ۳۰ دقیقه'], [60, 'هر ۱ ساعت'], [120, 'هر ۲ ساعت'], [360, 'هر ۶ ساعت'], [720, 'هر ۱۲ ساعت'], [1440, 'روزانه (ساعت ۱۲:۰۰)']];
+  const ivSel = h('select', {}, IV.map(([v, t]) => h('option', { value: v, selected: v === (c.backup_interval || 1440) }, t)));
+  const saveBk = (okMsg) => api('/backup/settings', 'POST', { enabled: autoB.checked, interval_min: +ivSel.value }).then(() => toast(okMsg)).catch(e => toast(e.message, true));
+  autoB.onchange = () => saveBk(autoB.checked ? 'بکاپ خودکار روشن شد' : 'بکاپ خودکار خاموش شد');
+  ivSel.onchange = () => saveBk('✅ زمان‌بندی بکاپ ذخیره شد');
   const dlB = h('button', { class: 'btn', type: 'button' }, '⬇️ دانلود بکاپ'); dlB.onclick = () => { location.href = '/api/backup'; };
   const tgB = h('button', { class: 'btn', type: 'button' }, '📤 ارسال بکاپ به تلگرام'); tgB.onclick = () => run(tgB, async () => { await api('/backup/send', 'POST'); toast('✅ بکاپ به تلگرام ارسال شد'); });
   const fileI = h('input', { type: 'file', accept: '.json,application/json' });
@@ -1144,13 +1148,15 @@ async function vSet() {
   rsB.onclick = () => run(rsB, async () => {
     const f = fileI.files[0]; if (!f) throw new Error('ابتدا فایل بکاپ را انتخاب کنید.');
     if (f.size > 2e6) throw new Error('حجم فایل زیاد است.');
-    if (!confirm('همه‌ی تنظیمات فعلی (پنل‌ها، توکن، قیمت‌ها، دیتابیس) با این فایل جایگزین شود؟\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
+    if (!confirm('همه‌ی تنظیمات فعلی (پنل‌ها، توکن، قیمت‌ها، دیتابیس، نماینده‌ها و موجودی و تراکنش‌ها) با این فایل جایگزین شود؟\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
     const r = await api('/backup/restore', 'POST', { content: await f.text() });
-    toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · ${r.rep_users} کاربرِ نماینده${r.reps_kept ? ' (بکاپ قدیمی بود؛ نماینده‌های فعلی حفظ شد)' : ''} · ربات در حال ریستارت`);
+    toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · ${r.rep_users} کاربرِ نماینده · موجودی کل ${toman(r.balance)}${r.reps_kept ? ' (بکاپ قدیمی بود؛ نماینده‌های فعلی حفظ شد)' : ''} · ربات در حال ریستارت`);
     setTimeout(() => location.reload(), r.web_changed ? 1800 : 1200);
   });
   const backupCard = h('div', { class: 'card' }, h('h2', {}, '💾 بکاپ و بازیابی'),
-    h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ هر شب ساعت ۰۰:۰۰ همراه گزارش فروش'),
+    h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ به ادمین‌ها در تلگرام'),
+    field('زمان‌بندی بکاپ', ivSel),
+    h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'اگر کمتر از «روزانه» انتخاب کنید، بکاپ فقط وقتی فرستاده می‌شود که چیزی (موجودی کیف پول، تراکنش، کاربر، تنظیمات) تغییر کرده باشد. بکاپ شامل موجودی و تراکنش‌های همه‌ی نماینده‌هاست و با بازیابی روی سرور جدید برمی‌گردد. برای کیف پول، ۱۵ تا ۶۰ دقیقه پیشنهاد می‌شود.'),
     h('div', { class: 'btns' }, dlB, tgB),
     h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, 'بازیابی از فایل بکاپ'), fileI,
     h('p', { class: 'hint' }, 'بکاپ شامل نماینده‌ها (با رمز هش‌شده)، لیست کاربرهای هر نماینده و وضعیت مسدود/قفل آن‌هاست؛ بعد از بازیابی روی سرور جدید هر کاربر دوباره زیر نماینده‌ی خودش نمایش داده می‌شود. فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
@@ -1252,7 +1258,7 @@ async function vSet() {
     drawer('nextplan', '🔁', 'پلن بعدی', 'شارژ خودکار کاربر', npEditor()),
     drawer('reps', '👤', 'نماینده‌ها', reps.length ? `${reps.length} نماینده${topups.length ? ' · 💰' + topups.length + ' درخواست' : ''}${reps.some(r => r.blocked) ? ' · ⛔' : ''}` : 'ندارید', repBody),
     drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
-    drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن' : 'خودکار خاموش', strip(backupCard)),
+    drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن · ' + ((IV.find(x => x[0] === c.backup_interval) || [0, 'روزانه'])[1]) : 'خودکار خاموش', strip(backupCard)),
     drawer('ssl', '🔒', 'SSL و پورت وب‌پنل', sslSub, strip(sslCard)),
     drawer('pw', '🔑', 'رمز وب‌پنل', `کاربر: ${c.web_user}`, strip(h('div', { class: 'card' }, h('h2', {}, `رمز وب‌پنل (کاربر: ${c.web_user})`), field('رمز جدید', wp), h('div', { class: 'btns' }, saveW)))));
 }
