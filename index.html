@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -712,6 +711,9 @@ async function repApp(me) {
       const row = h('label', { class: 'tplopt' + (t.name === pick ? ' on' : '') }, r, h('div', { class: 'tn' }, t.name, h('div', { class: 'tp' }, `${t.gb ? t.gb + ' GB' : 'نامحدود'} · ${t.days ? t.days + ' روز' : 'نامحدود'}`)), h('b', {}, toman(t.price)));
       r.onchange = () => { pick = t.name; opts.forEach(o => o.classList.toggle('on', o === row)); upd(); }; return row; });
     const note = h('input', { placeholder: 'اسم مشتری (اختیاری)', maxlength: 100 });
+    const uname = h('input', { value: '…', readonly: true, dir: 'ltr', style: 'opacity:.85;cursor:not-allowed' });
+    const loadName = () => api('/rep/next-name').then(r => { uname.value = r.name; }).catch(() => { uname.value = 'خودکار'; });
+    loadName();
     const go = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' });
     const out = h('div');
     const upd = () => { const t = w.templates.find(x => x.name === pick); go.disabled = !t || w.balance < t.price; go.textContent = t && w.balance < t.price ? '⚠️ موجودی کافی نیست' : `🛒 ساخت اکانت (${toman(t.price)})`; };
@@ -725,10 +727,10 @@ async function repApp(me) {
         h('div', { class: 'acts', style: 'grid-template-columns:repeat(3,1fr)' }, h('button', { class: 'btn sm', type: 'button', onclick: () => toggleQR(qb, sub, r.username, '/api/rep/qr') }, '🖼 QR'),
           h('button', { class: 'btn sm', type: 'button', onclick: () => copy(sub) }, '📋 کپی لینک'),
           h('button', { class: 'btn sm', type: 'button', onclick: () => copy(['👤 نام کاربری: ' + r.username, '🔗 لینک اشتراک:', sub].join('\n')) }, '📤 کپی پیام'))));
-      note.value = ''; toast('✅ اکانت ساخته شد');
+      note.value = ''; loadName(); toast('✅ اکانت ساخته شد');
     });
     upd();
-    mount(head, h('div', { class: 'card' }, h('h2', {}, 'انتخاب تمپلت'), ...opts, field('یادداشت', note), h('p', { class: 'hint' }, 'نام کاربری خودکار و طبق شماره‌گذاری پنل تعیین می‌شود.'), go), out);
+    mount(head, h('div', { class: 'card' }, h('h2', {}, 'انتخاب تمپلت'), ...opts, field('نام کاربری (خودکار طبق شماره‌گذاری پنل)', uname), field('یادداشت', note), go), out);
   };
 
   views.wallet = async () => {
