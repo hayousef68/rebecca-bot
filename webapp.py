@@ -718,6 +718,24 @@ async def rep_topup(r: RepTopupReq, rep=Depends(rep_guard)):
     return {"ok": True, "id": rec["id"]}
 
 
+async def _next_rep_name(cfg: dict, rp: dict) -> tuple[str, str]:
+    """(pid, نام کاربریِ بعدی) طبق شماره‌گذاریِ پنل."""
+    pid = rp["panel"] if rp["panel"] and get_panel(cfg, rp["panel"]) else cfg["active_panel"]
+    api = get_api(pid)
+    if not api.is_configured():
+        raise HTTPException(502, "پنل در دسترس نیست؛ به ادمین اطلاع دهید.")
+    prefix = cfg["default_prefix"]
+    nx = await sales.next_number(api, prefix, len(cfg["panels"]) <= 1)
+    return pid, C.make_names(prefix, int(nx.get("next") or 1), 1, 1)[0]
+
+
+@app.get("/api/rep/next-name")
+async def rep_next_name(rep=Depends(rep_guard)):
+    """نام کاربری که اکانت بعدی می‌گیرد (فقط نمایش؛ نماینده نمی‌تواند تغییرش دهد)."""
+    cfg = load_config()
+    return {"name": (await _next_rep_name(cfg, cfg["reps"][rep[0]]))[1]}
+
+
 class RepBuyReq(BaseModel):
     template: str = Field(min_length=1, max_length=40)
     note: str = Field(default="", max_length=100)
