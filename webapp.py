@@ -688,6 +688,14 @@ def _money_guard(rid: str) -> asyncio.Lock:
     return _money_locks.setdefault(rid, asyncio.Lock())
 
 
+async def _hide_from_sales(username: str, t_start: float):
+    """ساخت/تمدید با کیف پول نماینده در گزارش فروش حساب نمی‌شود؛ فقط خودِ شارژ کیف پول فروش است."""
+    try:
+        await asyncio.to_thread(sales.ovr_add_span, username, t_start - 30, time.time() + 90, True)
+    except Exception:  # noqa: BLE001
+        log.exception("hide rep purchase from sales")
+
+
 @app.get("/api/rep/wallet")
 async def rep_wallet(rep=Depends(rep_guard)):
     rid, rp = rep
@@ -769,6 +777,7 @@ async def _rep_buy(r: RepBuyReq, rid: str):
     prefix = cfg["default_prefix"]
     nx = await sales.next_number(api, prefix, len(cfg["panels"]) <= 1)
     names = C.make_names(prefix, int(nx.get("next") or 1), 1, 1)
+    t_start = time.time()
     try:
         await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"ساخت اکانت {names[0]} — {r.template}")
     except ValueError:
@@ -786,6 +795,7 @@ async def _rep_buy(r: RepBuyReq, rid: str):
     if not results:
         await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — ساخت {names[0]} ناموفق بود")
         raise HTTPException(400, "ساخت اکانت ناموفق بود: " + (failed[0][1] if failed else "نامشخص") + " — مبلغ برگشت داده شد.")
+    await _hide_from_sales(results[0]["username"], t_start)
     await asyncio.to_thread(C.assign_users, rid, pid, [results[0]["username"]])
     if r.note.strip():
         try:
@@ -821,6 +831,7 @@ async def rep_renew(r: RepRenewReq, rep=Depends(rep_guard)):
         if not api.is_configured():
             raise HTTPException(502, "پنل در دسترس نیست؛ به ادمین اطلاع دهید.")
         price = int(tpl["price"])
+        t_start = time.time()
         try:
             await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"تمدید {r.username} — {r.template}")
         except ValueError:
@@ -831,6 +842,7 @@ async def rep_renew(r: RepRenewReq, rep=Depends(rep_guard)):
         except Exception as e:  # noqa: BLE001
             await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — تمدید {r.username} ناموفق بود")
             raise HTTPException(400, "تمدید ناموفق بود؛ مبلغ برگشت داده شد." + (f" ({e})" if isinstance(e, C.RebeccaError) else ""))
+        await _hide_from_sales(r.username, t_start)
         await asyncio.to_thread(C.unpaid_clear, pid, r.username)
         bal = load_config()["reps"][rid]["balance"]
         await _notify_admins(cfg, f"🔄 نماینده <b>{C.esc(rp['label'] or rp['name'])}</b> کاربر <code>{C.esc(r.username)}</code> را تمدید کرد ({C.esc(r.template)} — {price:,} تومان). موجودی باقی‌مانده: {bal:,}")
