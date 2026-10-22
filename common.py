@@ -26,6 +26,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.environ.get("REBECCA_CONFIG") or os.path.join(BASE_DIR, "config.json")
 GB = 1024 ** 3
 REP_NOTE_MAX = 100
+WALLET_LOG_MAX = 100
+TOPUP_MAX = 300
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 
 DEFAULT_TEMPLATES = {
@@ -81,6 +83,7 @@ DEFAULT_CFG = {
     "reps": {},          # نمایندگان: {id: {name, label, salt, hash, blocked, created}}
     "rep_users": {},     # کاربرهای هر نماینده: {panel_id: {username: rep_id}}
     "rep_paid": {},      # کاربرهایی که نماینده «پرداخت شد» زده: {panel_id: {username: timestamp}}
+    "topups": [],        # درخواست‌های افزایش موجودی نماینده‌ها: [{id, rid, amount, note, ts, status: pending|approved|rejected, done}]
     "rep_notes": {},     # اسم/یادداشت نماینده برای هر کاربرش: {panel_id: {username: note}}
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
@@ -140,7 +143,8 @@ def _normalize(data: dict) -> dict:
             kind = t.get("kind")
             if kind not in ("single", "group"):   # مهاجرت: نام‌های همکاری ← گروهی، بقیه ← تکی
                 kind = "group" if re.search(r"hamkari|همکار", str(name), re.I) else "single"
-            tpls[str(name)] = {"gb": max(0, _num(t.get("gb", 0))), "days": max(0, int(t.get("days", 0))), "mode": mode, "kind": kind}
+            tpls[str(name)] = {"gb": max(0, _num(t.get("gb", 0))), "days": max(0, int(t.get("days", 0))), "mode": mode, "kind": kind,
+                          "price": max(0, int(_num(t.get("price", 0))))}
         except (TypeError, ValueError, AttributeError):
             continue
     if not tpls:
@@ -234,8 +238,21 @@ def _normalize(data: dict) -> dict:
         if isinstance(r, dict) and r.get("name") and r.get("salt") and r.get("hash"):
             reps[str(rid)] = {"name": str(r["name"]), "label": str(r.get("label") or "")[:60], "salt": str(r["salt"]), "hash": str(r["hash"]),
                               "blocked": bool(r.get("blocked")), "created": int(r.get("created") or 0),
-                              "locked": bool(r.get("locked")), "fails": max(0, int(r.get("fails") or 0)), "locked_at": int(r.get("locked_at") or 0)}
+                              "locked": bool(r.get("locked")), "fails": max(0, int(r.get("fails") or 0)), "locked_at": int(r.get("locked_at") or 0),
+                              "balance": int(r.get("balance") or 0), "panel": str(r.get("panel") or ""),
+                              "tpls": [str(x) for x in (r.get("tpls") if isinstance(r.get("tpls"), list) else []) if str(x) in tpls],
+                              "log": [e for e in (r.get("log") if isinstance(r.get("log"), list) else []) if isinstance(e, dict)][-WALLET_LOG_MAX:]}
     cfg["reps"] = reps
+    tu = []
+    for t in (cfg.get("topups") if isinstance(cfg.get("topups"), list) else []):
+        try:
+            if isinstance(t, dict) and str(t.get("rid")) in reps:
+                tu.append({"id": str(t["id"]), "rid": str(t["rid"]), "amount": max(0, int(t.get("amount") or 0)), "note": str(t.get("note") or "")[:200],
+                           "ts": int(t.get("ts") or 0), "status": t.get("status") if t.get("status") in ("pending", "approved", "rejected") else "pending",
+                           "done": int(t.get("done") or 0)})
+        except (TypeError, ValueError, KeyError):
+            continue
+    cfg["topups"] = tu[-TOPUP_MAX:]
     ru = {}
     for pid, m in (cfg.get("rep_users") if isinstance(cfg.get("rep_users"), dict) else {}).items():
         if isinstance(m, dict):
@@ -467,7 +484,8 @@ def create_rep(name: str, password: str = "", label: str = "") -> dict:
             raise ValueError("این نام کاربری قبلاً استفاده شده است.")
         rid = "r" + secrets.token_hex(4)
         c["reps"][rid] = {"name": name, "label": (label or "").strip()[:60], **hash_password(password), "blocked": False, "created": int(time.time()),
-                          "locked": False, "fails": 0, "locked_at": 0}
+                          "locked": False, "fails": 0, "locked_at": 0,
+                          "balance": 0, "panel": "", "tpls": [], "log": []}
         out.update(id=rid, name=name)
     update_config(mut)
     return {**out, "password": password}
@@ -677,6 +695,76 @@ def set_rep_paid(rid: str, pid: str, username: str, paid: bool) -> bool:
             m.pop(username, None)
     update_config(mut)
     return bool(paid)
+
+
+# ───────────────────────────── کیف پول نماینده ─────────────────────────────
+def _wlog(c: dict, rid: str, kind: str, amount: int, note: str = "") -> None:
+    r = c["reps"][rid]
+    r["log"] = (r.get("log", []) + [{"ts": int(time.time()), "type": kind, "amount": int(amount), "balance": r["balance"], "note": str(note)[:120]}])[-WALLET_LOG_MAX:]
+
+
+def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "") -> int:
+    """موجودی نماینده را با `amount` (مثبت = شارژ، منفی = کسر) تغییر می‌دهد؛ موجودی جدید را برمی‌گرداند. موجودی منفی مجاز نیست."""
+    amount = int(amount)
+    out = {}
+
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        nb = c["reps"][rid]["balance"] + amount
+        if nb < 0:
+            raise ValueError("موجودی کافی نیست.")
+        if nb > 10 ** 11:
+            raise ValueError("سقف موجودی رد می‌شود.")
+        c["reps"][rid]["balance"] = nb
+        _wlog(c, rid, kind, amount, note)
+        out["b"] = nb
+    update_config(mut)
+    return out["b"]
+
+
+def set_rep_templates(rid: str, names: list[str]) -> list[str]:
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        c["reps"][rid]["tpls"] = [n for n in dict.fromkeys(names) if n in c["templates"]]
+    return update_config(mut)["reps"][rid]["tpls"]
+
+
+def topup_add(rid: str, amount: int, note: str = "") -> dict:
+    rec = {}
+
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        if sum(1 for t in c["topups"] if t["rid"] == rid and t["status"] == "pending") >= 5:
+            raise ValueError("۵ درخواست در انتظار دارید؛ تا بررسی ادمین صبر کنید.")
+        rec.update(id="t" + secrets.token_hex(4), rid=rid, amount=int(amount), note=str(note).strip()[:200], ts=int(time.time()), status="pending", done=0)
+        c["topups"].append(dict(rec))
+    update_config(mut)
+    return rec
+
+
+def topup_resolve(tid: str, approve: bool, amount: int | None = None) -> dict:
+    """تأیید (با شارژ کیف پول؛ مبلغ قابل اصلاح) یا رد درخواست."""
+    out = {}
+
+    def mut(c):
+        t = next((x for x in c["topups"] if x["id"] == tid), None)
+        if not t or t["status"] != "pending":
+            raise ValueError("این درخواست قبلاً بررسی شده یا وجود ندارد.")
+        if approve:
+            amt = int(amount if amount is not None else t["amount"])
+            if amt <= 0:
+                raise ValueError("مبلغ نامعتبر است.")
+            c["reps"][t["rid"]]["balance"] += amt
+            _wlog(c, t["rid"], "topup", amt, "تأیید درخواست افزایش موجودی")
+            t["amount"] = amt
+        t["status"] = "approved" if approve else "rejected"
+        t["done"] = int(time.time())
+        out.update(t)
+    update_config(mut)
+    return out
 
 
 def rep_owner(cfg: dict, pid: str, username: str) -> str | None:
