@@ -657,6 +657,172 @@ async def rep_status(r: RepStatusReq, rep=Depends(rep_guard)):
     return {"ok": True, "status": _slim_rep(u, api)["status"]}
 
 
+def _rep_templates(cfg: dict, rep: dict) -> dict:
+    """تمپلت‌هایی که ادمین برای این نماینده فعال کرده و قیمت دارند."""
+    return {n: cfg["templates"][n] for n in rep["tpls"] if n in cfg["templates"] and cfg["templates"][n].get("price", 0) > 0}
+
+
+async def _notify_admins(cfg: dict, text: str):
+    if not (cfg["bot_token"] and cfg["admin_ids"]):
+        return
+    bot = _tg_bot(cfg["bot_token"])
+    for uid in cfg["admin_ids"]:
+        try:
+            await bot.send_message(uid, text[:4000], parse_mode="HTML")
+        except Exception:  # noqa: BLE001
+            log.warning("notify admin %s failed", uid)
+
+
+_money_locks: dict[str, asyncio.Lock] = {}
+_money_hits: dict[str, list[float]] = {}
+
+
+def _money_guard(rid: str) -> asyncio.Lock:
+    """محدودیت عملیات مالی نماینده (حداکثر ۱۵ بار در دقیقه) و قفل اختصاصی تا دو درخواست هم‌زمان از یک موجودی خرج نکنند."""
+    now = time.time()
+    hits = [t for t in _money_hits.get(rid, []) if now - t < 60]
+    if len(hits) >= 15:
+        raise HTTPException(429, "تعداد درخواست‌ها زیاد است؛ یک دقیقه بعد دوباره تلاش کنید.")
+    hits.append(now)
+    _money_hits[rid] = hits
+    return _money_locks.setdefault(rid, asyncio.Lock())
+
+
+@app.get("/api/rep/wallet")
+async def rep_wallet(rep=Depends(rep_guard)):
+    rid, rp = rep
+    cfg = load_config()
+    rp = cfg["reps"][rid]
+    return {"balance": rp["balance"],
+            "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t["price"], "kind": t.get("kind", "single")} for n, t in _rep_templates(cfg, rp).items()],
+            "log": list(reversed(rp["log"]))[:30],
+            "topups": [t for t in reversed(cfg["topups"]) if t["rid"] == rid][:15]}
+
+
+class RepTopupReq(BaseModel):
+    amount: int = Field(ge=1000, le=10 ** 10)
+    note: str = Field(default="", max_length=200)
+
+
+@app.post("/api/rep/topup")
+async def rep_topup(r: RepTopupReq, rep=Depends(rep_guard)):
+    rid = rep[0]
+    try:
+        rec = await asyncio.to_thread(C.topup_add, rid, r.amount, r.note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    cfg = load_config()
+    rp = cfg["reps"][rid]
+    await _notify_admins(cfg, f"💰 <b>درخواست افزایش موجودی</b>\nنماینده: <b>{C.esc(rp['label'] or rp['name'])}</b> ({C.esc(rp['name'])})\nمبلغ: <b>{r.amount:,}</b> تومان"
+                         + (f"\nتوضیح: {C.esc(r.note)}" if r.note else "") + "\n\nاز وب‌پنل ← تنظیمات ← نماینده‌ها بررسی کنید.")
+    return {"ok": True, "id": rec["id"]}
+
+
+class RepBuyReq(BaseModel):
+    template: str = Field(min_length=1, max_length=40)
+    username: str = Field(default="", max_length=32)
+    note: str = Field(default="", max_length=100)
+
+
+@app.post("/api/rep/buy")
+async def rep_buy(r: RepBuyReq, rep=Depends(rep_guard)):
+    """ساخت اکانت با تمپلت مجاز نماینده؛ قیمت از کیف پول کم می‌شود و اگر ساخت ناموفق بود برمی‌گردد."""
+    rid = rep[0]
+    async with _money_guard(rid):
+        return await _rep_buy(r, rid)
+
+
+async def _rep_buy(r: RepBuyReq, rid: str):
+    cfg = load_config()
+    rp = cfg["reps"][rid]
+    tpl = _rep_templates(cfg, rp).get(r.template)
+    if not tpl:
+        raise HTTPException(403, "این تمپلت برای شما فعال نیست.")
+    pid = rp["panel"] if rp["panel"] and get_panel(cfg, rp["panel"]) else cfg["active_panel"]
+    api = get_api(pid)
+    if not api.is_configured():
+        raise HTTPException(502, "پنل در دسترس نیست؛ به ادمین اطلاع دهید.")
+    price = int(tpl["price"])
+    if rp["balance"] < price:
+        raise HTTPException(402, f"موجودی کافی نیست. قیمت: {price:,} تومان — موجودی شما: {rp['balance']:,} تومان")
+    svc = C.pick_default_service(await api.list_services(), tpl.get("kind") == "group")
+    if svc is None:
+        raise HTTPException(502, "سرویس مناسب در پنل پیدا نشد؛ به ادمین اطلاع دهید.")
+    name = r.username.strip()
+    if name:
+        names = C.make_names(name, None, 1, 1)
+    else:
+        prefix = cfg["default_prefix"]
+        nx = await sales.next_number(api, prefix, len(cfg["panels"]) <= 1)
+        names = C.make_names(prefix, int(nx.get("next") or 1), 1, 1)
+    try:
+        await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"ساخت اکانت {names[0]} — {r.template}")
+    except ValueError:
+        raise HTTPException(402, "موجودی کافی نیست.")
+    results, failed = [], []
+    for attempt in range(4 if not name else 1):                        # نام خودکار: اگر هم‌زمان کسی همان شماره را گرفت، شماره‌ی بعدی
+        try:
+            results, failed = await C.create_users(api, names, tpl, svc, concurrency=1)
+        except Exception:  # noqa: BLE001
+            results, failed = [], [(names[0], "خطای پنل")]
+        if results or name or not failed or "قبل" not in failed[0][1]:
+            break
+        m = re.fullmatch(r"(.*?)(\d+)", names[0])
+        names = C.make_names(m.group(1), int(m.group(2)) + 1, 1, 1) if m else names
+    if not results:
+        await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — ساخت {names[0]} ناموفق بود")
+        raise HTTPException(400, "ساخت اکانت ناموفق بود: " + (failed[0][1] if failed else "نامشخص") + " — مبلغ برگشت داده شد.")
+    await asyncio.to_thread(C.assign_users, rid, pid, [results[0]["username"]])
+    if r.note.strip():
+        try:
+            await asyncio.to_thread(C.set_rep_note, rid, pid, results[0]["username"], r.note)
+        except ValueError:
+            pass
+    bal = load_config()["reps"][rid]["balance"]
+    await _notify_admins(cfg, f"🛒 نماینده <b>{C.esc(rp['label'] or rp['name'])}</b> اکانت <code>{C.esc(results[0]['username'])}</code> ساخت ({C.esc(r.template)} — {price:,} تومان). موجودی باقی‌مانده: {bal:,}")
+    return {"ok": True, "username": results[0]["username"], "sub": results[0]["sub"], "balance": bal, "gb": tpl["gb"], "days": tpl["days"]}
+
+
+class RepRenewReq(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    pid: str = Field(default="", max_length=20)
+    template: str = Field(min_length=1, max_length=40)
+
+
+@app.post("/api/rep/renew")
+async def rep_renew(r: RepRenewReq, rep=Depends(rep_guard)):
+    """تمدید کاربرِ خود نماینده با تمپلت مجاز؛ قیمت تمپلت از کیف پول کم می‌شود (ناموفق ← برگشت وجه)."""
+    rid = rep[0]
+    async with _money_guard(rid):
+        cfg = load_config()
+        rp = cfg["reps"][rid]
+        pids = [p for p, m in cfg["rep_users"].items() if m.get(r.username) == rid and (not r.pid or p == r.pid)]
+        if not pids:
+            raise HTTPException(404, "این کاربر در لیست شما نیست.")
+        pid = pids[0]
+        tpl = _rep_templates(cfg, rp).get(r.template)
+        if not tpl:
+            raise HTTPException(403, "این تمپلت برای شما فعال نیست.")
+        api = get_api(pid)
+        if not api.is_configured():
+            raise HTTPException(502, "پنل در دسترس نیست؛ به ادمین اطلاع دهید.")
+        price = int(tpl["price"])
+        try:
+            await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"تمدید {r.username} — {r.template}")
+        except ValueError:
+            raise HTTPException(402, f"موجودی کافی نیست. قیمت: {price:,} تومان — موجودی شما: {rp['balance']:,} تومان")
+        try:
+            await C.renew_user(api, r.username, dict(tpl), reset_usage=True)
+            res = await api.request("GET", api.upath(r.username))
+        except Exception as e:  # noqa: BLE001
+            await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — تمدید {r.username} ناموفق بود")
+            raise HTTPException(400, "تمدید ناموفق بود؛ مبلغ برگشت داده شد." + (f" ({e})" if isinstance(e, C.RebeccaError) else ""))
+        await asyncio.to_thread(C.unpaid_clear, pid, r.username)
+        bal = load_config()["reps"][rid]["balance"]
+        await _notify_admins(cfg, f"🔄 نماینده <b>{C.esc(rp['label'] or rp['name'])}</b> کاربر <code>{C.esc(r.username)}</code> را تمدید کرد ({C.esc(r.template)} — {price:,} تومان). موجودی باقی‌مانده: {bal:,}")
+        return {"ok": True, "balance": bal, "user": _slim_rep(res, api)}
+
+
 @app.get("/api/rep/qr")
 async def rep_qr(text: str = Query(..., min_length=1, max_length=2000), rep=Depends(rep_guard)):
     png = await asyncio.to_thread(C.make_qr_png, text)
@@ -700,8 +866,9 @@ async def reps_list():
         for r in m.values():
             cnt[r] = cnt.get(r, 0) + 1
     return {"reps": [{"id": i, "name": r["name"], "label": r["label"], "blocked": r["blocked"], "locked": r["locked"], "fails": r["fails"], "locked_at": r["locked_at"],
-                      "count": cnt.get(i, 0), "created": r["created"]}
-                     for i, r in cfg["reps"].items()]}
+                      "count": cnt.get(i, 0), "created": r["created"], "balance": r["balance"], "tpls": r["tpls"], "panel": r["panel"]}
+                     for i, r in cfg["reps"].items()],
+            "topups": [{**t, "rep": cfg["reps"][t["rid"]]["label"] or cfg["reps"][t["rid"]]["name"]} for t in cfg["topups"] if t["status"] == "pending"]}
 
 
 @app.post("/api/reps", dependencies=[Depends(guard)])
@@ -730,6 +897,63 @@ async def reps_unlock(rid: str):
 async def reps_delete(rid: str):
     await asyncio.to_thread(C.delete_rep, rid)
     return {"ok": True}
+
+
+class WalletReq(BaseModel):
+    amount: int = Field(ge=-10 ** 10, le=10 ** 10)
+    note: str = Field(default="", max_length=120)
+
+
+@app.post("/api/reps/{rid}/wallet", dependencies=[Depends(guard)])
+async def reps_wallet(rid: str, r: WalletReq):
+    """شارژ (مبلغ مثبت) یا کسر (مبلغ منفی) موجودی نماینده توسط ادمین."""
+    if r.amount == 0:
+        raise HTTPException(400, "مبلغ را وارد کنید.")
+    b = await asyncio.to_thread(C.wallet_adjust, rid, r.amount, "charge" if r.amount > 0 else "deduct", r.note or ("شارژ توسط ادمین" if r.amount > 0 else "کسر توسط ادمین"))
+    return {"ok": True, "balance": b}
+
+
+class RepTplsReq(BaseModel):
+    names: list[str] = Field(default_factory=list, max_length=200)
+
+
+@app.post("/api/reps/{rid}/templates", dependencies=[Depends(guard)])
+async def reps_templates(rid: str, r: RepTplsReq):
+    return {"ok": True, "tpls": await asyncio.to_thread(C.set_rep_templates, rid, r.names)}
+
+
+class RepPanelReq(BaseModel):
+    panel: str = Field(default="", max_length=20)
+
+
+@app.post("/api/reps/{rid}/panel", dependencies=[Depends(guard)])
+async def reps_panel(rid: str, r: RepPanelReq):
+    cfg = load_config()
+    if rid not in cfg["reps"]:
+        raise HTTPException(404, "نماینده پیدا نشد.")
+    if r.panel and not get_panel(cfg, r.panel):
+        raise HTTPException(404, "پنل پیدا نشد.")
+    update_config(lambda c: c["reps"][rid].__setitem__("panel", r.panel))
+    return {"ok": True}
+
+
+class TopupResolveReq(BaseModel):
+    approve: bool
+    amount: int | None = Field(default=None, ge=1, le=10 ** 10)
+
+
+@app.post("/api/topups/{tid}", dependencies=[Depends(guard)])
+async def topup_resolve(tid: str, r: TopupResolveReq):
+    t = await asyncio.to_thread(C.topup_resolve, tid, r.approve, r.amount)
+    return {"ok": True, "status": t["status"]}
+
+
+@app.get("/api/reps/{rid}/log", dependencies=[Depends(guard)])
+async def reps_log(rid: str):
+    rp = load_config()["reps"].get(rid)
+    if not rp:
+        raise HTTPException(404, "نماینده پیدا نشد.")
+    return {"balance": rp["balance"], "log": list(reversed(rp["log"]))[:50]}
 
 
 @app.post("/api/reps/{rid}/assign", dependencies=[Depends(guard)])
@@ -1001,6 +1225,7 @@ class TplReq(BaseModel):
     days: int = Field(ge=0, le=36500)
     mode: str = Field(pattern="^(on_hold|active)$")
     kind: str = Field(default="single", pattern="^(single|group)$")
+    price: int = Field(default=0, ge=0, le=10 ** 10)             # قیمت فروش به نماینده‌ها (تومان)
 
 
 @app.post("/api/templates", dependencies=[Depends(guard)])
@@ -1015,8 +1240,11 @@ async def tpl_save(r: TplReq):
             raise ValueError("نام تمپلت تکراری است.")
         items = [(r.name if k == old else k, v) for k, v in c["templates"].items()]
         d = dict(items)
-        d[r.name] = {"gb": gb, "days": r.days, "mode": r.mode, "kind": r.kind}
+        d[r.name] = {"gb": gb, "days": r.days, "mode": r.mode, "kind": r.kind, "price": r.price}
         c["templates"] = d
+        if r.name != old:                                              # تغییر نام: انتخاب تمپلت‌های نماینده‌ها هم به‌روز شود
+            for rp in c["reps"].values():
+                rp["tpls"] = [r.name if x == old else x for x in rp.get("tpls", [])]
         if c["active_template"] == old or c["active_template"] not in d:
             c["active_template"] = r.name
         if c.get("active_group_template") == old:
