@@ -720,7 +720,6 @@ async def rep_topup(r: RepTopupReq, rep=Depends(rep_guard)):
 
 class RepBuyReq(BaseModel):
     template: str = Field(min_length=1, max_length=40)
-    username: str = Field(default="", max_length=32)
     note: str = Field(default="", max_length=100)
 
 
@@ -748,13 +747,10 @@ async def _rep_buy(r: RepBuyReq, rid: str):
     svc = C.pick_default_service(await api.list_services(), tpl.get("kind") == "group")
     if svc is None:
         raise HTTPException(502, "سرویس مناسب در پنل پیدا نشد؛ به ادمین اطلاع دهید.")
-    name = r.username.strip()
-    if name:
-        names = C.make_names(name, None, 1, 1)
-    else:
-        prefix = cfg["default_prefix"]
-        nx = await sales.next_number(api, prefix, len(cfg["panels"]) <= 1)
-        names = C.make_names(prefix, int(nx.get("next") or 1), 1, 1)
+    name = ""                                                          # نام کاربری را نماینده تعیین نمی‌کند؛ همیشه شماره‌ی بعدیِ پنل
+    prefix = cfg["default_prefix"]
+    nx = await sales.next_number(api, prefix, len(cfg["panels"]) <= 1)
+    names = C.make_names(prefix, int(nx.get("next") or 1), 1, 1)
     try:
         await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"ساخت اکانت {names[0]} — {r.template}")
     except ValueError:
