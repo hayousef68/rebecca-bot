@@ -1292,7 +1292,7 @@ async def settings_get():
                "has_password": bool(p["password"]), "verify_ssl": p["verify_ssl"]} for p in c["panels"]]
     return {"panels": panels, "active_panel": c["active_panel"], "bot_token": _mask(c["bot_token"]),
             "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin"), "web_port": c["web_port"],
-            "backup_enabled": c["backup"]["enabled"], "default_prefix": c["default_prefix"],
+            "backup_enabled": c["backup"]["enabled"], "backup_interval": c["backup"]["interval_min"], "default_prefix": c["default_prefix"],
             "unpaid_hours": c["unpaid"]["hours"], "unpaid_count": sum(len(m) for m in c["unpaid"]["pending"].values())}
 
 
@@ -1405,6 +1405,7 @@ async def ssl_save(r: SslReq, request: Request):
 # ───────────────────────────── بکاپ و بازیابی ─────────────────────────────
 class BackupSettingsReq(BaseModel):
     enabled: bool
+    interval_min: int | None = Field(default=None, ge=5, le=1440)       # ۱۴۴۰ = روزانه؛ کمتر = هر N دقیقه (فقط در صورت تغییر)
 
 
 class RestoreReq(BaseModel):
@@ -1423,7 +1424,11 @@ async def backup_download():
 
 @app.post("/api/backup/settings", dependencies=[Depends(guard)])
 async def backup_settings(r: BackupSettingsReq):
-    update_config(lambda c: c["backup"].__setitem__("enabled", r.enabled))
+    def mut(c):
+        c["backup"]["enabled"] = r.enabled
+        if r.interval_min is not None:
+            c["backup"]["interval_min"] = r.interval_min
+    update_config(mut)
     return {"ok": True}
 
 
@@ -1471,7 +1476,8 @@ async def backup_restore(r: RestoreReq):
     except Exception:  # noqa: BLE001
         log.warning("ریستارت خودکار ربات ممکن نشد")
     return {"ok": True, "panels": len(new["panels"]), "web_changed": web_changed, "safety": os.path.basename(safety) if safety else None,
-            "reps": len(new["reps"]), "rep_users": C.backup_summary(new)["rep_users"], "reps_kept": "reps" not in data}
+            "reps": len(new["reps"]), "rep_users": C.backup_summary(new)["rep_users"], "reps_kept": "reps" not in data,
+            "balance": sum(x["balance"] for x in new["reps"].values()), "topups": len(new["topups"])}
 
 
 class PanelReq(BaseModel):
