@@ -609,6 +609,8 @@ async def rep_note(r: RepNoteReq, rep=Depends(rep_guard)):
         note = await asyncio.to_thread(C.set_rep_note, rid, pids[0], r.username, r.note)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    rep_name = cfg.get("reps", {}).get(rid, {}).get("name", rid)
+    C.audit_event(f"نماینده: {rep_name}", "تغییر یادداشت کاربر", r.username, note)
     return {"ok": True, "note": note}
 
 
@@ -630,6 +632,8 @@ async def rep_paid(r: RepPaidReq, rep=Depends(rep_guard)):
         paid = await asyncio.to_thread(C.set_rep_paid, rid, pids[0], r.username, r.paid)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    rep_name = cfg.get("reps", {}).get(rid, {}).get("name", rid)
+    C.audit_event(f"نماینده: {rep_name}", "تغییر وضعیت پرداخت مشتری", r.username, "پرداخت شد" if paid else "پرداخت نشده")
     return {"ok": True, "paid": paid}
 
 
@@ -654,6 +658,8 @@ async def rep_status(r: RepStatusReq, rep=Depends(rep_guard)):
     u = await api.request("PUT", api.upath(r.username), json={"status": "active" if r.enabled else "disabled"})
     if r.enabled:                                                  # فعال‌سازی دستی ← شمارش معکوس «واریز نشده»ی قبلی لغو شود
         await asyncio.to_thread(C.unpaid_clear, pid, r.username)
+    rep_name = cfg.get("reps", {}).get(rid, {}).get("name", rid)
+    C.audit_event(f"نماینده: {rep_name}", "تغییر وضعیت اشتراک", r.username, "فعال" if r.enabled else "غیرفعال")
     return {"ok": True, "status": _slim_rep(u, api)["status"]}
 
 
@@ -671,6 +677,16 @@ async def _notify_admins(cfg: dict, text: str):
             await bot.send_message(uid, text[:4000], parse_mode="HTML")
         except Exception:  # noqa: BLE001
             log.warning("notify admin %s failed", uid)
+
+
+async def _notify_low_wallet(rid: str, balance: int):
+    cfg = load_config()
+    alerts = cfg.get("smart_alerts", {})
+    threshold = int(alerts.get("low_wallet_threshold", 100000))
+    if not alerts.get("low_rep_wallet", True) or balance > threshold:
+        return
+    rp = cfg.get("reps", {}).get(rid, {})
+    await _notify_admins(cfg, f"⚠️ <b>موجودی کم نماینده</b>\nنماینده: <b>{C.esc(rp.get('label') or rp.get('name') or rid)}</b>\nموجودی فعلی: <b>{balance:,} تومان</b> (حد هشدار: {threshold:,} تومان)")
 
 
 _money_locks: dict[str, asyncio.Lock] = {}
@@ -722,7 +738,8 @@ async def rep_topup(r: RepTopupReq, rep=Depends(rep_guard)):
         raise HTTPException(400, str(e))
     cfg = load_config()
     rp = cfg["reps"][rid]
-    await _notify_admins(cfg, f"💰 <b>درخواست افزایش موجودی</b>\nنماینده: <b>{C.esc(rp['label'] or rp['name'])}</b> ({C.esc(rp['name'])})\nمبلغ: <b>{r.amount:,}</b> تومان"
+    if cfg.get("smart_alerts", {}).get("topup_request", True):
+        await _notify_admins(cfg, f"💰 <b>درخواست افزایش موجودی</b>\nنماینده: <b>{C.esc(rp['label'] or rp['name'])}</b> ({C.esc(rp['name'])})\nمبلغ: <b>{r.amount:,}</b> تومان"
                          + (f"\nتوضیح: {C.esc(r.note)}" if r.note else "") + "\n\nاز وب‌پنل ← تنظیمات ← نماینده‌ها بررسی کنید.")
     return {"ok": True, "id": rec["id"]}
 
@@ -781,6 +798,7 @@ async def _rep_buy(r: RepBuyReq, rid: str):
     t_start = time.time()
     try:
         await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"ساخت اکانت {names[0]} — {r.template}")
+        await _notify_low_wallet(rid, load_config()["reps"][rid]["balance"])
     except ValueError:
         raise HTTPException(402, "موجودی کافی نیست.")
     results, failed = [], []
@@ -835,6 +853,7 @@ async def rep_renew(r: RepRenewReq, rep=Depends(rep_guard)):
         t_start = time.time()
         try:
             await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"تمدید {r.username} — {r.template}")
+            await _notify_low_wallet(rid, load_config()["reps"][rid]["balance"])
         except ValueError:
             raise HTTPException(402, f"موجودی کافی نیست. قیمت: {price:,} تومان — موجودی شما: {rp['balance']:,} تومان")
         try:
@@ -920,17 +939,22 @@ async def reps_list():
 
 @app.post("/api/reps", dependencies=[Depends(guard)])
 async def reps_create(r: RepCreateReq):
-    return await asyncio.to_thread(C.create_rep, r.name, r.password, r.label)
+    result = await asyncio.to_thread(C.create_rep, r.name, r.password, r.label)
+    C.audit_event("ادمین وب‌پنل", "ساخت نماینده", r.name, f"نام نمایشی: {r.label}")
+    return result
 
 
 @app.post("/api/reps/{rid}/password", dependencies=[Depends(guard)])
 async def reps_password(rid: str, r: RepPwReq):
-    return {"password": await asyncio.to_thread(C.reset_rep_password, rid, r.password)}
+    result = await asyncio.to_thread(C.reset_rep_password, rid, r.password)
+    C.audit_event("ادمین وب‌پنل", "تغییر رمز نماینده", rid, "رمز بازنشانی شد؛ مقدار رمز ثبت نمی‌شود")
+    return {"password": result}
 
 
 @app.post("/api/reps/{rid}/block", dependencies=[Depends(guard)])
 async def reps_block(rid: str, r: RepBlockReq):
     await asyncio.to_thread(C.set_rep_blocked, rid, r.blocked)
+    C.audit_event("ادمین وب‌پنل", "تغییر وضعیت نماینده", rid, "مسدود" if r.blocked else "رفع مسدودی")
     return {"ok": True}
 
 
@@ -942,7 +966,9 @@ async def reps_unlock(rid: str):
 
 @app.post("/api/reps/{rid}/delete", dependencies=[Depends(guard)])
 async def reps_delete(rid: str):
+    cfg_before = load_config(); rep_name = cfg_before.get("reps", {}).get(rid, {}).get("name", rid)
     await asyncio.to_thread(C.delete_rep, rid)
+    C.audit_event("ادمین وب‌پنل", "حذف نماینده", rep_name, "نماینده و ارتباط‌های ثبت‌شده حذف شدند")
     return {"ok": True}
 
 
@@ -957,6 +983,7 @@ async def reps_wallet(rid: str, r: WalletReq):
     if r.amount == 0:
         raise HTTPException(400, "مبلغ را وارد کنید.")
     b = await asyncio.to_thread(C.wallet_adjust, rid, r.amount, "charge" if r.amount > 0 else "deduct", r.note or ("شارژ توسط ادمین" if r.amount > 0 else "کسر توسط ادمین"))
+    await _notify_low_wallet(rid, b)
     return {"ok": True, "balance": b}
 
 
@@ -966,7 +993,9 @@ class RepTplsReq(BaseModel):
 
 @app.post("/api/reps/{rid}/templates", dependencies=[Depends(guard)])
 async def reps_templates(rid: str, r: RepTplsReq):
-    return {"ok": True, "tpls": await asyncio.to_thread(C.set_rep_templates, rid, r.names)}
+    result = await asyncio.to_thread(C.set_rep_templates, rid, r.names)
+    C.audit_event("ادمین وب‌پنل", "تغییر تمپلت‌های نماینده", rid, ", ".join(result))
+    return {"ok": True, "tpls": result}
 
 
 class RepPanelReq(BaseModel):
@@ -981,6 +1010,7 @@ async def reps_panel(rid: str, r: RepPanelReq):
     if r.panel and not get_panel(cfg, r.panel):
         raise HTTPException(404, "پنل پیدا نشد.")
     update_config(lambda c: c["reps"][rid].__setitem__("panel", r.panel))
+    C.audit_event("ادمین وب‌پنل", "تغییر پنل نماینده", rid, f"پنل: {r.panel or 'پنل فعال'}")
     return {"ok": True}
 
 
@@ -1009,6 +1039,7 @@ async def reps_assign(rid: str, r: RepSpecReq, panel: str | None = Query(None, m
     if not names:
         raise HTTPException(400, "نام کاربری یا بازه را وارد کنید.")
     n = await asyncio.to_thread(C.assign_users, rid, _rep_pid(panel), names)
+    C.audit_event("ادمین وب‌پنل", "افزودن کاربران به نماینده", rid, f"پنل: {_rep_pid(panel)}؛ تعداد: {n}؛ کاربران: {', '.join(names[:30])}")
     return {"added": n}
 
 
@@ -1017,7 +1048,9 @@ async def reps_unassign(rid: str, r: RepSpecReq, panel: str | None = Query(None,
     names = C.parse_user_spec(r.prefix, r.start, r.end, r.names)
     if not names:
         raise HTTPException(400, "نام کاربری یا بازه را وارد کنید.")
-    return {"removed": await asyncio.to_thread(C.unassign_users, rid, _rep_pid(panel), names)}
+    n = await asyncio.to_thread(C.unassign_users, rid, _rep_pid(panel), names)
+    C.audit_event("ادمین وب‌پنل", "حذف کاربران از نماینده", rid, f"پنل: {_rep_pid(panel)}؛ تعداد: {n}؛ کاربران: {', '.join(names[:30])}")
+    return {"removed": n}
 
 
 # ───────────────────────────── کاربران ─────────────────────────────
@@ -1340,7 +1373,8 @@ async def settings_get():
     return {"panels": panels, "active_panel": c["active_panel"], "bot_token": _mask(c["bot_token"]),
             "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin"), "web_port": c["web_port"],
             "backup_enabled": c["backup"]["enabled"], "backup_interval": c["backup"]["interval_min"], "default_prefix": c["default_prefix"],
-            "unpaid_hours": c["unpaid"]["hours"], "unpaid_count": sum(len(m) for m in c["unpaid"]["pending"].values())}
+            "unpaid_hours": c["unpaid"]["hours"], "unpaid_count": sum(len(m) for m in c["unpaid"]["pending"].values()),
+            "smart_alerts": c.get("smart_alerts", {}), "audit_count": len(c.get("audit_log", []))}
 
 
 class SettingsReq(BaseModel):
@@ -1349,6 +1383,11 @@ class SettingsReq(BaseModel):
     web_password: str | None = Field(default=None, min_length=8, max_length=128)
     default_prefix: str | None = Field(default=None, max_length=28)       # اسم پیش‌فرض کاربر جدید (مثلاً MS_)
     unpaid_hours: int | None = Field(default=None, ge=1, le=24 * 365)     # مهلت غیرفعال‌سازی خودکارِ «واریز نشده» (ساعت)
+    alert_low_rep_wallet: bool | None = None
+    alert_panel_down: bool | None = None
+    alert_backup_failed: bool | None = None
+    alert_topup_request: bool | None = None
+    alert_low_wallet_threshold: int | None = Field(default=None, ge=0, le=10**10)
 
 
 @app.post("/api/settings", dependencies=[Depends(guard)])
@@ -1373,6 +1412,13 @@ async def settings_save(r: SettingsReq):
             c["default_prefix"] = pre
         if r.unpaid_hours is not None:
             c["unpaid"]["hours"] = r.unpaid_hours
+        alerts = c.setdefault("smart_alerts", {})
+        for field, key in ((r.alert_low_rep_wallet, "low_rep_wallet"), (r.alert_panel_down, "panel_down"),
+                           (r.alert_backup_failed, "backup_failed"), (r.alert_topup_request, "topup_request")):
+            if field is not None:
+                alerts[key] = field
+        if r.alert_low_wallet_threshold is not None:
+            alerts["low_wallet_threshold"] = r.alert_low_wallet_threshold
     update_config(mut)
     if restart_bot:
         try:
@@ -1381,6 +1427,12 @@ async def settings_save(r: SettingsReq):
         except Exception:  # noqa: BLE001
             log.warning("ریستارت خودکار ربات ممکن نشد")
     return {"ok": True, "bot_restarted": restart_bot}
+
+
+@app.get("/api/audit", dependencies=[Depends(guard)])
+async def audit_get(limit: int = Query(100, ge=1, le=500)):
+    cfg = load_config()
+    return {"items": list(reversed(cfg.get("audit_log", [])[-limit:]))}
 
 
 # ───────────────────────────── SSL و پورت وب‌پنل ─────────────────────────────
