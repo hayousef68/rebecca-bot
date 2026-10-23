@@ -757,7 +757,7 @@ def _wlog(c: dict, rid: str, kind: str, amount: int, note: str = "") -> None:
     r["log"] = (r.get("log", []) + [{"ts": int(time.time()), "type": kind, "amount": int(amount), "balance": r["balance"], "note": str(note)[:120]}])[-WALLET_LOG_MAX:]
 
 
-def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "") -> int:
+def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "", sale_meta: dict | None = None) -> int:
     """موجودی نماینده را با `amount` (مثبت = شارژ، منفی = کسر) تغییر می‌دهد؛ موجودی جدید را برمی‌گرداند. موجودی منفی مجاز نیست."""
     amount = int(amount)
     out = {}
@@ -773,7 +773,7 @@ def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "") -
         c["reps"][rid]["balance"] = nb
         _wlog(c, rid, kind, amount, note)
         if kind in ("purchase", "refund") and amount != 0:       # خرید/تمدید (منفی در کیف پول) ← فروش نماینده؛ بازگشت وجه از آن کم می‌شود
-            c["rep_sales"].append({"ts": time.time(), "rid": rid, "amount": -amount})
+            c["rep_sales"].append({"ts": time.time(), "rid": rid, "amount": -amount, **({"meta": dict(sale_meta)} if sale_meta else {})})
         if kind == "charge" and amount > 0:                      # شارژ دستی ادمین ← فروش امروز
             c["wallet_income"].append({"ts": time.time(), "rid": rid, "amount": amount})
         out["b"] = nb
