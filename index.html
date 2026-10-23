@@ -123,6 +123,34 @@ img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:1
   main>*:nth-child(2){animation-delay:.04s}main>*:nth-child(3){animation-delay:.08s}main>*:nth-child(4){animation-delay:.12s}
 }
 
+
+/* ───────── حالت دسکتاپ (PC): خودکار روی صفحه‌ی عریض، یا با دکمه‌ی 🖥/📱 بالای صفحه ───────── */
+html.desk body{padding-bottom:36px;padding-inline-start:104px;font-size:14.5px}
+html.desk header{padding-inline:28px}
+html.desk main{max-width:1040px;padding:22px 24px 30px}
+html.desk nav{inset:auto;top:76px;inset-inline-start:14px;bottom:auto;width:80px;max-width:none;margin:0;grid-template-columns:1fr;gap:4px;border-radius:20px}
+html.desk nav button{padding:11px 0 9px;font-size:12px}
+html.desk nav button:hover{background:var(--s2);color:var(--tx)}
+html.desk nav button.on::after{bottom:3px}
+html.desk .toast{inset:auto 16px 28px 16px}
+html.desk .card{padding:20px}
+html.desk .stat{grid-template-columns:repeat(4,1fr)}
+html.desk .stat div.wide{grid-column:1/-1}
+html.desk .tiles{grid-template-columns:repeat(6,1fr)}
+html.desk .hero .mini{grid-template-columns:repeat(6,1fr)}
+html.desk .btn{width:auto;min-width:140px}
+html.desk .btns .btn{flex:0 1 auto}
+html.desk .row>*,html.desk .cols>div{min-width:0}
+html.desk .item>summary,html.desk .item>.head{padding:14px 18px}
+html.desk .item .body{padding:0 18px 18px}
+html.desk .drawer{width:340px}
+html.desk .scrim.on{cursor:pointer}
+html.desk img.qr{width:260px}
+html.desk .item:hover{border-color:#4a6479}
+html.desk body:has(nav[hidden]){padding-inline-start:0}
+.deskbtn{display:none}
+@media (min-width:900px){.deskbtn{display:inline-block}}
+
 [hidden]{display:none!important}
 .tag{display:inline-block;font-style:normal;font-size:10.5px;font-weight:700;padding:1px 8px;border-radius:99px;margin-inline-start:8px;border:1px solid var(--line);color:var(--mu);white-space:nowrap;vertical-align:middle;line-height:1.6}
 .tag.t-active{color:var(--ok);border-color:#3ecf8e55;background:#3ecf8e14}
@@ -202,9 +230,28 @@ mark{background:#f0b42940;color:var(--ac);border-radius:4px;padding:0 2px}
 </style>
 </head>
 <body>
-<header><h1><span class="logo">R</span>پنل مدیریت ربکا</h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:12px"></select><span id="conn" class="pill">…</span><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:11px" aria-label="خروج">خروج</button></div></header>
+<header><h1><span class="logo">R</span>پنل مدیریت ربکا</h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:12px"></select><span id="conn" class="pill">…</span><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:11px" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:11px" aria-label="خروج">خروج</button></div></header>
 <main id="view"></main>
 <nav id="nav"></nav>
+<script>
+(function () {
+  var root = document.documentElement, KEY = 'rb_view';
+  function saved() { try { return localStorage.getItem(KEY); } catch (e) { return null; } }
+  function save(v) { try { localStorage.setItem(KEY, v); } catch (e) {} }
+  function auto() { return window.innerWidth >= 1024 ? 'desk' : 'mob'; }
+  function apply() {
+    var m = saved() || auto();
+    root.classList.toggle('desk', m === 'desk');
+    var b = document.getElementById('deskbtn');
+    if (b) b.textContent = m === 'desk' ? '📱 موبایل' : '🖥 دسکتاپ';
+  }
+  apply();
+  var b = document.getElementById('deskbtn');
+  if (b) b.onclick = function () { save(root.classList.contains('desk') ? 'mob' : 'desk'); apply(); };
+  window.addEventListener('resize', function () { if (!saved()) apply(); });
+})();
+</script>
+
 <div id="toast" class="toast" hidden></div>
 
 <script>
@@ -982,58 +1029,6 @@ function vTpl() {
     h('div', { class: 'card' }, h('h2', {}, 'تمپلت جدید'), field('نام', name), field('نوع', kd), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m), field('قیمت برای نماینده‌ها (تومان)', npr), h('p', { class: 'hint' }, '۰ در حجم/روز یعنی نامحدود. تمپلتِ بدون قیمت برای نماینده قابل خرید نیست.'), h('div', { class: 'btns' }, add)));
 }
 
-/* ───────── پلن بعدی (منتقل‌شده از تب کاربر به تنظیمات): جستجوی کاربر ← مدیریت پلن‌های بعدی ───────── */
-function npEditor() {
-  const box = h('div', { class: 'acc-in' }), res = h('div'), info = h('p', { class: 'hint' }, 'نام کاربری را جستجو و کاربر را انتخاب کنید.');
-  const search = h('input', { type: 'search', placeholder: 'نام کاربری (مثلاً MS_150 یا 150)…', dir: 'ltr', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
-  const entries = Object.entries((S.st && S.st.templates) || {});
-  let seq = 0;
-  const show = u => {
-    const P = `/user/${encodeURIComponent(u.username)}/`;
-    const onUser = r => show(r);
-  const plans = u.next_plans || [];
-  const sendPlans = (list, okMsg) => api(P + 'next-plans', 'POST', { plans: list.map(p => ({ idx: p.idx == null ? null : p.idx, gb: +p.gb || 0, days: +p.days || 0, add_remaining: !!p.add_remaining })) }).then(r => { toast(okMsg); onUser(r); });
-  const nG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
-  const nD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
-  const nrid = 'nr' + Math.random().toString(36).slice(2, 8);
-  const nRem = h('input', { type: 'checkbox', id: nrid });
-  const nTpl = h('select', {}, h('option', { value: '' }, 'پر کردن از تمپلت…'), entries.map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
-  nTpl.onchange = () => { const t = S.st.templates[nTpl.value]; if (t) { nG.value = t.gb; nD.value = t.days; } };
-  const nAdd = h('button', { class: 'btn sm pri', type: 'button' }, '➕ افزودن پلن');
-  nAdd.onclick = () => run(nAdd, async () => {
-    if (!+nG.value && !+nD.value) throw new Error('حجم یا مدت را وارد کنید.');
-    await sendPlans([...plans, { idx: null, gb: nG.value, days: nD.value, add_remaining: nRem.checked }], '✅ پلن بعدی اضافه شد'); });
-  const planRow = (p, i) => { const x = h('button', { class: 'x', type: 'button', 'aria-label': 'حذف' }, '✕');
-    x.onclick = () => { if (!confirm('این پلن بعدی حذف شود؟')) return; run(x, () => sendPlans(plans.filter((_, j) => j !== i), 'پلن حذف شد')); };
-    const fix = p.broken ? h('button', { class: 'x fix', type: 'button', title: 'اصلاح تاریخ پایان' }, '🔧') : null;
-    if (fix) fix.onclick = () => run(fix, () => sendPlans(plans, '✅ پلن اصلاح شد'));
-    return h('div', { class: 'plan' }, h('span', { class: 'n' }, i + 1), h('span', { class: 'v' }, `${fmtG(p.gb)} + ${fmtD(p.days)}`, p.add_remaining ? h('small', {}, ' · باقی‌مانده هم منتقل می‌شود') : null, p.broken ? h('small', { style: 'color:var(--warn)' }, ' · ⚠️ تاریخ پایان اشتباه (۱۹۷۰) — 🔧 را بزنید') : null), fix, x); };
-  const paneNext = h('div', {},
-    h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'وقتی حجم یا زمان کاربر تمام شود، پلن اول «یک‌بار» خودکار به او اضافه می‌شود؛ بعد نوبت پلن بعدی. تاریخ پایان هر پلن = پایان پلن قبلی (یا انقضای فعلی) + روزهای همان پلن.'),
-    plans.length ? h('div', {}, plans.map(planRow)) : h('div', { class: 'banner' }, '⚪ پلن بعدی تعریف نشده'),
-    h('div', { class: 'psec' }, h('b', {}, '➕ پلن جدید')),
-    h('div', { class: 'attach' }, nG, nD, nAdd), nTpl,
-    h('label', { class: 'chk', for: nrid }, nRem, 'حجم باقی‌مانده فعلی هم منتقل شود'),
-    u.np_raw ? h('details', { class: 'tech' }, h('summary', {}, 'جزئیات فنی (JSON پنل)'), h('code', {}, u.np_raw)) : null);
-  res.replaceChildren(h('div', { class: 'psec' }, h('b', {}, '👤 ' + u.username), h('span', {}, `${(u.next_plans || []).length} پلن بعدی`)), paneNext);
-  };
-  const find = async () => {
-    const my = ++seq, q = normQ(search.value);
-    if (!q) { res.replaceChildren(); info.textContent = 'نام کاربری را جستجو و کاربر را انتخاب کنید.'; return; }
-    info.textContent = 'در حال جستجو…';
-    try {
-      const r = await api(`/users?offset=0&limit=8&search=${encodeURIComponent(q)}`);
-      if (my !== seq) return;
-      info.textContent = r.total ? `${r.total} نتیجه${r.total > r.users.length ? ' (۸ مورد اول)' : ''}` : 'کاربری پیدا نشد.';
-      res.replaceChildren(...r.users.map(u => { const b = h('button', { class: 'btn sm', type: 'button', style: 'margin:0 0 6px 6px' }, `${u.username}${(u.next_plans || []).length ? ' •' : ''}`); b.onclick = () => show(u); return b; }));
-    } catch (e) { if (my === seq) info.textContent = e.message; }
-  };
-  search.addEventListener('input', debounce(find, 300));
-  search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); find(); search.blur(); } });
-  box.append(h('div', { class: 'sbox' }, search), info, res);
-  return box;
-}
-
 /* ───────── تنظیمات ───────── */
 async function vSet() {
   let c; try { c = await api('/settings'); await refreshState(); } catch (e) { return mount(h('p', { class: 'err' }, e.message)); }   // refreshState: تمپلت‌ها و قیمت‌های به‌روز برای انتخاب تمپلت نماینده
@@ -1172,7 +1167,7 @@ async function vSet() {
   const backupCard = h('div', { class: 'card' }, h('h2', {}, '💾 بکاپ و بازیابی'),
     h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ به ادمین‌ها در تلگرام'),
     field('زمان‌بندی بکاپ', ivSel),
-    h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'اگر کمتر از «روزانه» انتخاب کنید، بکاپ فقط وقتی فرستاده می‌شود که چیزی (موجودی کیف پول، تراکنش، کاربر، تنظیمات) تغییر کرده باشد. بکاپ شامل موجودی و تراکنش‌های همه‌ی نماینده‌هاست و با بازیابی روی سرور جدید برمی‌گردد. برای کیف پول، ۱۵ تا ۶۰ دقیقه پیشنهاد می‌شود.'),
+    h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'بکاپ دقیقاً طبق زمان‌بندی ثابت فرستاده می‌شود (مثلاً «هر ۱ ساعت» = سر هر ساعت به وقت تهران؛ «روزانه» = ساعت ۱۲:۰۰). ریستارت ربات زمان‌بندی را به‌هم نمی‌زند. بکاپ شامل موجودی و تراکنش‌های همه‌ی نماینده‌هاست و با بازیابی روی سرور جدید برمی‌گردد. برای کیف پول، ۱۵ تا ۶۰ دقیقه پیشنهاد می‌شود.'),
     h('div', { class: 'btns' }, dlB, tgB),
     h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, 'بازیابی از فایل بکاپ'), fileI,
     h('p', { class: 'hint' }, 'بکاپ شامل نماینده‌ها (با رمز هش‌شده)، لیست کاربرهای هر نماینده و وضعیت مسدود/قفل آن‌هاست؛ بعد از بازیابی روی سرور جدید هر کاربر دوباره زیر نماینده‌ی خودش نمایش داده می‌شود. فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
@@ -1271,7 +1266,6 @@ async function vSet() {
       h('p', { class: 'hint' }, 'در فرم «ساخت اکانت» همین اسم از قبل پر می‌شود و شماره‌ی بعدی خودکار پیدا می‌شود. فقط حرف انگلیسی، عدد و _ (مثلاً MS_).'), h('div', { class: 'btns' }, saveDp)))),
     drawer('unpaid', '💸', 'تمدید واریز نشده', `${c.unpaid_hours} ساعت${c.unpaid_count ? ` · ${c.unpaid_count} در انتظار` : ''}`, strip(h('div', { class: 'card' }, h('h2', {}, 'تمدید واریز نشده'), field('مهلت پیش‌فرض تا غیرفعال‌سازی خودکار (ساعت)', upHrs),
       h('p', { class: 'hint' }, 'موقع تمدید گزینه‌ی «واریز نشده» را بزنید؛ اگر تا پایان مهلت «✅ واریز شد» نزنید، کاربر خودکار غیرفعال می‌شود (چک هر ۱ دقیقه توسط ربات، و پیام به ادمین‌ها). مهلت را موقع هر تمدید هم می‌توانید جداگانه تغییر دهید.'), h('div', { class: 'btns' }, saveUp)))),
-    drawer('nextplan', '🔁', 'پلن بعدی', 'شارژ خودکار کاربر', npEditor()),
     drawer('reps', '👤', 'نماینده‌ها', reps.length ? `${reps.length} نماینده${topups.length ? ' · 💰' + topups.length + ' درخواست' : ''}${reps.some(r => r.blocked) ? ' · ⛔' : ''}` : 'ندارید', repBody),
     drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
     drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن · ' + ((IV.find(x => x[0] === c.backup_interval) || [0, 'روزانه'])[1]) : 'خودکار خاموش', strip(backupCard)),
