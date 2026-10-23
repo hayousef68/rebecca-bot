@@ -88,9 +88,10 @@ async def monitor_loop(bot):
     state: dict[str, dict] = {}
     await asyncio.sleep(30)
     while True:
-        mc = C.load_config()["monitor"]
+        cfg = C.load_config()
+        mc = cfg["monitor"]
         if mc["enabled"]:
-            for p in C.load_config()["panels"]:
+            for p in cfg["panels"]:
                 api = C.get_api(p["id"])
                 if not api.is_configured():
                     continue
@@ -100,12 +101,14 @@ async def monitor_loop(bot):
                     st["fails"] = 0
                     if st["down"]:
                         st["down"] = False
-                        await notify(bot, f"🟢 پنل <b>{C.esc(p['name'])}</b> دوباره برقرار شد.")
+                        if cfg.get("smart_alerts", {}).get("panel_down", True):
+                            await notify(bot, f"🟢 پنل <b>{C.esc(p['name'])}</b> دوباره برقرار شد.")
                 except Exception as e:  # noqa: BLE001
                     st["fails"] += 1
                     if st["fails"] >= 2 and not st["down"]:
                         st["down"] = True
-                        await notify(bot, f"🔴 پنل <b>{C.esc(p['name'])}</b> پاسخ نمی‌دهد.\n{C.esc(str(e) or e.__class__.__name__)}")
+                        if cfg.get("smart_alerts", {}).get("panel_down", True):
+                            await notify(bot, f"🔴 پنل <b>{C.esc(p['name'])}</b> پاسخ نمی‌دهد.\n{C.esc(str(e) or e.__class__.__name__)}")
         await asyncio.sleep(max(60, mc["interval"]))
 
 
