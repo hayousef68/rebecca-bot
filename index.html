@@ -114,6 +114,15 @@ img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:1
 .tplopt{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:14px;margin-bottom:8px;cursor:pointer;background:var(--bg)}
 .tplopt.on{border-color:var(--ac);background:#f0b4291a}.tplopt input{width:auto;min-height:0}.tplopt .tn{flex:1;min-width:0;font-weight:700}.tplopt .tp{font-size:12px;color:var(--mu)}.tplopt b{color:var(--ac);white-space:nowrap}
 .lg{display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px dashed var(--line);font-size:12.5px}.lg:last-child{border:0}.lg .pos{color:var(--ok)}.lg .neg{color:var(--bad)}.lg small{display:block;color:var(--mu);font-size:11px}
+.au-day{position:sticky;top:0;z-index:1;background:var(--s1);color:var(--mu);font-size:11px;font-weight:700;padding:8px 2px 6px;border-bottom:1px solid var(--line)}
+.au{display:flex;gap:10px;padding:10px 2px;border-bottom:1px dashed var(--line)}.au:last-child{border:0}
+.au-ic{flex:none;width:32px;height:32px;border-radius:10px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-style:normal;font-size:15px}
+.au-bd{flex:1;min-width:0}.au-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.au-top b{font-size:13px}
+.au-top .pos{color:var(--ok);white-space:nowrap}.au-top .neg{color:var(--bad);white-space:nowrap}
+.au-sub{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;color:var(--mu);font-size:11px;margin-top:3px}
+.au-tg{background:var(--s2);border:1px solid var(--line);border-radius:8px;padding:0 7px;color:var(--tx);font-weight:600}
+.au-dt{margin-top:4px;font-size:12px;color:var(--tx);opacity:.85;word-break:break-word}
+.au-bar{display:flex;gap:8px;margin:2px 0 6px}.au-bar input{flex:1}
 .toast{position:fixed;inset:auto 16px calc(100px + env(safe-area-inset-bottom)) 16px;z-index:9;margin:auto;max-width:420px;background:var(--s2);border:1px solid var(--line);
   border-radius:14px;padding:11px 14px;text-align:center;box-shadow:var(--shadow)}
 .toast.bad{border-color:var(--bad);color:var(--bad)}
@@ -835,7 +844,7 @@ async function repApp(me) {
     const nt = h('input', { placeholder: 'توضیح / شماره پیگیری واریز (اختیاری)', maxlength: 200 });
     const sendB = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' }, '📨 ارسال درخواست به ادمین');
     sendB.onclick = () => run(sendB, async () => { const v = mv(amt); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.'); await api('/rep/topup', 'POST', { amount: v, note: nt.value.trim() }); toast('✅ درخواست برای ادمین ارسال شد'); await views.wallet(); });
-    const lgRow = e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')));
+    const lgRow = e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('span', { style: 'text-align:end' }, h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))));
     const sl = w.sales || [], td = sl[0] || { total: 0, count: 0 };
     const fmtPlan = x => `${x.count} تا ${x.gb} گیگ${x.days ? ' · ' + (x.days % 30 === 0 ? (x.days / 30) + ' ماهه' : x.days + ' روزه') : ' · نامحدود زمانی'}`;
     const todayBreakdown = (td.breakdown || []).map(x => h('div', { class: 'lg' }, h('span', {}, (x.action === 'renew' ? '🔄 تمدید: ' : '🆕 ساخت: ') + fmtPlan(x), x.template ? h('small', {}, x.template) : null)));
@@ -1139,15 +1148,53 @@ async function vSet() {
     alLabel(alTopup, 'درخواست افزایش موجودی جدید'),
     h('p', { class: 'hint' }, 'هشدار موجودی کم بعد از عملیات کیف پول/خرید بررسی می‌شود. هشدارهای پنل و بکاپ فقط در تغییر وضعیت/تلاش ناموفق ارسال می‌شوند.'),
     h('div', { class: 'btns' }, saveAlerts));
-  let auditItems = [];
-  try { auditItems = (await api('/audit?limit=100')).items || []; } catch (e) { auditItems = []; }
-  const auditItem = x => h('div', { class: 'lg' },
-    h('span', {}, h('b', {}, `${x.action || 'تغییر'} · ${x.target || '—'}`),
-      h('small', {}, `${x.actor || 'نامشخص'} · ${new Date(x.ts * 1000).toLocaleString('fa-IR')}\n${x.details || ''}`)));
-  const auditList = h('div', {}, ...(auditItems.length ? auditItems.map(auditItem) : [h('p', { class: 'hint' }, 'هنوز رویدادی ثبت نشده است.')]));
+  const AU = { cat: 'all', q: '', off: 0, total: 0, day: '' };
+  const AU_CATS = [['all', 'همه'], ['wallet', '💰 کیف پول'], ['rep', '🤝 نماینده‌ها'], ['user', '👥 کاربران'], ['sys', '⚙️ تنظیمات']];
+  const AU_ICON = { wallet: '💰', rep: '🤝', user: '👥', sys: '⚙️' };
+  const auDay = ts => new Date(ts * 1000).toLocaleDateString('fa-IR', { weekday: 'long', day: 'numeric', month: 'long' });
+  const auTime = ts => new Date(ts * 1000).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
+  const auditItem = x => {
+    const sub = [h('span', { class: 'au-tg' }, x.target_name ? `${x.target_name}` : (x.target || '—')), h('span', {}, x.actor || 'نامشخص'), h('span', {}, auTime(x.ts))];
+    if (x.bal != null) sub.push(h('span', {}, 'موجودی: ' + (+x.bal).toLocaleString('en-US')));
+    return h('div', { class: 'au' }, h('i', { class: 'au-ic' }, AU_ICON[x.cat] || '•'),
+      h('div', { class: 'au-bd' },
+        h('div', { class: 'au-top' }, h('b', {}, x.action || 'تغییر'),
+          x.amt != null ? h('b', { class: x.amt >= 0 ? 'pos' : 'neg', dir: 'ltr' }, (x.amt > 0 ? '+' : '') + (+x.amt).toLocaleString('en-US')) : null),
+        h('div', { class: 'au-sub' }, ...sub),
+        x.details ? h('div', { class: 'au-dt' }, x.details) : null));
+  };
+  const auditList = h('div', {});
+  const auMore = h('button', { class: 'btn', type: 'button', hidden: true }, 'نمایش بیشتر');
+  const auCount = h('p', { class: 'hint' });
+  const auFill = (items, reset) => {
+    if (reset) { auditList.replaceChildren(); AU.day = ''; }
+    if (reset && !items.length) auditList.append(h('p', { class: 'hint' }, 'رویدادی پیدا نشد.'));
+    for (const x of items) {
+      const d = auDay(x.ts);
+      if (d !== AU.day) { AU.day = d; auditList.append(h('div', { class: 'au-day' }, d)); }
+      auditList.append(auditItem(x));
+    }
+    AU.off = auditList.querySelectorAll('.au').length;
+    auMore.hidden = AU.off >= AU.total;
+    auCount.textContent = `${AU.total.toLocaleString('fa-IR')} رویداد${AU.cat !== 'all' || AU.q ? ' (فیلترشده)' : ''} · نمایش ${AU.off.toLocaleString('fa-IR')}`;
+  };
+  const auQuery = () => `cat=${AU.cat}&q=${encodeURIComponent(AU.q)}`;
+  const auLoad = async reset => {
+    if (reset) AU.off = 0;
+    try { const a = await api(`/audit?limit=50&offset=${AU.off}&${auQuery()}`); AU.total = a.total || 0; auFill(a.items || [], reset); }
+    catch (e) { toast(e.message, true); }
+  };
+  auMore.onclick = () => run(auMore, () => auLoad(false));
+  const auChips = h('div', { class: 'chips wrap' }, AU_CATS.map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: 'chip' + (k === 'all' ? ' on' : ''),
+    onclick: () => { AU.cat = k; auChips.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.k === k)); auLoad(true); } }, t)));
+  let auT; const auSearch = h('input', { type: 'search', placeholder: '🔎 جستجو: نام نماینده، کاربر، مبلغ…', oninput: e => { clearTimeout(auT); auT = setTimeout(() => { AU.q = e.target.value.trim(); auLoad(true); }, 350); } });
   const auditCard = h('div', { class: 'card' }, h('h2', {}, '🧾 لاگ فعالیت (Audit)'),
-    h('p', { class: 'hint' }, 'آخرین ۱۰۰ تغییر مهم؛ شامل عملیات کیف پول، درخواست شارژ، تغییرات حساب نماینده و تخصیص کاربران. رمزها در لاگ ذخیره نمی‌شوند.'),
-    auditList, h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: async () => { const a = await api('/audit?limit=100'); auditList.replaceChildren(...(a.items.length ? a.items.map(auditItem) : [h('p', { class: 'hint' }, 'هنوز رویدادی ثبت نشده است.')])); } }, '🔄 تازه‌سازی')));
+    h('p', { class: 'hint' }, 'تغییرات مهم به‌ترتیب زمان (جدیدترین اول): عملیات کیف پول، درخواست شارژ، حساب نماینده‌ها و تخصیص کاربران. رمزها ذخیره نمی‌شوند. لاگ داخل فایل بکاپ هم هست.'),
+    auChips, h('div', { class: 'au-bar' }, auSearch), auCount, auditList,
+    h('div', { class: 'btns' }, auMore,
+      h('button', { class: 'btn', type: 'button', onclick: () => auLoad(true) }, '🔄 تازه‌سازی'),
+      h('a', { class: 'btn', href: '/api/audit/export', onclick: e => { e.currentTarget.href = `/api/audit/export?${auQuery()}`; } }, '⬇️ دانلود CSV')));
+  auLoad(true);
   const saveW = h('button', { class: 'btn' }, 'تغییر رمز وب‌پنل');
   saveW.onclick = () => run(saveW, async () => { await api('/settings', 'POST', { web_password: wp.value }); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
   // قیمت‌ها و لیست فروش
@@ -1298,7 +1345,7 @@ async function vSet() {
         h('div', { class: 'btns' },
           act('➕ شارژ', 'pri', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await api(`/reps/${r.id}/wallet`, 'POST', { amount: v, note: wNote.value.trim() }); await done('✅ شارژ شد · موجودی: ' + toman(x.balance)); }),
           act('➖ کسر', 'bad', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await api(`/reps/${r.id}/wallet`, 'POST', { amount: -v, note: wNote.value.trim() }); await done('کسر شد · موجودی: ' + toman(x.balance)); }),
-          act('🧾 تراکنش‌ها', '', async () => { const x = await api(`/reps/${r.id}/log`); logBox.hidden = !logBox.hidden; logBox.replaceChildren(...(x.log.length ? x.log.map(e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')))) : [h('p', { class: 'hint' }, 'تراکنشی ثبت نشده.')])); })),
+          act('🧾 تراکنش‌ها', '', async () => { const x = await api(`/reps/${r.id}/log`); logBox.hidden = !logBox.hidden; logBox.replaceChildren(...(x.log.length ? x.log.map(e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('span', { style: 'text-align:end' }, h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))))) : [h('p', { class: 'hint' }, 'تراکنشی ثبت نشده.')])); })),
         logBox,
         h('div', { class: 'psec' }, h('b', {}, '🧩 تمپلت‌های فعال این نماینده'), h('span', {}, 'فقط تمپلت‌های دارای قیمت قابل خرید است')),
         tplBox,
