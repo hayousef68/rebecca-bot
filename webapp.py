@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import secrets
 import logging
 import os
 import time
@@ -61,10 +62,25 @@ async def _cert_watch():
             return
 
 
+async def _wallet_sweeper():
+    """هر ۵ دقیقه: خریدی که پول کسر شده ولی بعد از ۱۰ دقیقه هنوز نتیجه‌اش ثبت نشده (کرش/قطع برق وسط عملیات) را به ادمین گزارش می‌دهد."""
+    while True:
+        try:
+            await asyncio.sleep(300)
+            for t in await asyncio.to_thread(C.wallet_tx_stale, 600):
+                await _notify_admins(load_config(), f"🚨 <b>تراکنش نیمه‌تمام کیف پول</b>\nنماینده: <code>{C.esc(t['rid'])}</code>\nکاربر: <code>{C.esc(t.get('user') or '-')}</code>\nمبلغ: {abs(int(t['amount'])):,} تومان\nپول کسر شده ولی نتیجه‌ی ساخت/تمدید ثبت نشده؛ وضعیت کاربر را در پنل بررسی و در صورت نیاز دستی برگردانید.")
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("wallet sweeper")
+
+
 @asynccontextmanager
 async def lifespan(_app):
     watcher = asyncio.create_task(_cert_watch()) if os.environ.get("REBECCA_SSL_ACTIVE") == "1" else None
+    sweeper = asyncio.create_task(_wallet_sweeper())
     yield
+    sweeper.cancel()
     if watcher:
         watcher.cancel()
     for c in list(C._clients.values()):
@@ -704,6 +720,62 @@ def _money_guard(rid: str) -> asyncio.Lock:
     return _money_locks.setdefault(rid, asyncio.Lock())
 
 
+_idem_cache: dict[tuple, tuple[float, dict]] = {}
+
+
+def _idem_txid(request: Request | None, rid: str, op: str, fallback: str = "") -> str:
+    """شناسه‌ی یکتای تراکنش. اگر مرورگر هدر Idempotency-Key بفرستد (برای تلاش مجدد پس از قطعی شبکه ثابت می‌ماند) همان استفاده می‌شود
+    تا همان درخواست دوباره پول کم نکند؛ وگرنه شناسه‌ی تصادفی ساخته می‌شود."""
+    key = (request.headers.get("idempotency-key", "") if request is not None else "").strip()
+    key = re.sub(r"[^A-Za-z0-9_.-]", "", key)[:48]
+    return f"{op}:{rid}:{key}" if key else f"{op}:{rid}:s{secrets.token_hex(6)}"
+
+
+def _idem_get(txid: str):
+    now = time.time()
+    for k in [k for k, v in _idem_cache.items() if now - v[0] > 600]:
+        _idem_cache.pop(k, None)
+    v = _idem_cache.get((txid,))
+    return v[1] if v else None
+
+
+def _idem_put(txid: str, result: dict) -> None:
+    _idem_cache[(txid,)] = (time.time(), result)
+
+
+_recent_ops: dict[str, float] = {}
+
+
+def _dup_window(sig: str, seconds: float) -> bool:
+    """True اگر همین عملیات (مثلاً تمدید همان کاربر با همان تمپلت) در چند ثانیه‌ی اخیر انجام شده باشد."""
+    now = time.time()
+    for k in [k for k, t in _recent_ops.items() if now - t > 120]:
+        _recent_ops.pop(k, None)
+    if now - _recent_ops.get(sig, 0) < seconds:
+        return True
+    _recent_ops[sig] = now
+    return False
+
+
+async def _refund_safely(rid: str, txid: str, note: str, sale_meta: dict | None = None) -> bool:
+    """بازگشت وجه با چند بار تلاش. چون به txid خرید وصل است، حداکثر یک‌بار انجام می‌شود (تلاش مجدد خطر برگشت دوباره ندارد)."""
+    last = None
+    for i in range(4):
+        try:
+            await asyncio.to_thread(lambda: C.wallet_adjust_ex(rid, 0, "refund", note, sale_meta, refund_of=txid))
+            await asyncio.to_thread(C.wallet_tx_mark, txid, "refunded")
+            return True
+        except Exception as e:  # noqa: BLE001
+            last = e
+            log.exception("refund attempt %s failed (%s)", i + 1, txid)
+            await asyncio.sleep(0.4 * (i + 1))
+    try:
+        await _notify_admins(load_config(), f"🚨 <b>بازگشت وجه خودکار ناموفق بود</b>\nنماینده: <code>{C.esc(rid)}</code>\nتراکنش: <code>{C.esc(txid)}</code>\nخطا: {C.esc(last)}\nلطفاً کیف پول را دستی بررسی کنید.")
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 async def _hide_from_sales(username: str, t_start: float):
     """ساخت/تمدید با کیف پول نماینده در گزارش فروش حساب نمی‌شود؛ فقط خودِ شارژ کیف پول فروش است."""
     try:
@@ -768,63 +840,115 @@ class RepBuyReq(BaseModel):
 
 
 @app.post("/api/rep/buy")
-async def rep_buy(r: RepBuyReq, rep=Depends(rep_guard)):
-    """ساخت اکانت با تمپلت مجاز نماینده؛ قیمت از کیف پول کم می‌شود و اگر ساخت ناموفق بود برمی‌گردد."""
+async def rep_buy(r: RepBuyReq, request: Request, rep=Depends(rep_guard)):
+    """ساخت اکانت با تمپلت مجاز نماینده؛ قیمت از کیف پول کم می‌شود و اگر ساخت ناموفق بود (و اکانت واقعاً ساخته نشده بود) برمی‌گردد.
+    هر درخواست یک شناسه‌ی تراکنش دارد: ارسال دوباره‌ی همان درخواست (کلیک مجدد/قطعی شبکه) پول را دوباره کم نمی‌کند."""
     rid = rep[0]
+    txid = _idem_txid(request, rid, "buy")
     async with _money_guard(rid):
-        return await _rep_buy(r, rid)
+        return await _rep_buy(r, rid, txid)
 
 
-async def _rep_buy(r: RepBuyReq, rid: str):
+async def _rep_buy(r: RepBuyReq, rid: str, txid: str):
+    done = _idem_get(txid)
+    if done:
+        return done
     cfg = load_config()
     rp = cfg["reps"][rid]
     tpl = _rep_templates(cfg, rp).get(r.template)
     if not tpl:
         raise HTTPException(403, "این تمپلت برای شما فعال نیست.")
+    prev = await asyncio.to_thread(C.wallet_tx_get, txid)
+    if prev:                                                           # همین درخواست قبلاً پردازش شده (تلاش مجدد)
+        return await _replay_buy(prev, cfg, rid, rp, tpl)
+    if _dup_window(f"buy|{rid}|{r.template}", 4):
+        raise HTTPException(429, "درخواست تکراری: چند ثانیه‌ی پیش همین خرید ثبت شد. اگر واقعاً اکانت دیگری می‌خواهید چند ثانیه بعد دوباره بزنید.")
     pid = rp["panel"] if rp["panel"] and get_panel(cfg, rp["panel"]) else cfg["active_panel"]
     api = get_api(pid)
     if not api.is_configured():
         raise HTTPException(502, "پنل در دسترس نیست؛ به ادمین اطلاع دهید.")
     price = int(tpl["price"])
+    if price <= 0:
+        raise HTTPException(400, "قیمت این تمپلت نامعتبر است.")
     if rp["balance"] < price:
         raise HTTPException(402, f"موجودی کافی نیست. قیمت: {price:,} تومان — موجودی شما: {rp['balance']:,} تومان")
     svc = C.pick_default_service(await api.list_services(), tpl.get("kind") == "group")
     if svc is None:
         raise HTTPException(502, "سرویس مناسب در پنل پیدا نشد؛ به ادمین اطلاع دهید.")
-    name = ""                                                          # نام کاربری را نماینده تعیین نمی‌کند؛ همیشه شماره‌ی بعدیِ پنل
     prefix = cfg["default_prefix"]
     nx = await sales.next_number(api, prefix, len(cfg["panels"]) <= 1)
     names = C.make_names(prefix, int(nx.get("next") or 1), 1, 1)
     t_start = time.time()
     sale_meta = {"action": "new", "template": r.template, "gb": int(tpl.get("gb") or 0), "days": int(tpl.get("days") or 0), "username": names[0]}
     try:
-        await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"ساخت اکانت {names[0]} — {r.template}", sale_meta)
-        await _notify_low_wallet(rid, load_config()["reps"][rid]["balance"])
+        w = await asyncio.to_thread(lambda: C.wallet_adjust_ex(rid, -price, "purchase", f"ساخت اکانت {names[0]} — {r.template}", sale_meta, txid))
     except ValueError:
         raise HTTPException(402, "موجودی کافی نیست.")
+    if w.get("dup"):
+        return await _replay_buy(w["tx"], cfg, rid, rp, tpl)
     results, failed = [], []
-    for attempt in range(4 if not name else 1):                        # نام خودکار: اگر هم‌زمان کسی همان شماره را گرفت، شماره‌ی بعدی
+    for attempt in range(4):                                       # اگر هم‌زمان کسی همان شماره را گرفت، شماره‌ی بعدی
         try:
             results, failed = await C.create_users(api, names, tpl, svc, concurrency=1)
         except Exception:  # noqa: BLE001
             results, failed = [], [(names[0], "خطای پنل")]
-        if results or name or not failed or "قبل" not in failed[0][1]:
+        if results or not failed or "قبل" not in failed[0][1]:
             break
         m = re.fullmatch(r"(.*?)(\d+)", names[0])
         names = C.make_names(m.group(1), int(m.group(2)) + 1, 1, 1) if m else names
+    if not results and failed and "قبل" not in failed[0][1]:
+        # شکست مبهم (مثلاً timeout): ممکن است پنل اکانت را ساخته باشد؛ اگر وجود دارد پول برنمی‌گردد و موفق حساب می‌شود
+        try:
+            u = await api.request("GET", api.upath(names[0]))
+            if u and u.get("username"):
+                results = [{"username": names[0], "sub": api.full_sub((u or {}).get("subscription_url", ""))}]
+        except Exception:  # noqa: BLE001
+            pass
     if not results:
-        await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — ساخت {names[0]} ناموفق بود", sale_meta)
-        raise HTTPException(400, "ساخت اکانت ناموفق بود: " + (failed[0][1] if failed else "نامشخص") + " — مبلغ برگشت داده شد.")
-    await _hide_from_sales(results[0]["username"], t_start)
-    await asyncio.to_thread(C.assign_users, rid, pid, [results[0]["username"]])
+        ok = await _refund_safely(rid, txid, f"بازگشت وجه — ساخت {names[0]} ناموفق بود", sale_meta)
+        msg = "ساخت اکانت ناموفق بود: " + (failed[0][1] if failed else "نامشخص")
+        raise HTTPException(400, msg + (" — مبلغ برگشت داده شد." if ok else " — بازگشت وجه خودکار انجام نشد؛ به ادمین اطلاع داده شد."))
+    uname = results[0]["username"]
+    await asyncio.to_thread(C.wallet_tx_mark, txid, "done", uname)      # نتیجه‌ی موفق قطعی ثبت شد (دیگر برگشت‌پذیر خودکار نیست)
+    await _hide_from_sales(uname, t_start)
+    for i in range(3):                                                 # اتصال اکانت به نماینده نباید با یک خطای گذرا از دست برود
+        try:
+            await asyncio.to_thread(C.assign_users, rid, pid, [uname])
+            break
+        except Exception:  # noqa: BLE001
+            log.exception("assign_users failed (%s)", uname)
+            await asyncio.sleep(0.3 * (i + 1))
     if r.note.strip():
         try:
-            await asyncio.to_thread(C.set_rep_note, rid, pid, results[0]["username"], r.note)
-        except ValueError:
+            await asyncio.to_thread(C.set_rep_note, rid, pid, uname, r.note)
+        except Exception:  # noqa: BLE001
             pass
     bal = load_config()["reps"][rid]["balance"]
-    await _notify_admins(cfg, f"🛒 نماینده <b>{C.esc(rp['label'] or rp['name'])}</b> اکانت <code>{C.esc(results[0]['username'])}</code> ساخت ({C.esc(r.template)} — {price:,} تومان). موجودی باقی‌مانده: {bal:,}")
-    return {"ok": True, "username": results[0]["username"], "sub": results[0]["sub"], "balance": bal, "gb": tpl["gb"], "days": tpl["days"]}
+    result = {"ok": True, "username": uname, "sub": results[0]["sub"], "balance": bal, "gb": tpl["gb"], "days": tpl["days"]}
+    _idem_put(txid, result)
+    try:                                                               # اعلان‌ها بعد از ثبت نتیجه؛ خطایشان نباید جواب موفق را خراب کند
+        await _notify_low_wallet(rid, bal)
+        await _notify_admins(cfg, f"🛒 نماینده <b>{C.esc(rp['label'] or rp['name'])}</b> اکانت <code>{C.esc(uname)}</code> ساخت ({C.esc(r.template)} — {price:,} تومان). موجودی باقی‌مانده: {bal:,}")
+    except Exception:  # noqa: BLE001
+        log.exception("notify after buy")
+    return result
+
+
+async def _replay_buy(tx: dict, cfg: dict, rid: str, rp: dict, tpl: dict):
+    """درخواست تکراریِ خریدی که قبلاً کسر شده: بدون کسر دوباره، نتیجه‌ی قبلی را (اگر ساخته شده) برمی‌گرداند."""
+    if tx.get("state") == "done" and tx.get("user"):
+        pid = rp["panel"] if rp["panel"] and get_panel(cfg, rp["panel"]) else cfg["active_panel"]
+        api = get_api(pid)
+        sub = ""
+        try:
+            u = await api.request("GET", api.upath(tx["user"]))
+            sub = api.full_sub((u or {}).get("subscription_url", ""))
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "duplicate": True, "username": tx["user"], "sub": sub, "balance": load_config()["reps"][rid]["balance"], "gb": tpl["gb"], "days": tpl["days"]}
+    if tx.get("state") == "refunded":
+        raise HTTPException(400, "این درخواست قبلاً ناموفق بود و مبلغ برگشت داده شد؛ دوباره تلاش کنید.")
+    raise HTTPException(409, "این درخواست در حال پردازش است؛ چند لحظه بعد وضعیت «کاربران من» را بررسی کنید و دوباره پول نپردازید.")
 
 
 class RepRenewReq(BaseModel):
@@ -833,11 +957,21 @@ class RepRenewReq(BaseModel):
     template: str = Field(min_length=1, max_length=40)
 
 
+def _user_fingerprint(u: dict | None) -> tuple:
+    u = u or {}
+    return (int(u.get("data_limit") or 0), int(u.get("expire") or 0), int(u.get("used_traffic") or 0), str(u.get("status") or ""))
+
+
 @app.post("/api/rep/renew")
-async def rep_renew(r: RepRenewReq, rep=Depends(rep_guard)):
-    """تمدید کاربرِ خود نماینده با تمپلت مجاز؛ قیمت تمپلت از کیف پول کم می‌شود (ناموفق ← برگشت وجه)."""
+async def rep_renew(r: RepRenewReq, request: Request, rep=Depends(rep_guard)):
+    """تمدید کاربرِ خود نماینده با تمپلت مجاز؛ قیمت تمپلت از کیف پول کم می‌شود (ناموفق ← برگشت وجه، فقط وقتی تمدید واقعاً اعمال نشده).
+    ارسال دوباره‌ی همان درخواست (کلید یکسان) یا تمدید همان کاربر با همان تمپلت در چند ثانیه، دوباره پول کم نمی‌کند."""
     rid = rep[0]
+    txid = _idem_txid(request, rid, "renew")
     async with _money_guard(rid):
+        done = _idem_get(txid)
+        if done:
+            return done
         cfg = load_config()
         rp = cfg["reps"][rid]
         pids = [p for p, m in cfg["rep_users"].items() if m.get(r.username) == rid and (not r.pid or p == r.pid)]
@@ -847,28 +981,72 @@ async def rep_renew(r: RepRenewReq, rep=Depends(rep_guard)):
         tpl = _rep_templates(cfg, rp).get(r.template)
         if not tpl:
             raise HTTPException(403, "این تمپلت برای شما فعال نیست.")
+        prev = await asyncio.to_thread(C.wallet_tx_get, txid)
+        if prev:
+            if prev.get("state") == "done":
+                return {"ok": True, "duplicate": True, "balance": rp["balance"]}
+            if prev.get("state") == "refunded":
+                raise HTTPException(400, "این درخواست قبلاً ناموفق بود و مبلغ برگشت داده شد؛ دوباره تلاش کنید.")
+            raise HTTPException(409, "این تمدید در حال پردازش است؛ چند لحظه بعد وضعیت کاربر را ببینید و دوباره پول نپردازید.")
+        if _dup_window(f"renew|{rid}|{r.username}|{r.template}", 20):
+            raise HTTPException(429, "درخواست تکراری: همین کاربر چند لحظه‌ی پیش با همین تمپلت تمدید شد.")
         api = get_api(pid)
         if not api.is_configured():
             raise HTTPException(502, "پنل در دسترس نیست؛ به ادمین اطلاع دهید.")
         price = int(tpl["price"])
+        if price <= 0:
+            raise HTTPException(400, "قیمت این تمپلت نامعتبر است.")
+        try:                                                                       # قبل از کسر پول مطمئن شو کاربر در پنل هست (و حالت قبل را بگیر)
+            before = await api.request("GET", api.upath(r.username))
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(404 if isinstance(e, C.RebeccaError) and e.status == 404 else 502, "کاربر در پنل پیدا نشد یا پنل در دسترس نیست؛ پولی کسر نشد.")
         t_start = time.time()
         sale_meta = {"action": "renew", "template": r.template, "gb": int(tpl.get("gb") or 0), "days": int(tpl.get("days") or 0), "username": r.username}
         try:
-            await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"تمدید {r.username} — {r.template}", sale_meta)
-            await _notify_low_wallet(rid, load_config()["reps"][rid]["balance"])
+            w = await asyncio.to_thread(lambda: C.wallet_adjust_ex(rid, -price, "purchase", f"تمدید {r.username} — {r.template}", sale_meta, txid))
         except ValueError:
             raise HTTPException(402, f"موجودی کافی نیست. قیمت: {price:,} تومان — موجودی شما: {rp['balance']:,} تومان")
+        if w.get("dup"):
+            raise HTTPException(409, "این درخواست قبلاً ثبت شده است.")
+        res, err = None, None
         try:
             await C.renew_user(api, r.username, dict(tpl), reset_usage=True)
             res = await api.request("GET", api.upath(r.username))
         except Exception as e:  # noqa: BLE001
-            await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — تمدید {r.username} ناموفق بود", sale_meta)
-            raise HTTPException(400, "تمدید ناموفق بود؛ مبلغ برگشت داده شد." + (f" ({e})" if isinstance(e, C.RebeccaError) else ""))
-        await _hide_from_sales(r.username, t_start)
-        await asyncio.to_thread(C.unpaid_clear, pid, r.username)
+            err = e
+            log.exception("renew failed %s", r.username)
+        if err is not None:
+            # شکست مبهم (timeout وسط راه): ببین تمدید روی پنل اعمال شده یا نه؛ اگر اعمال شده، پول برنمی‌گردد
+            applied, after = False, None
+            try:
+                after = await api.request("GET", api.upath(r.username))
+                applied = _user_fingerprint(after) != _user_fingerprint(before)
+            except Exception:  # noqa: BLE001
+                applied = False
+            await _hide_from_sales(r.username, t_start)                            # هر تغییری روی پنل ایجاد شده باشد در گزارش فروش حساب نشود
+            if applied:
+                await asyncio.to_thread(C.wallet_tx_mark, txid, "done", r.username)
+                await _notify_admins(cfg, f"⚠️ تمدید <code>{C.esc(r.username)}</code> (نماینده {C.esc(rp['label'] or rp['name'])}) با خطا برگشت ولی تغییرات روی پنل اعمال شده بود؛ مبلغ برنگشت. لطفاً وضعیت کاربر را بررسی کنید.")
+                res = after
+            else:
+                ok = await _refund_safely(rid, txid, f"بازگشت وجه — تمدید {r.username} ناموفق بود", sale_meta)
+                raise HTTPException(400, "تمدید ناموفق بود؛ " + ("مبلغ برگشت داده شد." if ok else "بازگشت وجه خودکار انجام نشد و به ادمین اطلاع داده شد.") + (f" ({err})" if isinstance(err, C.RebeccaError) else ""))
+        else:
+            await asyncio.to_thread(C.wallet_tx_mark, txid, "done", r.username)
+            await _hide_from_sales(r.username, t_start)
+        try:
+            await asyncio.to_thread(C.unpaid_clear, pid, r.username)
+        except Exception:  # noqa: BLE001
+            log.exception("unpaid_clear")
         bal = load_config()["reps"][rid]["balance"]
-        await _notify_admins(cfg, f"🔄 نماینده <b>{C.esc(rp['label'] or rp['name'])}</b> کاربر <code>{C.esc(r.username)}</code> را تمدید کرد ({C.esc(r.template)} — {price:,} تومان). موجودی باقی‌مانده: {bal:,}")
-        return {"ok": True, "balance": bal, "user": _slim_rep(res, api)}
+        result = {"ok": True, "balance": bal, "user": _slim_rep(res, api)}
+        _idem_put(txid, result)
+        try:
+            await _notify_low_wallet(rid, bal)
+            await _notify_admins(cfg, f"🔄 نماینده <b>{C.esc(rp['label'] or rp['name'])}</b> کاربر <code>{C.esc(r.username)}</code> را تمدید کرد ({C.esc(r.template)} — {price:,} تومان). موجودی باقی‌مانده: {bal:,}")
+        except Exception:  # noqa: BLE001
+            log.exception("notify after renew")
+        return result
 
 
 class RepRevokeReq(BaseModel):
@@ -980,13 +1158,24 @@ class WalletReq(BaseModel):
 
 
 @app.post("/api/reps/{rid}/wallet", dependencies=[Depends(guard)])
-async def reps_wallet(rid: str, r: WalletReq):
+async def reps_wallet(rid: str, r: WalletReq, request: Request):
     """شارژ (مبلغ مثبت) یا کسر (مبلغ منفی) موجودی نماینده توسط ادمین."""
     if r.amount == 0:
         raise HTTPException(400, "مبلغ را وارد کنید.")
-    b = await asyncio.to_thread(C.wallet_adjust, rid, r.amount, "charge" if r.amount > 0 else "deduct", r.note or ("شارژ توسط ادمین" if r.amount > 0 else "کسر توسط ادمین"))
-    await _notify_low_wallet(rid, b)
-    return {"ok": True, "balance": b}
+    txid = _idem_txid(request, rid, "adm")
+    if "idempotency-key" not in request.headers and _dup_window(f"adm|{rid}|{r.amount}", 5):
+        raise HTTPException(429, "درخواست تکراری: همین مبلغ چند ثانیه‌ی پیش ثبت شد.")
+    try:
+        w = await asyncio.to_thread(lambda: C.wallet_adjust_ex(rid, r.amount, "charge" if r.amount > 0 else "deduct", r.note or ("شارژ توسط ادمین" if r.amount > 0 else "کسر توسط ادمین"), None, txid))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    b = w["balance"]
+    if not w.get("dup"):
+        try:
+            await _notify_low_wallet(rid, b)
+        except Exception:  # noqa: BLE001
+            log.exception("notify low wallet")
+    return {"ok": True, "balance": b, "duplicate": bool(w.get("dup"))}
 
 
 class RepTplsReq(BaseModel):
@@ -1023,7 +1212,10 @@ class TopupResolveReq(BaseModel):
 
 @app.post("/api/topups/{tid}", dependencies=[Depends(guard)])
 async def topup_resolve(tid: str, r: TopupResolveReq):
-    t = await asyncio.to_thread(C.topup_resolve, tid, r.approve, r.amount)
+    try:
+        t = await asyncio.to_thread(C.topup_resolve, tid, r.approve, r.amount)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True, "status": t["status"]}
 
 
