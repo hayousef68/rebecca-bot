@@ -1631,10 +1631,43 @@ async def settings_save(r: SettingsReq):
     return {"ok": True, "bot_restarted": restart_bot}
 
 
+def _audit_filtered(cfg: dict, cat: str, q: str) -> list[dict]:
+    names = {i: (r.get("label") or r.get("name") or i) for i, r in cfg.get("reps", {}).items()}
+    q = q.strip().lower()
+    out = []
+    for x in reversed(cfg.get("audit_log", [])):                   # جدیدترین اول
+        c = C.audit_category(x)
+        if cat not in ("", "all") and c != cat:
+            continue
+        item = {**x, "cat": c, "target_name": names.get(str(x.get("target")), "")}
+        if q and q not in " ".join(str(item.get(k, "")) for k in ("action", "target", "target_name", "actor", "details")).lower():
+            continue
+        out.append(item)
+    return out
+
+
 @app.get("/api/audit", dependencies=[Depends(guard)])
-async def audit_get(limit: int = Query(100, ge=1, le=500)):
-    cfg = load_config()
-    return {"items": list(reversed(cfg.get("audit_log", [])[-limit:]))}
+async def audit_get(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0, le=100000), cat: str = Query("all", max_length=10), q: str = Query("", max_length=80)):
+    items = _audit_filtered(load_config(), cat, q)
+    return {"items": items[offset:offset + limit], "total": len(items)}
+
+
+@app.get("/api/audit/export", dependencies=[Depends(guard)])
+async def audit_export(cat: str = Query("all", max_length=10), q: str = Query("", max_length=80)):
+    """دانلود لاگ به‌صورت CSV (با BOM تا در اکسل فارسی درست باز شود)."""
+    import csv
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["زمان (تهران)", "دسته", "عملیات", "هدف", "انجام‌دهنده", "مبلغ (تومان)", "موجودی بعد", "توضیح"])
+    for x in _audit_filtered(load_config(), cat, q):
+        t = sales.datetime.fromtimestamp(int(x.get("ts") or 0), sales.TEHRAN).strftime("%Y-%m-%d %H:%M:%S")
+        def safe(v):                                               # جلوگیری از تزریق فرمول در اکسل
+            v = str(v if v is not None else "")
+            return "'" + v if v[:1] in ("=", "+", "-", "@") else v
+        w.writerow([t, x["cat"], safe(x.get("action")), safe(x.get("target_name") or x.get("target")), safe(x.get("actor")), x.get("amt", ""), x.get("bal", ""), safe(x.get("details"))])
+    return Response(("\ufeff" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="rebecca-audit-{sales.tehran_day()}.csv"'})
 
 
 # ───────────────────────────── SSL و پورت وب‌پنل ─────────────────────────────
