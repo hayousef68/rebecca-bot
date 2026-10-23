@@ -797,8 +797,12 @@ async function repApp(me) {
     sendB.onclick = () => run(sendB, async () => { const v = mv(amt); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.'); await api('/rep/topup', 'POST', { amount: v, note: nt.value.trim() }); toast('✅ درخواست برای ادمین ارسال شد'); await views.wallet(); });
     const lgRow = e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')));
     const sl = w.sales || [], td = sl[0] || { total: 0, count: 0 };
+    const fmtPlan = x => `${x.count} تا ${x.gb} گیگ${x.days ? ' · ' + (x.days % 30 === 0 ? (x.days / 30) + ' ماهه' : x.days + ' روزه') : ' · نامحدود زمانی'}`;
+    const todayBreakdown = (td.breakdown || []).map(x => h('div', { class: 'lg' }, h('span', {}, (x.action === 'renew' ? '🔄 تمدید: ' : '🆕 ساخت: ') + fmtPlan(x), x.template ? h('small', {}, x.template) : null)));
     mount(h('div', { class: 'card bigbal' }, h('span', {}, 'موجودی کیف پول'), h('b', {}, toman(w.balance))),
-      h('div', { class: 'card bigbal' }, h('span', {}, '📈 مجموع فروش امروز' + (td.count ? ' (' + td.count + ' سفارش)' : '')), h('b', {}, toman(td.total))),
+      h('div', { class: 'card bigbal' }, h('span', {}, '📈 مجموع فروش امروز' + (td.count ? ' (' + td.count + ' سفارش)' : '')), h('b', {}, toman(td.total)),
+        h('small', { style: 'display:block;margin-top:7px;color:var(--mu)' }, `🆕 ساخت: ${td.new_count || 0} · 🔄 تمدید: ${td.renew_count || 0}`)),
+      todayBreakdown.length ? h('div', { class: 'card' }, h('h2', {}, 'جزئیات فروش امروز'), ...todayBreakdown) : null,
       sl.length ? h('div', { class: 'card' }, h('h2', {}, 'فروش روزانه (۷ روز اخیر)'), ...sl.map(x => h('div', { class: 'lg' }, h('span', {}, x.date, h('small', {}, x.count + ' سفارش')), h('b', { dir: 'ltr' }, x.total.toLocaleString('en-US'))))) : null,
       h('div', { class: 'card' }, h('h2', {}, 'درخواست افزایش موجودی'), field('مبلغ', amt), field('توضیح', nt), sendB, h('p', { class: 'hint' }, 'بعد از واریز، درخواست را ثبت کنید؛ ادمین بررسی و کیف پول شما را شارژ می‌کند.')),
       w.topups.length ? h('div', { class: 'card' }, h('h2', {}, 'درخواست‌های من'), ...w.topups.map(t => h('div', { class: 'lg' }, h('span', {}, ST_FA[t.status], h('small', {}, new Date(t.ts * 1000).toLocaleString('fa-IR'))), h('b', { dir: 'ltr' }, t.amount.toLocaleString('en-US'))))) : null,
