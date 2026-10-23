@@ -1058,7 +1058,14 @@ def _slim(u: dict, api, pend: dict | None = None) -> dict:
     st = u.get("status")
     if pend is None:
         pend = C.unpaid_map(getattr(api, "pid", ""))
-    rec = pend.get(u.get("username") or "")
+    username = u.get("username") or ""
+    # در پنل ادمین، مالکیت کاربران ساخته‌شده توسط نماینده را از نگاشت محلی می‌خوانیم.
+    # این فیلد فقط در پاسخ مدیریتی استفاده می‌شود؛ پاسخ نماینده در _slim_rep آن را فیلتر می‌کند.
+    cfg = C.load_config()
+    rid = C.rep_owner(cfg, str(getattr(api, "pid", "")), username)
+    rep = cfg.get("reps", {}).get(rid, {}) if rid else {}
+    rep_owner_label = (rep.get("label") or rep.get("name") or "").strip()
+    rec = pend.get(username)
     exp, hold = int(u.get("expire") or 0), int(u.get("on_hold_expire_duration") or 0)
     if st == "on_hold":
         days_left = hold // 86400
@@ -1074,6 +1081,7 @@ def _slim(u: dict, api, pend: dict | None = None) -> dict:
         "expire_text": C.fmt_expire(u.get("expire"), st, u.get("on_hold_expire_duration")),
         "sub": api.full_sub(u.get("subscription_url", "")),
         "service_id": u.get("service_id"), "note": u.get("note") or "",
+        "created_by_rep": rep_owner_label,
         "next_plans": C.next_plans_view(u),
         "np_raw": json.dumps(C._raw_plans(u), ensure_ascii=False)[:1500] if C._raw_plans(u) else "",
         "unpaid_due": int(rec["due"]) if rec and st != "disabled" else 0,      # زمان غیرفعال‌سازی خودکار (timestamp)؛ ۰ = ندارد
