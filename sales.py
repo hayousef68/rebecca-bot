@@ -859,44 +859,71 @@ def _backup_fingerprint() -> str:
     return hashlib.sha256(json.dumps(d, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-async def backup_loop(bot):
-    """بکاپ اصلی را به ادمین‌ها می‌فرستد. interval_min = ۱۴۴۰ ← روزانه ساعت ۱۲:۰۰ تهران؛ کمتر ← هر N دقیقه، فقط اگر
-    چیزی (موجودی کیف پول، تراکنش، کاربر و ...) نسبت به آخرین بکاپ تغییر کرده باشد. بین بررسی‌ها (هر ۳۰ ثانیه) هیچ کاری نمی‌کند."""
-    started = _time.time()
-    last_sent, last_day, last_fp = started, None, None
-    now = datetime.now(TEHRAN)
-    if now.hour >= BACKUP_HOUR:
-        last_day = tehran_day()                      # بعد از ریستارت، بکاپ روزانه‌ی امروز دوباره فرستاده نشود
+def _backup_state_file() -> str:
+    from common import CONFIG_FILE
+    return os.path.join(os.path.dirname(CONFIG_FILE), "backup_state.json")
+
+
+def _load_backup_state() -> dict:
     try:
-        last_fp = await asyncio.to_thread(_backup_fingerprint)
-    except Exception:  # noqa: BLE001
-        pass
+        with open(_backup_state_file(), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_backup_state(iv: int, slot: int) -> None:
+    try:
+        path = _backup_state_file()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"iv": iv, "slot": slot}, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        log.warning("backup state save: %s", e)
+
+
+def _backup_slot(iv: int) -> int:
+    """شماره‌ی «بازه‌ی زمانی» فعلی به وقت تهران. هر بازه فقط یک‌بار بکاپ می‌گیرد.
+    روزانه: هر روز از ساعت ۱۲:۰۰ ؛ کمتر از روزانه: بازه‌های ثابت N دقیقه‌ای از ساعت ۰۰:۰۰ (مثلاً هر ۱ ساعت = سر هر ساعت)."""
+    now = datetime.now(TEHRAN)
+    local = now.timestamp() + now.utcoffset().total_seconds()
+    if iv >= 1440:
+        return int((local - BACKUP_HOUR * 3600) // 86400)
+    return int(local // (iv * 60))
+
+
+async def backup_loop(bot):
+    """بکاپ اصلی را طبق زمان‌بندی ثابت به ادمین‌ها می‌فرستد (چه تغییری شده باشد چه نه).
+    interval_min = ۱۴۴۰ ← روزانه ساعت ۱۲:۰۰ تهران؛ کمتر ← سر ساعتِ مضرب N دقیقه (مثلاً ۶۰ دقیقه: ۱۰:۰۰، ۱۱:۰۰، ...).
+    آخرین بازه‌ی ارسال‌شده روی دیسک ذخیره می‌شود؛ پس ریستارت ربات زمان‌بندی را به‌هم نمی‌زند و اگر ربات
+    موقع بکاپ خاموش بود، بعد از روشن شدن همان بکاپ جا‌مانده فرستاده می‌شود."""
+    retry_after = 0.0
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(20)
         try:
             cfg = load_config()
             bc = cfg["backup"]
             if not (bc["enabled"] and cfg["admin_ids"]):
                 continue
             iv = int(bc.get("interval_min", 1440))
-            if iv >= 1440:
-                now = datetime.now(TEHRAN)
-                if now.hour < BACKUP_HOUR or last_day == tehran_day():
-                    continue
-                last_day = tehran_day()
-                await send_backup(bot, cfg["admin_ids"], "💾 بکاپ اصلی روزانه — شامل همه‌ی تنظیمات، نماینده‌ها، موجودی‌ها و تراکنش‌ها؛ شامل توکن و رمزهاست، جای امن نگه دارید.")
-                last_sent = _time.time()
-                last_fp = await asyncio.to_thread(_backup_fingerprint)
+            iv = 1440 if iv >= 1440 else max(5, iv)
+            cur = _backup_slot(iv)
+            st = await asyncio.to_thread(_load_backup_state)
+            if st.get("iv") != iv or not isinstance(st.get("slot"), int):
+                # اولین اجرا یا تغییر زمان‌بندی: از بازه‌ی بعدی شروع می‌شود (بدون ارسال فوری)
+                await asyncio.to_thread(_save_backup_state, iv, cur)
                 continue
-            if _time.time() - last_sent < iv * 60:
+            if cur <= st["slot"] or _time.time() < retry_after:
                 continue
-            fp = await asyncio.to_thread(_backup_fingerprint)
-            if fp == last_fp:
-                last_sent = _time.time()             # تغییری نبوده؛ بکاپ تکراری نمی‌فرستیم
-                continue
-            if await send_backup(bot, cfg["admin_ids"], "💾 بکاپ خودکار (تغییر کرده) — شامل موجودی و تراکنش‌های نماینده‌ها؛ شامل توکن و رمزهاست، جای امن نگه دارید."):
-                last_fp = fp
-            last_sent = _time.time()
+            cap = ("💾 بکاپ اصلی روزانه" if iv >= 1440 else f"💾 بکاپ خودکار (هر {iv} دقیقه)") + \
+                " — شامل همه‌ی تنظیمات، نماینده‌ها، موجودی‌ها و تراکنش‌ها؛ شامل توکن و رمزهاست، جای امن نگه دارید."
+            if await send_backup(bot, cfg["admin_ids"], cap):
+                await asyncio.to_thread(_save_backup_state, iv, cur)
+                retry_after = 0.0
+            else:
+                retry_after = _time.time() + 120           # ارسال ناموفق: ۲ دقیقه بعد دوباره
         except Exception as e:  # noqa: BLE001
             log.warning("backup loop: %s", e)
 
