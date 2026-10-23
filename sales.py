@@ -544,7 +544,8 @@ def wallet_income(d1: str, d2: str, partial: bool) -> tuple[int, int]:
     if partial:
         e = min(e, _time.time())
     items = [x for x in load_config().get("wallet_income", []) if s <= float(x["ts"]) < e]
-    return sum(int(x["amount"]) for x in items), len(items)
+    # شارژها مثبت و کسرهای ادمین (اصلاح شارژ اشتباه) منفی‌اند؛ جمع خالص حساب می‌شود، «تعداد» فقط شارژهاست
+    return sum(int(x["amount"]) for x in items), sum(1 for x in items if int(x["amount"]) > 0)
 
 
 def rep_daily_sales(rid: str, days: int = 7) -> list[dict]:
@@ -651,9 +652,9 @@ def _render(title: str, d: dict, html: bool) -> str:
     if cl["ignored"]:
         L.append("")
         L.append(f"🚫 نادیده‌گرفته (تست/غیرفروشی): {sum(cl['ignored'].values())} مورد")
-    if d.get("wallet_n"):
+    if d.get("wallet_n") or d.get("wallet"):
         L.append("")
-        L.append(f"💳 شارژ کیف پول نماینده‌ها: {d['wallet_n']} مورد ← {_t(d['wallet'])} تومان")
+        L.append(f"💳 شارژ کیف پول نماینده‌ها (خالص): {d['wallet_n']} مورد ← {_t(d['wallet'])} تومان")
     L.append("")
     L.append(f"💰 جمع کل فروش: {_t(d['income'])} تومان")
     if d.get("mult", 1) != 1:
