@@ -1071,6 +1071,38 @@ async function vSet() {
   const upHrs = i(String(c.unpaid_hours || 24), '24'); upHrs.type = 'number'; upHrs.min = 1; upHrs.max = 8760; upHrs.dir = 'ltr';
   const saveUp = h('button', { class: 'btn pri' }, 'ذخیره مهلت');
   saveUp.onclick = () => run(saveUp, async () => { const n = Math.round(+upHrs.value); if (!(n >= 1)) throw new Error('مهلت را به ساعت وارد کنید (حداقل ۱).'); await api('/settings', 'POST', { unpaid_hours: n }); toast('✅ مهلت ذخیره شد'); S.setOpen = 'unpaid'; await refreshState(); await vSet(); });
+  // اعلان‌های هوشمند: هر هشدار مستقل و قابل روشن/خاموش کردن است.
+  const al = c.smart_alerts || {};
+  const alLow = h('input', { type: 'checkbox', checked: al.low_rep_wallet !== false });
+  const alPanel = h('input', { type: 'checkbox', checked: al.panel_down !== false });
+  const alBackup = h('input', { type: 'checkbox', checked: al.backup_failed !== false });
+  const alTopup = h('input', { type: 'checkbox', checked: al.topup_request !== false });
+  const alThreshold = i(al.low_wallet_threshold ?? 100000, '100000', 'number');
+  const alLabel = (box, text) => h('label', { class: 'chk', style: 'display:flex;gap:8px;align-items:center;margin:8px 0' }, box, text);
+  const saveAlerts = h('button', { class: 'btn pri' }, 'ذخیره اعلان‌ها');
+  saveAlerts.onclick = () => run(saveAlerts, async () => {
+    const threshold = Math.round(+alThreshold.value);
+    if (!(threshold >= 0)) throw new Error('حد هشدار موجودی باید صفر یا بیشتر باشد.');
+    await api('/settings', 'POST', { alert_low_rep_wallet: alLow.checked, alert_panel_down: alPanel.checked,
+      alert_backup_failed: alBackup.checked, alert_topup_request: alTopup.checked, alert_low_wallet_threshold: threshold });
+    toast('✅ تنظیمات اعلان‌ها ذخیره شد'); S.setOpen = 'alerts'; await refreshState(); await vSet();
+  });
+  const alertsCard = h('div', { class: 'card' }, h('h2', {}, '🔔 اعلان‌های هوشمند ادمین'),
+    alLabel(alLow, 'هشدار موجودی کم نماینده'), field('حد هشدار موجودی (تومان)', alThreshold),
+    alLabel(alPanel, 'قطع شدن یا وصل شدن پنل ربکا'),
+    alLabel(alBackup, 'ناموفق بودن ارسال بکاپ'),
+    alLabel(alTopup, 'درخواست افزایش موجودی جدید'),
+    h('p', { class: 'hint' }, 'هشدار موجودی کم بعد از عملیات کیف پول/خرید بررسی می‌شود. هشدارهای پنل و بکاپ فقط در تغییر وضعیت/تلاش ناموفق ارسال می‌شوند.'),
+    h('div', { class: 'btns' }, saveAlerts));
+  let auditItems = [];
+  try { auditItems = (await api('/audit?limit=100')).items || []; } catch (e) { auditItems = []; }
+  const auditItem = x => h('div', { class: 'lg' },
+    h('span', {}, h('b', {}, `${x.action || 'تغییر'} · ${x.target || '—'}`),
+      h('small', {}, `${x.actor || 'نامشخص'} · ${new Date(x.ts * 1000).toLocaleString('fa-IR')}\n${x.details || ''}`)));
+  const auditList = h('div', {}, ...(auditItems.length ? auditItems.map(auditItem) : [h('p', { class: 'hint' }, 'هنوز رویدادی ثبت نشده است.')]));
+  const auditCard = h('div', { class: 'card' }, h('h2', {}, '🧾 لاگ فعالیت (Audit)'),
+    h('p', { class: 'hint' }, 'آخرین ۱۰۰ تغییر مهم؛ شامل عملیات کیف پول، درخواست شارژ، تغییرات حساب نماینده و تخصیص کاربران. رمزها در لاگ ذخیره نمی‌شوند.'),
+    auditList, h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: async () => { const a = await api('/audit?limit=100'); auditList.replaceChildren(...(a.items.length ? a.items.map(auditItem) : [h('p', { class: 'hint' }, 'هنوز رویدادی ثبت نشده است.')])); } }, '🔄 تازه‌سازی')));
   const saveW = h('button', { class: 'btn' }, 'تغییر رمز وب‌پنل');
   saveW.onclick = () => run(saveW, async () => { await api('/settings', 'POST', { web_password: wp.value }); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
   // قیمت‌ها و لیست فروش
@@ -1266,6 +1298,8 @@ async function vSet() {
       h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
       h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)')))),
     drawer('bot', '🤖', 'ربات تلگرام', tok.value ? 'تنظیم شده' : 'تنظیم نشده', strip(h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)))),
+    drawer('alerts', '🔔', 'اعلان‌های هوشمند', '۴ هشدار قابل تنظیم', strip(alertsCard)),
+    drawer('audit', '🧾', 'لاگ فعالیت', `${c.audit_count || 0} رویداد`, strip(auditCard)),
     drawer('newuser', '🆕', 'کاربر جدید', `پیش‌فرض: ${c.default_prefix}`, strip(h('div', { class: 'card' }, h('h2', {}, 'کاربر جدید'), field('اسم پیش‌فرض (پیشوند نام کاربری)', dpre),
       h('p', { class: 'hint' }, 'در فرم «ساخت اکانت» همین اسم از قبل پر می‌شود و شماره‌ی بعدی خودکار پیدا می‌شود. فقط حرف انگلیسی، عدد و _ (مثلاً MS_).'), h('div', { class: 'btns' }, saveDp)))),
     drawer('unpaid', '💸', 'تمدید واریز نشده', `${c.unpaid_hours} ساعت${c.unpaid_count ? ` · ${c.unpaid_count} در انتظار` : ''}`, strip(h('div', { class: 'card' }, h('h2', {}, 'تمدید واریز نشده'), field('مهلت پیش‌فرض تا غیرفعال‌سازی خودکار (ساعت)', upHrs),
