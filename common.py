@@ -808,7 +808,7 @@ def set_rep_paid(rid: str, pid: str, username: str, paid: bool) -> bool:
 
 
 # ───────────────────────────── لاگ ممیزی ─────────────────────────────
-def audit_event(actor: str, action: str, target: str = "", details: str = "") -> None:
+def audit_event(actor: str, action: str, target: str = "", details: str = "", amount: int | None = None, balance: int | None = None) -> None:
     """ثبت تغییرات مدیریتی و فعالیت‌های مهم نماینده‌ها؛ آخرین ۱۰۰۰ رخداد نگه‌داری می‌شود."""
     if actor == "ادمین وب‌پنل":
         cfg_now = load_config()
@@ -820,10 +820,26 @@ def audit_event(actor: str, action: str, target: str = "", details: str = "") ->
     rec = {"ts": int(time.time()), "actor": str(actor or "نامشخص")[:80],
            "action": str(action or "تغییر")[:120], "target": str(target or "")[:120],
            "details": str(details or "")[:500]}
+    if amount is not None:                      # عملیات مالی: مبلغ (±) و موجودی بعد از آن جدا ذخیره می‌شود تا لاگ بتواند واضح نشان دهد
+        rec["amt"] = int(amount)
+    if balance is not None:
+        rec["bal"] = int(balance)
     def mut(c):
         c.setdefault("audit_log", []).append(rec)
         c["audit_log"] = c["audit_log"][-1000:]
     update_config(mut)
+
+
+def audit_category(x: dict) -> str:
+    """دسته‌ی رویداد لاگ برای فیلتر: wallet | rep | user | sys"""
+    a = str(x.get("action") or "")
+    if "amt" in x or "کیف پول" in a or "موجودی" in a:
+        return "wallet"
+    if "نماینده" in a or "تمپلت" in a or "پنل نماینده" in a:
+        return "rep"
+    if "کاربر" in a or "اشتراک" in a or "یادداشت" in a or "پرداخت" in a:
+        return "user"
+    return "sys"
 
 
 # ───────────────────────────── کیف پول نماینده ─────────────────────────────
@@ -833,6 +849,7 @@ def _wlog(c: dict, rid: str, kind: str, amount: int, note: str = "") -> None:
 
 
 WALLET_MAX = 10 ** 11
+WALLET_KIND_FA = {"charge": "شارژ توسط ادمین", "deduct": "کسر توسط ادمین", "topup": "افزایش موجودی", "purchase": "خرید/تمدید", "refund": "بازگشت وجه"}
 
 
 def _tx_find(c: dict, txid: str) -> dict | None:
@@ -893,7 +910,7 @@ def wallet_adjust_ex(rid: str, amount: int = 0, kind: str = "charge", note: str 
     if not out.get("dup"):
         try:                                                     # شکست لاگ ممیزی نباید عملیات مالیِ انجام‌شده را خراب کند
             audit_event("ادمین وب‌پنل" if kind in ("charge", "deduct") else "عملیات نماینده", "تغییر کیف پول", rid,
-                        f"نوع: {kind}؛ تغییر: {out.get('amount', 0):+,} تومان؛ موجودی جدید: {out['balance']:,} تومان؛ {note}")
+                        f"{WALLET_KIND_FA.get(kind, kind)}" + (f" — {note}" if note else ""), amount=out.get("amount", 0), balance=out["balance"])
         except Exception:  # noqa: BLE001
             log.exception("audit wallet")
     return out
@@ -985,7 +1002,8 @@ def topup_resolve(tid: str, approve: bool, amount: int | None = None) -> dict:
         t["done"] = int(time.time())
         out.update(t)
     update_config(mut)
-    audit_event("ادمین وب‌پنل", "بررسی درخواست افزایش موجودی", out.get("rid", ""), f"وضعیت: {out.get('status')}; مبلغ: {out.get('amount', 0):,} تومان")
+    audit_event("ادمین وب‌پنل", "بررسی درخواست افزایش موجودی", out.get("rid", ""), "تأیید شد" if out.get("status") == "approved" else "رد شد",
+                amount=out.get("amount", 0) if out.get("status") == "approved" else None)
     return out
 
 
