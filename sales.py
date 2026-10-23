@@ -495,6 +495,14 @@ def ham_mult(cfg: dict) -> float:
     return m if m > 0 else 1.0
 
 
+def ham_cost_for_gb(ham_gb: float, cfg: dict) -> float:
+    """هزینه‌ی خرید حجمِ فروش همکاری؛ برای فروش عادی و شارژ کیف پول یکسان است."""
+    mult = ham_mult(cfg)
+    per_gb_cost = float(cfg.get("buy_per_tb", 750000) or 0) / max(float(cfg.get("tb_gb", 1000) or 1000), 1.0)
+    # مطابق فروش همکاری: حجم معادل همکاری بر ضریب مصرف تقسیم می‌شود.
+    return (float(ham_gb) / mult) * per_gb_cost
+
+
 def price_for(service_name: str, gb: float, months: int, cfg: dict | None = None):
     """قیمت فروش یک اکانت → (قیمت، نوع). نوع: ham | list | extra | ignored"""
     cfg = cfg or load_config()["sales"]
@@ -564,11 +572,11 @@ def rep_daily_sales(rid: str, days: int = 7) -> list[dict]:
 
 
 def _with_wallet(d: dict, d1: str, d2: str, partial: bool) -> dict:
-    """شارژ کیف پول را به فروش اضافه و هزینه‌ی حجم متناظر آن را نیز تخمین می‌زند.
+    """شارژ کیف پول را مثل فروش همکاری در درآمد و هزینه‌ی همان روز لحاظ می‌کند.
 
-    چون ثبت شارژ فقط مبلغ پول را دارد و حجم مشخصی به آن متصل نیست، برای تخمین
-    هزینه، مبلغ شارژ به گیگ معادل با نرخ hamkari_per_gb تبدیل می‌شود؛ سپس هزینه‌ی
-    حجم واقعی با همان ضریب مصرف همکاری محاسبه می‌شود. بنابراین این بخش تخمینی است.
+    مبلغ شارژ با نرخ فروش همکاری به گیگ معادل تبدیل می‌شود؛ سپس تابع مشترک
+    هزینه‌ی همکاری (همان فرمول فروش عادی همکاری) برای آن حجم اجرا می‌شود.
+    چون خود شارژ حجم مشخصی ندارد، این هزینه برآوردی بر اساس نرخ تنظیم‌شده است.
     """
     w, n = wallet_income(d1, d2, partial)
     cfg = load_config().get("sales", {})
@@ -576,12 +584,8 @@ def _with_wallet(d: dict, d1: str, d2: str, partial: bool) -> dict:
     d["income"] += w
 
     ham_rate = float(cfg.get("hamkari_per_gb", 0) or 0)
-    tb_gb = float(cfg.get("tb_gb", 1000) or 1000)
-    per_gb_cost = float(cfg.get("buy_per_tb", 750000) or 0) / max(tb_gb, 1.0)
-    mult = ham_mult(cfg)
-    # مبلغ شارژ ← گیگ معادل با نرخ همکاری ← هزینه‌ی حجم واقعی
     wallet_gb_equivalent = (w / ham_rate) if ham_rate > 0 else 0.0
-    wallet_cost = (wallet_gb_equivalent / mult) * per_gb_cost
+    wallet_cost = ham_cost_for_gb(wallet_gb_equivalent, cfg) if ham_rate > 0 else 0.0
     d["wallet_gb_equivalent"] = wallet_gb_equivalent
     d["wallet_cost"] = wallet_cost
     d["cost"] += wallet_cost
@@ -607,12 +611,13 @@ def compute_rows(rows: list[dict]) -> dict:
     single_gb = sum(gb * n for (gb, _m, _k), n in cl["single"].items())
     extra_gb = sum(gb * n for (gb, _m, _k), n in cl["extra"].items())
     extra_income = extra_gb * rate
-    # مصرف ۱ گیگ واقعی همکاری، ضریب‌برابر از سهمیه‌ی مشتری کم می‌کند ولی ۱ گیگ از حجم خرید ما.
-    # پس ترافیک واقعی = گیگ فروخته‌شده ÷ ضریب
+    # هزینه‌ی فروش همکاری از همان تابعی می‌آید که برای شارژ کیف پول هم استفاده می‌شود.
+    # مصرف واقعی همکاری = حجم فروخته‌شده ÷ ضریب؛ فروش تکی/اضافی بدون این ضریب است.
     mult = ham_mult(cfg)
     per_gb_cost = int(cfg.get("buy_per_tb", 750000)) / float(cfg.get("tb_gb", 1000))
     ham_real_gb = ham_gb / mult
-    cost = (ham_real_gb + single_gb + extra_gb) * per_gb_cost
+    ham_cost = ham_cost_for_gb(ham_gb, cfg)
+    cost = ham_cost + (single_gb + extra_gb) * per_gb_cost
     return {"cl": cl, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
             "single_gb": single_gb, "extra_gb": extra_gb, "ham_real_gb": ham_real_gb, "mult": mult, "extra_income": extra_income, "rate": rate, "cost": cost,
             "income": ham_income + single_income + extra_income}
