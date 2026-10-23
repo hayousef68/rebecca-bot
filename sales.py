@@ -564,32 +564,8 @@ def rep_daily_sales(rid: str, days: int = 7) -> list[dict]:
 
 
 def _with_wallet(d: dict, d1: str, d2: str, partial: bool) -> dict:
-    """شارژ کیف پول را به‌عنوان فروش همکاریِ معادلِ همان مبلغ محاسبه می‌کند.
-
-    مبلغ شارژ با نرخ همکاری به گیگ معادل تبدیل می‌شود؛ این گیگ به مجموع همکاری
-    اضافه می‌شود و هزینه‌اش دقیقاً با فرمول اصلی هزینه‌ی فروش همکاری محاسبه می‌شود.
-    """
     w, n = wallet_income(d1, d2, partial)
-    d["wallet"], d["wallet_n"] = w, n  # برای سازگاری با کارت‌های خلاصه‌ی موجود
-
-    cfg = load_config()["sales"]
-    ham_rate = float(cfg.get("hamkari_per_gb", 0) or 0)
-    wallet_gb = (w / ham_rate) if ham_rate > 0 else 0.0
-    if wallet_gb <= 0:
-        d["wallet_gb_equivalent"] = 0.0
-        return d
-
-    mult = float(d.get("mult", ham_mult(cfg)) or 1.0)
-    per_gb_cost = float(cfg.get("buy_per_tb", 750000) or 0) / max(float(cfg.get("tb_gb", 1000) or 1000), 1.0)
-    wallet_real_gb = wallet_gb / mult
-    wallet_cost = wallet_real_gb * per_gb_cost
-
-    # شارژ در گزارش جداگانه شمرده نمی‌شود؛ به فروش همکاری اضافه می‌شود.
-    d["wallet_gb_equivalent"] = wallet_gb
-    d["ham_gb"] += wallet_gb
-    d["ham_income"] += w
-    d["ham_real_gb"] += wallet_real_gb
-    d["cost"] += wallet_cost
+    d["wallet"], d["wallet_n"] = w, n
     d["income"] += w
     return d
 
@@ -640,8 +616,6 @@ def _render(title: str, d: dict, html: bool) -> str:
         L.append("  — فروشی نبود")
     for (gb, k), n in sorted(cl["ham"].items()):
         L.append(f"  {n} تا {gb} گیگ — {_KIND_FA.get(k, k)}")
-    if d.get("wallet_gb_equivalent", 0) > 0:
-        L.append(f"  (شامل {d['wallet_n']} شارژ کیف پول، معادل {_t(d['wallet_gb_equivalent'])} گیگ همکاری)")
     L.append(f"  جمع: {_t(d['ham_gb'])} گیگ ← {_t(d['ham_income'])} تومان")
     L.append("")
     L.append("👤 فروش تکی (MS)")
@@ -664,6 +638,9 @@ def _render(title: str, d: dict, html: bool) -> str:
     if cl["ignored"]:
         L.append("")
         L.append(f"🚫 نادیده‌گرفته (تست/غیرفروشی): {sum(cl['ignored'].values())} مورد")
+    if d.get("wallet_n"):
+        L.append("")
+        L.append(f"💳 شارژ کیف پول نماینده‌ها: {d['wallet_n']} مورد ← {_t(d['wallet'])} تومان")
     L.append("")
     L.append(f"💰 جمع کل فروش: {_t(d['income'])} تومان")
     if d.get("mult", 1) != 1:
@@ -962,9 +939,26 @@ async def backup_loop(bot):
                 await asyncio.to_thread(_save_backup_state, iv, cur)
                 retry_after = 0.0
             else:
+                if cfg.get("smart_alerts", {}).get("backup_failed", True):
+                    for uid in cfg["admin_ids"]:
+                        try:
+                            await bot.send_message(uid, "⚠️ ارسال بکاپ ربکا ناموفق بود؛ ربات تا ۲ دقیقه دیگر دوباره تلاش می‌کند.")
+                        except Exception:
+                            pass
                 retry_after = _time.time() + 120           # ارسال ناموفق: ۲ دقیقه بعد دوباره
         except Exception as e:  # noqa: BLE001
             log.warning("backup loop: %s", e)
+            try:
+                cfg = load_config()
+                if cfg.get("smart_alerts", {}).get("backup_failed", True) and cfg.get("admin_ids") and _time.time() >= retry_after:
+                    for uid in cfg["admin_ids"]:
+                        try:
+                            await bot.send_message(uid, f"⚠️ خطا در فرایند بکاپ ربکا: {esc(str(e)[:500])}")
+                        except Exception:
+                            pass
+                    retry_after = _time.time() + 120
+            except Exception:
+                pass
 
 
 async def send_backup(bot, admin_ids, caption: str) -> int:
