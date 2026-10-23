@@ -270,12 +270,22 @@ function h(tag, props = {}, ...kids) {
   for (const c of kids.flat(9)) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(c));
   return n;
 }
+// عملیات مالی: برای هر درخواست یک کلید یکتا فرستاده می‌شود. اگر شبکه قطع شد و کاربر دوباره زد، همان کلید دوباره می‌رود
+// و سرور پول را دوباره کم نمی‌کند. بعد از گرفتن هر پاسخ (موفق یا خطا) کلید پاک می‌شود تا خرید بعدی مستقل باشد.
+const _idem = {};
+const _moneyPath = /^\/(rep\/(buy|renew|topup)|reps\/[^/?]+\/wallet)(\?|$)/;
+function _newKey() { try { return crypto.randomUUID().replace(/-/g, ''); } catch { return Date.now().toString(36) + Math.random().toString(36).slice(2, 12); } }
 async function api(path, method = 'GET', body) {
   let r;
+  const money = method === 'POST' && _moneyPath.test(path);
+  const slot = money ? path.split('?')[0] + '|' + JSON.stringify(body || {}) : '';
   if (S.panel && !/^\/(state|templates|panels|qr)/.test(path) && path !== '/settings') path += (path.includes('?') ? '&' : '?') + 'panel=' + encodeURIComponent(S.panel);
+  const headers = { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' };
+  if (money) headers['Idempotency-Key'] = _idem[slot] || (_idem[slot] = _newKey());
   try {
-    r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' }, body: body ? JSON.stringify(body) : undefined });
-  } catch { throw new Error('ارتباط با سرور برقرار نشد.'); }
+    r = await fetch('/api' + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  } catch { throw new Error('ارتباط با سرور برقرار نشد؛ اگر مطمئن نیستید عملیات انجام شده، قبل از تلاش دوباره «کاربران من/تراکنش‌ها» را ببینید.'); }
+  if (money) delete _idem[slot];
   if (r.status === 401) { location.href = '/login'; throw new Error('نشست شما تمام شد؛ دوباره وارد شوید.'); }
   let d = {}; try { d = await r.json(); } catch {}
   if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : (Array.isArray(d.detail) ? 'ورودی نامعتبر است.' : 'خطا ' + r.status));
