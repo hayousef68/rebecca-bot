@@ -284,7 +284,26 @@ def _normalize(data: dict) -> dict:
     for x in (cfg.get("rep_sales") if isinstance(cfg.get("rep_sales"), list) else []):
         try:
             if isinstance(x, dict) and int(x.get("amount") or 0) != 0:
-                rs.append({"ts": float(x["ts"]), "rid": str(x.get("rid") or ""), "amount": int(x["amount"])})
+                rec = {"ts": float(x["ts"]), "rid": str(x.get("rid") or ""), "amount": int(x["amount"])}
+                # Keep sale metadata so the representative dashboard can group
+                # successful creations/renewals by GB, duration and template.
+                meta = x.get("meta")
+                if isinstance(meta, dict):
+                    action = str(meta.get("action") or "new")
+                    if action not in ("new", "renew"):
+                        action = "new"
+                    try:
+                        gb = max(0, int(meta.get("gb") or 0))
+                        days = max(0, int(meta.get("days") or 0))
+                    except (TypeError, ValueError):
+                        gb, days = 0, 0
+                    clean_meta = {"action": action, "gb": gb, "days": days}
+                    if meta.get("template") is not None:
+                        clean_meta["template"] = str(meta.get("template"))[:80]
+                    if meta.get("username") is not None:
+                        clean_meta["username"] = str(meta.get("username"))[:128]
+                    rec["meta"] = clean_meta
+                rs.append(rec)
         except (TypeError, ValueError, KeyError):
             continue
     cfg["rep_sales"] = rs[-REP_SALES_MAX:]
