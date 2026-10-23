@@ -29,6 +29,7 @@ REP_NOTE_MAX = 100
 WALLET_LOG_MAX = 100
 TOPUP_MAX = 300
 WALLET_INCOME_MAX = 20000
+REP_SALES_MAX = 50000
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 
 DEFAULT_TEMPLATES = {
@@ -85,6 +86,7 @@ DEFAULT_CFG = {
     "rep_users": {},     # کاربرهای هر نماینده: {panel_id: {username: rep_id}}
     "rep_paid": {},      # کاربرهایی که نماینده «پرداخت شد» زده: {panel_id: {username: timestamp}}
     "wallet_income": [],  # شارژهای کیف پول نماینده‌ها (تأیید درخواست یا شارژ دستی ادمین) که جزو فروش همان روز حساب می‌شوند: [{ts, rid, amount}]
+    "rep_sales": [],     # خرید/تمدید نماینده‌ها با کیف پول (برای «فروش روزانه» در پنل نماینده؛ بازگشت وجه با مبلغ منفی): [{ts, rid, amount}]
     "topups": [],        # درخواست‌های افزایش موجودی نماینده‌ها: [{id, rid, amount, note, ts, status: pending|approved|rejected, done}]
     "rep_notes": {},     # اسم/یادداشت نماینده برای هر کاربرش: {panel_id: {username: note}}
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
@@ -265,6 +267,14 @@ def _normalize(data: dict) -> dict:
         except (TypeError, ValueError, KeyError):
             continue
     cfg["wallet_income"] = wi[-WALLET_INCOME_MAX:]
+    rs = []
+    for x in (cfg.get("rep_sales") if isinstance(cfg.get("rep_sales"), list) else []):
+        try:
+            if isinstance(x, dict) and int(x.get("amount") or 0) != 0:
+                rs.append({"ts": float(x["ts"]), "rid": str(x.get("rid") or ""), "amount": int(x["amount"])})
+        except (TypeError, ValueError, KeyError):
+            continue
+    cfg["rep_sales"] = rs[-REP_SALES_MAX:]
     ru = {}
     for pid, m in (cfg.get("rep_users") if isinstance(cfg.get("rep_users"), dict) else {}).items():
         if isinstance(m, dict):
@@ -730,6 +740,8 @@ def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "") -
             raise ValueError("سقف موجودی رد می‌شود.")
         c["reps"][rid]["balance"] = nb
         _wlog(c, rid, kind, amount, note)
+        if kind in ("purchase", "refund") and amount != 0:       # خرید/تمدید (منفی در کیف پول) ← فروش نماینده؛ بازگشت وجه از آن کم می‌شود
+            c["rep_sales"].append({"ts": time.time(), "rid": rid, "amount": -amount})
         if kind == "charge" and amount > 0:                      # شارژ دستی ادمین ← فروش امروز
             c["wallet_income"].append({"ts": time.time(), "rid": rid, "amount": amount})
         out["b"] = nb
