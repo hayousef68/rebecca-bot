@@ -558,8 +558,21 @@ def rep_daily_sales(rid: str, days: int = 7) -> list[dict]:
         s = datetime(a.year, a.month, a.day, tzinfo=TEHRAN).timestamp()
         e = (datetime(a.year, a.month, a.day, tzinfo=TEHRAN) + timedelta(days=1)).timestamp()
         day_items = [x for x in items if s <= float(x["ts"]) < e]
+        breakdown: dict[tuple, dict] = {}
+        for item in day_items:
+            meta = item.get("meta") or {}
+            if not meta or int(meta.get("gb") or 0) <= 0:
+                continue  # تراکنش‌های قدیمی یا بدون جزئیات در جمع مبلغ می‌مانند، اما دسته‌بندی ندارند
+            key = (str(meta.get("action") or "new"), int(meta.get("gb") or 0), int(meta.get("days") or 0), str(meta.get("template") or ""))
+            rec = breakdown.setdefault(key, {"action": key[0], "gb": key[1], "days": key[2], "template": key[3], "count": 0})
+            rec["count"] += 1 if int(item.get("amount") or 0) > 0 else -1
+        details = [v for v in breakdown.values() if v["count"] > 0]
+        details.sort(key=lambda x: (x["action"], x["gb"], x["days"], x["template"]))
         out.append({"day": d, "date": jdate(d), "total": sum(int(x["amount"]) for x in day_items),
-                    "count": max(0, sum(1 if int(x["amount"]) > 0 else -1 for x in day_items))})
+                    "count": max(0, sum(1 if int(x["amount"]) > 0 else -1 for x in day_items)),
+                    "new_count": sum(x["count"] for x in details if x["action"] == "new"),
+                    "renew_count": sum(x["count"] for x in details if x["action"] == "renew"),
+                    "breakdown": details})
     return out
 
 
