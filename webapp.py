@@ -703,6 +703,7 @@ async def rep_wallet(rep=Depends(rep_guard)):
     rp = cfg["reps"][rid]
     return {"balance": rp["balance"],
             "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t["price"], "kind": t.get("kind", "single")} for n, t in _rep_templates(cfg, rp).items()],
+            "sales": await asyncio.to_thread(sales.rep_daily_sales, rid, 7),
             "log": list(reversed(rp["log"]))[:30],
             "topups": [t for t in reversed(cfg["topups"]) if t["rid"] == rid][:15]}
 
