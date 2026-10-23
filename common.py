@@ -16,6 +16,11 @@ import sys
 import tempfile
 import threading
 import time
+
+try:                                  # قفل فایل بین پروسه‌ها (ربات و وب‌پنل دو سرویس جدا هستند)
+    import fcntl
+except ImportError:                   # ویندوز
+    fcntl = None
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -29,6 +34,7 @@ REP_NOTE_MAX = 100
 WALLET_LOG_MAX = 100
 TOPUP_MAX = 300
 WALLET_INCOME_MAX = 20000
+WALLET_TX_MAX = 5000
 REP_SALES_MAX = 50000
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 
@@ -88,6 +94,7 @@ DEFAULT_CFG = {
     "rep_users": {},     # کاربرهای هر نماینده: {panel_id: {username: rep_id}}
     "rep_paid": {},      # کاربرهایی که نماینده «پرداخت شد» زده: {panel_id: {username: timestamp}}
     "wallet_income": [],  # شارژهای کیف پول نماینده‌ها (تأیید درخواست یا شارژ دستی ادمین) که جزو فروش همان روز حساب می‌شوند: [{ts, rid, amount}]
+    "wallet_tx": [],     # دفتر تراکنش‌های کیف پول برای جلوگیری از ثبت/کسر تکراری: [{id, ts, rid, kind, amount, balance, state, user}]
     "rep_sales": [],     # خرید/تمدید نماینده‌ها با کیف پول (برای «فروش روزانه» در پنل نماینده؛ بازگشت وجه با مبلغ منفی): [{ts, rid, amount}]
     "topups": [],        # درخواست‌های افزایش موجودی نماینده‌ها: [{id, rid, amount, note, ts, status: pending|approved|rejected, done}]
     "rep_notes": {},     # اسم/یادداشت نماینده برای هر کاربرش: {panel_id: {username: note}}
@@ -98,6 +105,43 @@ DEFAULT_CFG = {
 # ───────────────────────────── کانفیگ ─────────────────────────────
 _lock = threading.RLock()
 _cache = {"sig": None, "data": None}
+_flock_depth = 0
+
+
+class _CfgLock:
+    """قفل هم‌زمان برای نخ‌ها (RLock) و پروسه‌ها (flock). بدون آن، ربات و وب‌پنل می‌توانستند هم‌زمان config.json را بخوانند-تغییر دهند-بنویسند
+    و یکی تغییر دیگری (مثلاً موجودی کیف پول) را ناخواسته برگردانَد. قفل تودرتو (re-entrant) است."""
+
+    def __enter__(self):
+        global _flock_depth
+        _lock.acquire()
+        try:
+            if _flock_depth == 0 and fcntl is not None:
+                self.fh = open(CONFIG_FILE + ".lock", "a+")
+                try:
+                    os.chmod(CONFIG_FILE + ".lock", 0o600)
+                except OSError:
+                    pass
+                fcntl.flock(self.fh, fcntl.LOCK_EX)
+                _cache["data"] = None          # شاید پروسه‌ی دیگر چیزی نوشته باشد؛ حتماً از دیسک بخوان
+            _flock_depth += 1
+        except BaseException:
+            _lock.release()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        global _flock_depth
+        try:
+            _flock_depth -= 1
+            if _flock_depth == 0 and fcntl is not None:
+                try:
+                    fcntl.flock(self.fh, fcntl.LOCK_UN)
+                finally:
+                    self.fh.close()
+        finally:
+            _lock.release()
+        return False
 
 
 def _num(x):
@@ -275,11 +319,21 @@ def _normalize(data: dict) -> dict:
     wi = []
     for x in (cfg.get("wallet_income") if isinstance(cfg.get("wallet_income"), list) else []):
         try:
-            if isinstance(x, dict) and int(x.get("amount") or 0) > 0:
+            if isinstance(x, dict) and int(x.get("amount") or 0) != 0:      # منفی = کسر ادمین (اصلاح شارژ)
                 wi.append({"ts": float(x["ts"]), "rid": str(x.get("rid") or ""), "amount": int(x["amount"])})
         except (TypeError, ValueError, KeyError):
             continue
     cfg["wallet_income"] = wi[-WALLET_INCOME_MAX:]
+    wt = []
+    for x in (cfg.get("wallet_tx") if isinstance(cfg.get("wallet_tx"), list) else []):
+        try:
+            if isinstance(x, dict) and str(x.get("id") or ""):
+                wt.append({"id": str(x["id"])[:80], "ts": float(x.get("ts") or 0), "rid": str(x.get("rid") or ""), "kind": str(x.get("kind") or ""),
+                           "amount": int(x.get("amount") or 0), "balance": int(x.get("balance") or 0),
+                           "state": str(x.get("state") or "done")[:12], "user": str(x.get("user") or "")[:128], "alerted": bool(x.get("alerted"))})
+        except (TypeError, ValueError):
+            continue
+    cfg["wallet_tx"] = wt[-WALLET_TX_MAX:]
     rs = []
     for x in (cfg.get("rep_sales") if isinstance(cfg.get("rep_sales"), list) else []):
         try:
@@ -363,12 +417,14 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     """ذخیره اتمیک (نوشتن در فایل موقت و جایگزینی) با دسترسی 600."""
-    with _lock:
+    with _CfgLock():
         d = os.path.dirname(CONFIG_FILE) or "."
         fd, tmp = tempfile.mkstemp(dir=d, prefix=".cfg-")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())          # قبل از جایگزینی روی دیسک بنشیند (قطع برق وسط تراکنش مالی)
             os.chmod(tmp, 0o600)
             os.replace(tmp, CONFIG_FILE)
         finally:
@@ -384,7 +440,7 @@ def config_backup_bytes() -> bytes:
 
 
 def update_config(mutator) -> dict:
-    with _lock:
+    with _CfgLock():
         cfg = load_config()
         mutator(cfg)
         save_config(cfg)
@@ -776,29 +832,108 @@ def _wlog(c: dict, rid: str, kind: str, amount: int, note: str = "") -> None:
     r["log"] = (r.get("log", []) + [{"ts": int(time.time()), "type": kind, "amount": int(amount), "balance": r["balance"], "note": str(note)[:120]}])[-WALLET_LOG_MAX:]
 
 
-def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "", sale_meta: dict | None = None) -> int:
-    """موجودی نماینده را با `amount` (مثبت = شارژ، منفی = کسر) تغییر می‌دهد؛ موجودی جدید را برمی‌گرداند. موجودی منفی مجاز نیست."""
-    amount = int(amount)
-    out = {}
+WALLET_MAX = 10 ** 11
+
+
+def _tx_find(c: dict, txid: str) -> dict | None:
+    return next((t for t in reversed(c.get("wallet_tx", [])) if t["id"] == txid), None)
+
+
+def wallet_adjust_ex(rid: str, amount: int = 0, kind: str = "charge", note: str = "", sale_meta: dict | None = None,
+                     txid: str | None = None, refund_of: str | None = None) -> dict:
+    """تغییر اتمیک موجودی نماینده. خروجی: {"balance", "dup", "txid"}.
+
+    - amount مثبت = شارژ، منفی = کسر. موجودی منفی مجاز نیست.
+    - txid: شناسه‌ی یکتای تراکنش. اگر قبلاً ثبت شده باشد هیچ تغییری نمی‌دهد و dup=True برمی‌گرداند (جلوگیری از کسر/شارژ تکراری با کلیک دوباره یا تلاش مجدد).
+    - refund_of: شناسه‌ی خریدی که باید برگردد؛ مبلغ از خودِ تراکنش اصلی خوانده می‌شود و هر خرید فقط یک‌بار قابل بازگشت است.
+    """
+    out: dict = {}
 
     def mut(c):
+        nonlocal amount, kind, txid
         if rid not in c["reps"]:
             raise ValueError("نماینده پیدا نشد.")
-        nb = c["reps"][rid]["balance"] + amount
+        rep = c["reps"][rid]
+        if refund_of:
+            orig = _tx_find(c, refund_of)
+            if not orig or orig["rid"] != rid or orig["kind"] != "purchase" or orig["amount"] >= 0:
+                raise ValueError("تراکنش اصلی برای بازگشت وجه پیدا نشد.")
+            txid = "refund:" + refund_of
+            kind, amount = "refund", -int(orig["amount"])
+        amount = int(amount)
+        if txid:
+            old = _tx_find(c, txid)
+            if old:                                           # قبلاً انجام شده ← تکراری
+                out.update(balance=rep["balance"], dup=True, txid=txid, tx=dict(old))
+                return
+        nb = rep["balance"] + amount
         if nb < 0:
             raise ValueError("موجودی کافی نیست.")
-        if nb > 10 ** 11:
+        if nb > WALLET_MAX:
             raise ValueError("سقف موجودی رد می‌شود.")
-        c["reps"][rid]["balance"] = nb
+        rep["balance"] = nb
         _wlog(c, rid, kind, amount, note)
         if kind in ("purchase", "refund") and amount != 0:       # خرید/تمدید (منفی در کیف پول) ← فروش نماینده؛ بازگشت وجه از آن کم می‌شود
             c["rep_sales"].append({"ts": time.time(), "rid": rid, "amount": -amount, **({"meta": dict(sale_meta)} if sale_meta else {})})
         if kind == "charge" and amount > 0:                      # شارژ دستی ادمین ← فروش امروز
             c["wallet_income"].append({"ts": time.time(), "rid": rid, "amount": amount})
-        out["b"] = nb
+        if kind == "deduct" and amount < 0:                      # کسر ادمین (اصلاح شارژ اشتباه) ← از فروش همان روز کم می‌شود
+            c["wallet_income"].append({"ts": time.time(), "rid": rid, "amount": amount})
+        if txid:
+            c["wallet_tx"].append({"id": txid, "ts": time.time(), "rid": rid, "kind": kind, "amount": amount, "balance": nb,
+                                   "state": "pending" if kind == "purchase" else "done", "user": str((sale_meta or {}).get("username") or ""), "alerted": False})
+            c["wallet_tx"] = c["wallet_tx"][-WALLET_TX_MAX:]
+            if kind == "refund" and refund_of:
+                o = _tx_find(c, refund_of)
+                if o:
+                    o["state"] = "refunded"
+        out.update(balance=nb, dup=False, txid=txid, amount=amount)
+
     update_config(mut)
-    audit_event("ادمین وب‌پنل" if kind in ("charge", "deduct") else "عملیات نماینده", "تغییر کیف پول", rid, f"نوع: {kind}؛ تغییر: {amount:+,} تومان؛ موجودی جدید: {out['b']:,} تومان؛ {note}")
-    return out["b"]
+    if not out.get("dup"):
+        try:                                                     # شکست لاگ ممیزی نباید عملیات مالیِ انجام‌شده را خراب کند
+            audit_event("ادمین وب‌پنل" if kind in ("charge", "deduct") else "عملیات نماینده", "تغییر کیف پول", rid,
+                        f"نوع: {kind}؛ تغییر: {out.get('amount', 0):+,} تومان؛ موجودی جدید: {out['balance']:,} تومان؛ {note}")
+        except Exception:  # noqa: BLE001
+            log.exception("audit wallet")
+    return out
+
+
+def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "", sale_meta: dict | None = None, txid: str | None = None) -> int:
+    """نسخه‌ی ساده: فقط موجودی جدید را برمی‌گرداند (سازگار با کد قبلی)."""
+    return wallet_adjust_ex(rid, amount, kind, note, sale_meta, txid)["balance"]
+
+
+def wallet_tx_get(txid: str) -> dict | None:
+    t = _tx_find(load_config(), txid)
+    return dict(t) if t else None
+
+
+def wallet_tx_mark(txid: str, state: str, user: str | None = None) -> None:
+    """وضعیت تراکنش خرید را نهایی می‌کند: done (نتیجه ثبت شد) | refunded | failed."""
+    def mut(c):
+        t = _tx_find(c, txid)
+        if t:
+            t["state"] = state
+            if user:
+                t["user"] = str(user)[:128]
+    update_config(mut)
+
+
+def wallet_tx_stale(max_age: int = 600) -> list[dict]:
+    """خریدهایی که بیش از max_age ثانیه «در حال انجام» مانده‌اند (کسر شده ولی نتیجه ثبت نشده، مثلاً قطع برق/کرش) و هنوز به ادمین گزارش نشده‌اند."""
+    now = time.time()
+    found: list[dict] = []
+    if not any(t["state"] == "pending" and t["kind"] == "purchase" and now - t["ts"] > max_age and not t.get("alerted") for t in load_config()["wallet_tx"]):
+        return found                                           # چیزی برای گزارش نیست؛ بی‌دلیل روی config.json ننویس
+
+    def mut(c):
+        for t in c["wallet_tx"]:
+            if t["state"] == "pending" and t["kind"] == "purchase" and now - t["ts"] > max_age and not t.get("alerted"):
+                t["alerted"] = True
+                found.append(dict(t))
+    update_config(mut)
+    return found
 
 
 def set_rep_templates(rid: str, names: list[str]) -> list[str]:
@@ -836,9 +971,15 @@ def topup_resolve(tid: str, approve: bool, amount: int | None = None) -> dict:
             amt = int(amount if amount is not None else t["amount"])
             if amt <= 0:
                 raise ValueError("مبلغ نامعتبر است.")
+            if t["rid"] not in c["reps"]:
+                raise ValueError("نماینده پیدا نشد.")
+            if c["reps"][t["rid"]]["balance"] + amt > WALLET_MAX:
+                raise ValueError("سقف موجودی رد می‌شود.")
             c["reps"][t["rid"]]["balance"] += amt
             _wlog(c, t["rid"], "topup", amt, "تأیید درخواست افزایش موجودی")
             c["wallet_income"].append({"ts": time.time(), "rid": t["rid"], "amount": amt})     # تأیید درخواست ← فروش امروز
+            c["wallet_tx"].append({"id": "topup:" + tid, "ts": time.time(), "rid": t["rid"], "kind": "topup", "amount": amt,
+                                   "balance": c["reps"][t["rid"]]["balance"], "state": "done", "user": "", "alerted": False})
             t["amount"] = amt
         t["status"] = "approved" if approve else "rejected"
         t["done"] = int(time.time())
