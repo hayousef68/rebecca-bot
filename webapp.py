@@ -849,6 +849,26 @@ async def rep_renew(r: RepRenewReq, rep=Depends(rep_guard)):
         return {"ok": True, "balance": bal, "user": _slim_rep(res, api)}
 
 
+class RepRevokeReq(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    pid: str = Field(default="", max_length=20)
+
+
+@app.post("/api/rep/revoke")
+async def rep_revoke(r: RepRevokeReq, rep=Depends(rep_guard)):
+    """تغییر لینک اشتراکِ یکی از کاربرهای خودِ نماینده (لینک قبلی از کار می‌افتد)."""
+    rid = rep[0]
+    cfg = load_config()
+    pids = [p for p, m in cfg["rep_users"].items() if m.get(r.username) == rid and (not r.pid or p == r.pid)]
+    if not pids:
+        raise HTTPException(404, "این کاربر در لیست شما نیست.")
+    api = get_api(pids[0])
+    if not api.is_configured():
+        raise HTTPException(502, "پنل در دسترس نیست.")
+    u = await api.request("POST", api.upath(r.username) + "/revoke_sub")
+    return {"ok": True, "sub": _slim_rep(u, api)["sub"]}
+
+
 @app.get("/api/rep/qr")
 async def rep_qr(text: str = Query(..., min_length=1, max_length=2000), rep=Depends(rep_guard)):
     png = await asyncio.to_thread(C.make_qr_png, text)
