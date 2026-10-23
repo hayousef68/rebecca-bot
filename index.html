@@ -674,7 +674,8 @@ function userItem(u, parent, tab) {
   Object.values(panes).forEach(p => p.classList.add('pane'));
 
   body.append(
-    h('div', { class: 'ustat' }, h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status), h('span', { class: 'sub' }, `سرویس: ${svcName}`)),
+    h('div', { class: 'ustat' }, h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status), h('span', { class: 'sub' }, `سرویس: ${svcName}`),
+      u.created_by_rep ? h('span', { class: 'badge', title: 'نماینده‌ای که این کاربر را ساخته', style: 'font-size:10px;padding:2px 6px;opacity:.9' }, `نماینده: ${u.created_by_rep}`) : null),
     u.undo ? undoBox() : null,
     u.unpaid_due ? (() => { const b = h('button', { class: 'btn sm pri', type: 'button' }, '✅ واریز شد');
       b.onclick = () => run(b, async () => { const r = await api(P + 'paid', 'POST'); toast('✅ ثبت شد؛ غیرفعال‌سازی خودکار لغو شد'); swap(r, 'renew'); });
