@@ -547,6 +547,22 @@ def wallet_income(d1: str, d2: str, partial: bool) -> tuple[int, int]:
     return sum(int(x["amount"]) for x in items), len(items)
 
 
+def rep_daily_sales(rid: str, days: int = 7) -> list[dict]:
+    """فروش روزانه‌ی یک نماینده (خرید و تمدید با کیف پول منهای بازگشت وجه) برای `days` روز اخیر به وقت تهران؛ جدیدترین روز اول."""
+    today = tehran_day()
+    out = []
+    items = [x for x in load_config().get("rep_sales", []) if x.get("rid") == rid]
+    for i in range(days):
+        d = shift_day(today, -i)
+        a = date.fromisoformat(d)
+        s = datetime(a.year, a.month, a.day, tzinfo=TEHRAN).timestamp()
+        e = (datetime(a.year, a.month, a.day, tzinfo=TEHRAN) + timedelta(days=1)).timestamp()
+        day_items = [x for x in items if s <= float(x["ts"]) < e]
+        out.append({"day": d, "date": jdate(d), "total": sum(int(x["amount"]) for x in day_items),
+                    "count": max(0, sum(1 if int(x["amount"]) > 0 else -1 for x in day_items))})
+    return out
+
+
 def _with_wallet(d: dict, d1: str, d2: str, partial: bool) -> dict:
     w, n = wallet_income(d1, d2, partial)
     d["wallet"], d["wallet_n"] = w, n
