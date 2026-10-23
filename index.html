@@ -785,6 +785,13 @@ function repItem(u) {
   const paidCb = h('input', { type: 'checkbox', id: 'pd' + u.username, checked: !!u.paid });
   const stBadge = h('span', { class: 'badge s-' + u.status }, STATUS_FA[u.status] || u.status);
   const stBtn = h('button', { class: 'btn sm', type: 'button' });
+  const subCode = h('code', { onclick: () => copy(u.sub) }, u.sub || '—');
+  const rvBtn = h('button', { class: 'btn sm', type: 'button' }, '🔗 تغییر لینک');
+  rvBtn.onclick = () => { if (!confirm('لینک اشتراک ' + u.username + ' عوض شود؟ لینک قبلی دیگر کار نمی‌کند و باید لینک جدید را برای مشتری بفرستید.')) return;
+    rvBtn.disabled = true;
+    api('/rep/revoke', 'POST', { username: u.username, pid: u.pid })
+      .then(r => { u.sub = r.sub; subCode.textContent = r.sub || '—'; q.replaceChildren(); apps.hidden = true; toast('✅ لینک جدید ساخته شد'); })
+      .catch(e => toast(e.message, true)).finally(() => { rvBtn.disabled = false; }); };
   const renderSt = () => { const off = u.status === 'disabled'; stBadge.className = 'badge s-' + u.status; stBadge.textContent = STATUS_FA[u.status] || u.status;
     stBtn.textContent = off ? '✅ فعال‌سازی اشتراک' : '⛔ غیرفعال‌سازی اشتراک'; };
   stBtn.onclick = () => { const en = u.status === 'disabled'; if (!en && !confirm('اشتراک ' + u.username + ' غیرفعال شود؟')) return;
@@ -812,10 +819,10 @@ function repItem(u) {
       h('div', { class: 'notebox' }, noteIn, noteBtn),
       h('label', { class: 'chk paidchk', for: 'pd' + u.username }, paidCb, '💰 پرداخت شد'),
       renewBox,
-      stBtn,
+      h('div', { class: 'btns', style: 'margin:8px 0' }, stBtn, rvBtn),
       h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
       h('div', { class: 'tiles' }, tile('مصرف', gb(u.used)), tile('باقی‌مانده', left), tile('اعتبار', u.expire_text)),
-      h('code', { onclick: () => copy(u.sub) }, u.sub || '—'), q,
+      subCode, q,
       h('div', { class: 'acts', style: 'grid-template-columns:repeat(3,1fr)' },
         h('button', { class: 'btn sm', onclick: () => toggleQR(q, u.sub, u.username, '/api/rep/qr') }, '🖼 QR'),
         h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 کپی لینک'),
