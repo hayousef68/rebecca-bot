@@ -79,6 +79,8 @@ DEFAULT_CFG = {
     "undo": {"enabled": True, "keep": 300, "days": 14, "bulk_max": 30},
     "backup": {"enabled": True, "interval_min": 1440},   # interval_min: ۱۴۴۰ = روزانه ساعت ۱۲:۰۰؛ کمتر از آن = هر N دقیقه (فقط وقتی چیزی عوض شده)
     "monitor": {"enabled": True, "interval": 300},
+    "smart_alerts": {"low_rep_wallet": True, "panel_down": True, "backup_failed": True, "topup_request": True, "low_wallet_threshold": 100000},
+    "audit_log": [],
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
     "unpaid": {"hours": 24, "pending": {}},   # تمدیدهای «واریز نشده»: pending = {panel_id: {username: {"due": ts, "set": ts}}}
     "web": {"user": "admin", "salt": "", "hash": "", "secret": ""},
@@ -197,6 +199,17 @@ def _normalize(data: dict) -> dict:
     cfg["sales"] = sales
     pre = str(cfg.get("default_prefix") or "")
     cfg["default_prefix"] = pre if re.fullmatch(r"[A-Za-z0-9_]{0,28}", pre) else DEFAULT_CFG["default_prefix"]
+    alerts = copy.deepcopy(DEFAULT_CFG["smart_alerts"])
+    if isinstance(cfg.get("smart_alerts"), dict):
+        alerts.update({k: v for k, v in cfg["smart_alerts"].items() if k in alerts})
+    for k in ("low_rep_wallet", "panel_down", "backup_failed", "topup_request"):
+        alerts[k] = bool(alerts[k])
+    try:
+        alerts["low_wallet_threshold"] = max(0, int(alerts["low_wallet_threshold"]))
+    except (TypeError, ValueError):
+        alerts["low_wallet_threshold"] = DEFAULT_CFG["smart_alerts"]["low_wallet_threshold"]
+    cfg["smart_alerts"] = alerts
+    cfg["audit_log"] = [x for x in cfg.get("audit_log", []) if isinstance(x, dict)][-1000:] if isinstance(cfg.get("audit_log"), list) else []
     for key in ("monitor", "reminders", "backup"):
         sec = copy.deepcopy(DEFAULT_CFG[key])
         if isinstance(cfg.get(key), dict):
@@ -719,6 +732,25 @@ def set_rep_paid(rid: str, pid: str, username: str, paid: bool) -> bool:
     return bool(paid)
 
 
+# ───────────────────────────── لاگ ممیزی ─────────────────────────────
+def audit_event(actor: str, action: str, target: str = "", details: str = "") -> None:
+    """ثبت تغییرات مدیریتی و فعالیت‌های مهم نماینده‌ها؛ آخرین ۱۰۰۰ رخداد نگه‌داری می‌شود."""
+    if actor == "ادمین وب‌پنل":
+        cfg_now = load_config()
+        actor = f"ادمین وب‌پنل ({cfg_now.get('web', {}).get('user', 'admin')})"
+    elif actor in ("نماینده", "عملیات نماینده"):
+        cfg_now = load_config()
+        rep = cfg_now.get("reps", {}).get(str(target), {})
+        actor = f"نماینده: {rep.get('name', target)}" if rep else actor
+    rec = {"ts": int(time.time()), "actor": str(actor or "نامشخص")[:80],
+           "action": str(action or "تغییر")[:120], "target": str(target or "")[:120],
+           "details": str(details or "")[:500]}
+    def mut(c):
+        c.setdefault("audit_log", []).append(rec)
+        c["audit_log"] = c["audit_log"][-1000:]
+    update_config(mut)
+
+
 # ───────────────────────────── کیف پول نماینده ─────────────────────────────
 def _wlog(c: dict, rid: str, kind: str, amount: int, note: str = "") -> None:
     r = c["reps"][rid]
@@ -746,6 +778,7 @@ def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "") -
             c["wallet_income"].append({"ts": time.time(), "rid": rid, "amount": amount})
         out["b"] = nb
     update_config(mut)
+    audit_event("ادمین وب‌پنل" if kind in ("charge", "deduct") else "عملیات نماینده", "تغییر کیف پول", rid, f"نوع: {kind}؛ تغییر: {amount:+,} تومان؛ موجودی جدید: {out['b']:,} تومان؛ {note}")
     return out["b"]
 
 
@@ -768,6 +801,7 @@ def topup_add(rid: str, amount: int, note: str = "") -> dict:
         rec.update(id="t" + secrets.token_hex(4), rid=rid, amount=int(amount), note=str(note).strip()[:200], ts=int(time.time()), status="pending", done=0)
         c["topups"].append(dict(rec))
     update_config(mut)
+    audit_event("نماینده", "درخواست افزایش موجودی", rid, f"مبلغ: {int(amount):,} تومان؛ {str(note).strip()[:200]}")
     return rec
 
 
@@ -791,6 +825,7 @@ def topup_resolve(tid: str, approve: bool, amount: int | None = None) -> dict:
         t["done"] = int(time.time())
         out.update(t)
     update_config(mut)
+    audit_event("ادمین وب‌پنل", "بررسی درخواست افزایش موجودی", out.get("rid", ""), f"وضعیت: {out.get('status')}; مبلغ: {out.get('amount', 0):,} تومان")
     return out
 
 
