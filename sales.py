@@ -564,9 +564,27 @@ def rep_daily_sales(rid: str, days: int = 7) -> list[dict]:
 
 
 def _with_wallet(d: dict, d1: str, d2: str, partial: bool) -> dict:
+    """شارژ کیف پول را به فروش اضافه و هزینه‌ی حجم متناظر آن را نیز تخمین می‌زند.
+
+    چون ثبت شارژ فقط مبلغ پول را دارد و حجم مشخصی به آن متصل نیست، برای تخمین
+    هزینه، مبلغ شارژ به گیگ معادل با نرخ hamkari_per_gb تبدیل می‌شود؛ سپس هزینه‌ی
+    حجم واقعی با همان ضریب مصرف همکاری محاسبه می‌شود. بنابراین این بخش تخمینی است.
+    """
     w, n = wallet_income(d1, d2, partial)
+    cfg = load_config().get("sales", {})
     d["wallet"], d["wallet_n"] = w, n
     d["income"] += w
+
+    ham_rate = float(cfg.get("hamkari_per_gb", 0) or 0)
+    tb_gb = float(cfg.get("tb_gb", 1000) or 1000)
+    per_gb_cost = float(cfg.get("buy_per_tb", 750000) or 0) / max(tb_gb, 1.0)
+    mult = ham_mult(cfg)
+    # مبلغ شارژ ← گیگ معادل با نرخ همکاری ← هزینه‌ی حجم واقعی
+    wallet_gb_equivalent = (w / ham_rate) if ham_rate > 0 else 0.0
+    wallet_cost = (wallet_gb_equivalent / mult) * per_gb_cost
+    d["wallet_gb_equivalent"] = wallet_gb_equivalent
+    d["wallet_cost"] = wallet_cost
+    d["cost"] += wallet_cost
     return d
 
 
@@ -641,6 +659,7 @@ def _render(title: str, d: dict, html: bool) -> str:
     if d.get("wallet_n"):
         L.append("")
         L.append(f"💳 شارژ کیف پول نماینده‌ها: {d['wallet_n']} مورد ← {_t(d['wallet'])} تومان")
+        L.append(f"  هزینه‌ی تخمینی حجم متناظر شارژ: {_t(d.get('wallet_cost', 0))} تومان")
     L.append("")
     L.append(f"💰 جمع کل فروش: {_t(d['income'])} تومان")
     if d.get("mult", 1) != 1:
