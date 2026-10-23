@@ -726,16 +726,46 @@ async function repApp(me) {
   search.addEventListener('input', debounce(apply, 300));
   search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); apply(); search.blur(); } });
   clear.onclick = () => { search.value = ''; R.q = ''; clear.hidden = true; load(true); search.focus(); };
-  const topBar = () => h('div', { class: 'card', style: 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px' },
-    h('div', {}, h('span', { style: 'font-size:11px;color:var(--mu);display:block' }, '💳 موجودی کیف پول'), h('b', { class: 'balval', style: 'color:var(--ac);font-size:16px' }, wallet.balance == null ? '…' : toman(wallet.balance)),
-      h('span', { style: 'font-size:11px;color:var(--mu);display:block;margin-top:6px' }, '📈 فروش امروز'), h('b', { class: 'todayval', style: 'font-size:14px' }, wallet.today == null ? '…' : toman(wallet.today))),
-    h('button', { class: 'btn pri sm', type: 'button', onclick: () => show('buy') }, '➕ ساخت اکانت جدید'));
+  const repSalesSummary = sales => {
+    const td = (sales || [])[0] || { total: 0, count: 0, new_count: 0, renew_count: 0, breakdown: [] };
+    const details = (td.breakdown || []).map(x => {
+      const period = x.days ? (x.days % 30 === 0 ? `${x.days / 30} ماهه` : `${x.days} روزه`) : 'نامحدود زمانی';
+      return `${x.action === 'renew' ? 'تمدید' : 'ساخت'}: ${x.count} تا ${x.gb} گیگ · ${period}`;
+    });
+    return { counts: `🆕 ساخت: ${td.new_count || 0} · 🔄 تمدید: ${td.renew_count || 0}`, details: details.join(' | ') };
+  };
+  const topBar = () => {
+    const summary = repSalesSummary(wallet.sales);
+    return h('div', { class: 'card', style: 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px' },
+      h('div', { style: 'min-width:0;flex:1' },
+        h('span', { style: 'font-size:11px;color:var(--mu);display:block' }, '💳 موجودی کیف پول'),
+        h('b', { class: 'balval', style: 'color:var(--ac);font-size:16px' }, wallet.balance == null ? '…' : toman(wallet.balance)),
+        h('span', { style: 'font-size:11px;color:var(--mu);display:block;margin-top:6px' }, '📈 فروش امروز'),
+        h('b', { class: 'todayval', style: 'font-size:14px' }, wallet.today == null ? '…' : toman(wallet.today)),
+        h('small', { class: 'todaycounts', style: 'display:block;margin-top:5px;color:var(--mu);font-size:11px' }, summary.counts),
+        h('small', { class: 'todaydetails', style: 'display:block;margin-top:3px;color:var(--mu);font-size:11px;line-height:1.7;overflow-wrap:anywhere' }, summary.details || 'جزئیات برای تراکنش‌های جدید ثبت می‌شود.')
+      ),
+      h('button', { class: 'btn pri sm', type: 'button', onclick: () => show('buy') }, '➕ ساخت اکانت جدید'));
+  };
   const showUsers = () => { mount(topBar(), h('div', { class: 'sbox' }, search, clear), info, list, pg); load(true); };
 
   /* ───── منوی کشویی نماینده + کیف پول ───── */
-  const wallet = { balance: null, today: null };
+  const wallet = { balance: null, today: null, sales: [] };
   const balB = h('b', {}, '…');
-  const refreshBal = async () => { try { const w = await api('/rep/wallet'); wallet.balance = w.balance; wallet.today = (w.sales && w.sales[0]) ? w.sales[0].total : 0; REP.tpls = w.templates; balB.textContent = toman(w.balance); document.querySelectorAll('.balval').forEach(e => { e.textContent = toman(w.balance); }); document.querySelectorAll('.todayval').forEach(e => { e.textContent = toman(wallet.today); }); return w; } catch (e) { balB.textContent = '—'; throw e; } };
+  const refreshBal = async () => { try {
+    const w = await api('/rep/wallet');
+    wallet.balance = w.balance;
+    wallet.sales = w.sales || [];
+    wallet.today = wallet.sales[0] ? wallet.sales[0].total : 0;
+    REP.tpls = w.templates;
+    balB.textContent = toman(w.balance);
+    document.querySelectorAll('.balval').forEach(e => { e.textContent = toman(w.balance); });
+    document.querySelectorAll('.todayval').forEach(e => { e.textContent = toman(wallet.today); });
+    const summary = repSalesSummary(wallet.sales);
+    document.querySelectorAll('.todaycounts').forEach(e => { e.textContent = summary.counts; });
+    document.querySelectorAll('.todaydetails').forEach(e => { e.textContent = summary.details || 'جزئیات برای تراکنش‌های جدید ثبت می‌شود.'; });
+    return w;
+  } catch (e) { balB.textContent = '—'; throw e; } };
   const scrim = h('div', { class: 'scrim' }), drawer = h('aside', { class: 'drawer', 'aria-label': 'منو' });
   const closeMenu = () => { drawer.classList.remove('on'); scrim.classList.remove('on'); };
   const openMenu = () => { drawer.classList.add('on'); scrim.classList.add('on'); refreshBal().catch(() => {}); };
