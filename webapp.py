@@ -796,8 +796,9 @@ async def _rep_buy(r: RepBuyReq, rid: str):
     nx = await sales.next_number(api, prefix, len(cfg["panels"]) <= 1)
     names = C.make_names(prefix, int(nx.get("next") or 1), 1, 1)
     t_start = time.time()
+    sale_meta = {"action": "new", "template": r.template, "gb": int(tpl.get("gb") or 0), "days": int(tpl.get("days") or 0), "username": names[0]}
     try:
-        await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"ساخت اکانت {names[0]} — {r.template}")
+        await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"ساخت اکانت {names[0]} — {r.template}", sale_meta)
         await _notify_low_wallet(rid, load_config()["reps"][rid]["balance"])
     except ValueError:
         raise HTTPException(402, "موجودی کافی نیست.")
@@ -812,7 +813,7 @@ async def _rep_buy(r: RepBuyReq, rid: str):
         m = re.fullmatch(r"(.*?)(\d+)", names[0])
         names = C.make_names(m.group(1), int(m.group(2)) + 1, 1, 1) if m else names
     if not results:
-        await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — ساخت {names[0]} ناموفق بود")
+        await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — ساخت {names[0]} ناموفق بود", sale_meta)
         raise HTTPException(400, "ساخت اکانت ناموفق بود: " + (failed[0][1] if failed else "نامشخص") + " — مبلغ برگشت داده شد.")
     await _hide_from_sales(results[0]["username"], t_start)
     await asyncio.to_thread(C.assign_users, rid, pid, [results[0]["username"]])
@@ -851,8 +852,9 @@ async def rep_renew(r: RepRenewReq, rep=Depends(rep_guard)):
             raise HTTPException(502, "پنل در دسترس نیست؛ به ادمین اطلاع دهید.")
         price = int(tpl["price"])
         t_start = time.time()
+        sale_meta = {"action": "renew", "template": r.template, "gb": int(tpl.get("gb") or 0), "days": int(tpl.get("days") or 0), "username": r.username}
         try:
-            await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"تمدید {r.username} — {r.template}")
+            await asyncio.to_thread(C.wallet_adjust, rid, -price, "purchase", f"تمدید {r.username} — {r.template}", sale_meta)
             await _notify_low_wallet(rid, load_config()["reps"][rid]["balance"])
         except ValueError:
             raise HTTPException(402, f"موجودی کافی نیست. قیمت: {price:,} تومان — موجودی شما: {rp['balance']:,} تومان")
@@ -860,7 +862,7 @@ async def rep_renew(r: RepRenewReq, rep=Depends(rep_guard)):
             await C.renew_user(api, r.username, dict(tpl), reset_usage=True)
             res = await api.request("GET", api.upath(r.username))
         except Exception as e:  # noqa: BLE001
-            await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — تمدید {r.username} ناموفق بود")
+            await asyncio.to_thread(C.wallet_adjust, rid, price, "refund", f"بازگشت وجه — تمدید {r.username} ناموفق بود", sale_meta)
             raise HTTPException(400, "تمدید ناموفق بود؛ مبلغ برگشت داده شد." + (f" ({e})" if isinstance(e, C.RebeccaError) else ""))
         await _hide_from_sales(r.username, t_start)
         await asyncio.to_thread(C.unpaid_clear, pid, r.username)
