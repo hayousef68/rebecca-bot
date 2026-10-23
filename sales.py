@@ -577,28 +577,27 @@ def rep_daily_sales(rid: str, days: int = 7) -> list[dict]:
     return out
 
 
-def _with_wallet(d: dict, d1: str, d2: str, partial: bool) -> dict:
-    w, n = wallet_income(d1, d2, partial)
-    d["wallet"], d["wallet_n"] = w, n
-    d["income"] += w
-    return d
-
-
 def compute(day: str, partial: bool) -> dict:
-    return _with_wallet(compute_rows(fetch_events(day, partial)), day, day, partial)
+    w, n = wallet_income(day, day, partial)
+    return compute_rows(fetch_events(day, partial), w, n)
 
 
 def compute_range(d1: str, d2: str, partial: bool) -> dict:
-    return _with_wallet(compute_rows(fetch_events_range(d1, d2, partial)), d1, d2, partial)
+    w, n = wallet_income(d1, d2, partial)
+    return compute_rows(fetch_events_range(d1, d2, partial), w, n)
 
 
-def compute_rows(rows: list[dict]) -> dict:
+def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0) -> dict:
+    """wallet = جمع خالص شارژ کیف پول نماینده‌ها (تومان). به گیگ همکاری تبدیل می‌شود (مبلغ ÷ قیمت هر گیگ همکاری، مثلاً ۳٬۰۰۰)
+    و مثل فروش همکاری هم در درآمد و هم در هزینه‌ی خرید حجم حساب می‌شود."""
     cfg = load_config()["sales"]
     cl = classify(rows, cfg)
     price = {(int(p["gb"]), int(p["months"])): int(p["price"]) for p in cfg["single_prices"]}
     rate = fallback_rate(cfg)
-    ham_gb = sum(gb * n for (gb, _k), n in cl["ham"].items())
-    ham_income = ham_gb * int(cfg["hamkari_per_gb"])
+    ham_per_gb = int(cfg["hamkari_per_gb"])
+    wallet_gb = (wallet / ham_per_gb) if ham_per_gb > 0 else 0
+    ham_gb = sum(gb * n for (gb, _k), n in cl["ham"].items()) + wallet_gb
+    ham_income = ham_gb * ham_per_gb
     single_income = sum(price[(gb, m)] * n for (gb, m, _k), n in cl["single"].items())
     single_gb = sum(gb * n for (gb, _m, _k), n in cl["single"].items())
     extra_gb = sum(gb * n for (gb, _m, _k), n in cl["extra"].items())
@@ -609,7 +608,7 @@ def compute_rows(rows: list[dict]) -> dict:
     per_gb_cost = int(cfg.get("buy_per_tb", 750000)) / float(cfg.get("tb_gb", 1000))
     ham_real_gb = ham_gb / mult
     cost = (ham_real_gb + single_gb + extra_gb) * per_gb_cost
-    return {"cl": cl, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
+    return {"cl": cl, "wallet": wallet, "wallet_n": wallet_n, "wallet_gb": wallet_gb, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
             "single_gb": single_gb, "extra_gb": extra_gb, "ham_real_gb": ham_real_gb, "mult": mult, "extra_income": extra_income, "rate": rate, "cost": cost,
             "income": ham_income + single_income + extra_income}
 
@@ -626,10 +625,12 @@ def _render(title: str, d: dict, html: bool) -> str:
     L.append(title)
     L.append("")
     L.append("🤝 همکاری (Hamkari)")
-    if not cl["ham"]:
+    if not cl["ham"] and not (d.get("wallet_n") or d.get("wallet")):
         L.append("  — فروشی نبود")
     for (gb, k), n in sorted(cl["ham"].items()):
         L.append(f"  {n} تا {gb} گیگ — {_KIND_FA.get(k, k)}")
+    if d.get("wallet_n") or d.get("wallet"):
+        L.append(f"  💳 شارژ کیف پول نماینده‌ها: {d['wallet_n']} مورد، {_t(d['wallet'])} تومان ← {d['wallet_gb']:,.1f} گیگ".replace(".0 گیگ", " گیگ"))
     L.append(f"  جمع: {_t(d['ham_gb'])} گیگ ← {_t(d['ham_income'])} تومان")
     L.append("")
     L.append("👤 فروش تکی (MS)")
@@ -652,9 +653,6 @@ def _render(title: str, d: dict, html: bool) -> str:
     if cl["ignored"]:
         L.append("")
         L.append(f"🚫 نادیده‌گرفته (تست/غیرفروشی): {sum(cl['ignored'].values())} مورد")
-    if d.get("wallet_n") or d.get("wallet"):
-        L.append("")
-        L.append(f"💳 شارژ کیف پول نماینده‌ها (خالص): {d['wallet_n']} مورد ← {_t(d['wallet'])} تومان")
     L.append("")
     L.append(f"💰 جمع کل فروش: {_t(d['income'])} تومان")
     if d.get("mult", 1) != 1:
@@ -745,7 +743,7 @@ def summary(kind: str = "today") -> dict:
     extra = [{"gb": gb, "months": m, "count": n, "suggest": int(round(gb * d["rate"]))} for (gb, m), n in sorted(agg.items())]
     att = sum(n for c, i in ((cl["ham"], 1), (cl["single"], 2), (cl["extra"], 2)) for k, n in c.items() if k[i] in ("attach", "next"))
     return {"wallet": int(d.get("wallet", 0)), "income": int(round(d["income"])), "cost": int(round(d["cost"])), "profit": int(round(d["income"] - d["cost"])),
-            "new": news, "renew": total - news, "attach": att, "skipped": sum(cl["skipped"].values()), "ham_gb": d["ham_gb"], "ignored": sum(cl["ignored"].values()), "extra": extra}
+            "new": news, "renew": total - news, "attach": att, "skipped": sum(cl["skipped"].values()), "ham_gb": d["ham_gb"], "wallet_gb": d.get("wallet_gb", 0), "ignored": sum(cl["ignored"].values()), "extra": extra}
 
 
 def set_plan(gb: int, months: int, price: int) -> None:
