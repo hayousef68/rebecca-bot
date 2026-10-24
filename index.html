@@ -1429,6 +1429,12 @@ async function vSet() {
     const r = await api('/backup/verify', 'POST', { content: await f.text(), password: rsPw.value });
     alert(`✅ بکاپ سالم است${r.encrypted ? ' (رمزنگاری‌شده؛ رمز درست بود)' : ''}\n${r.panels} پنل · ${r.reps} نماینده · ${r.rep_users} کاربر تخصیص‌یافته\nمجموع موجودی نماینده‌ها: ${toman(r.balance)}${r.full ? `\nلاگ فروش: ${r.attach_log} رکورد` : ''}${r.old_format ? '\n⚠️ فرمت قدیمی (بدون نماینده‌ها)' : ''}\n\nچیزی تغییر نکرد.`);
   });
+  const rcB = h('button', { class: 'btn', type: 'button' }, '🧮 بررسی تطابق مالی');
+  rcB.onclick = () => run(rcB, async () => {
+    const r = await api('/reconcile');
+    if (r.ok) { alert(`✅ همه‌ی موجودی‌ها با تراکنش‌ها می‌خوانند\n${r.reps} نماینده · مجموع ${toman(r.total)}`); return; }
+    alert(`${r.level === 'bad' ? '🔴' : '🟡'} ${r.count} اختلاف پیدا شد:\n\n` + r.issues.map(i => `• ${i.name}: ${i.text}`).join('\n'));
+  });
   const rsB = h('button', { class: 'btn bad', type: 'button' }, '♻️ بازیابی از فایل');
   rsB.onclick = () => run(rsB, async () => {
     const f = fileI.files[0]; if (!f) throw new Error('ابتدا فایل بکاپ را انتخاب کنید.');
@@ -1447,6 +1453,7 @@ async function vSet() {
       }
     } else if (!confirm('تنظیمات از این فایل بازیابی شود؟ (موجودی نماینده‌ها تغییری نمی‌کند)\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
     const r = await withCode(code => api('/backup/restore', 'POST', { content, password: rsPw.value, wallet_mode: mode, confirm_wallet: confirmWallet, code }));
+    if (r.recon && !r.recon.ok) alert(`⚠️ بعد از بازیابی ${r.recon.count} اختلاف مالی پیدا شد:\n` + r.recon.issues.map(i => `• ${i.name}: ${i.text}`).join('\n'));
     toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · موجودی کل ${toman(r.balance)}${r.wallet_kept ? ' (کیف پول‌ها دست‌نخورده)' : ''} · ربات در حال ریستارت`);
     setTimeout(() => location.reload(), r.web_changed ? 1800 : 1200);
   });
@@ -1461,7 +1468,7 @@ async function vSet() {
     h('p', { class: 'hint' }, 'با تنظیم رمز، فایل بکاپ (ارسال خودکار تلگرام و دانلود) با AES-256 رمزنگاری می‌شود. رمز را جایی جدا از فایل بکاپ نگه دارید؛ بدون آن فایل قابل بازیابی نیست.'),
     h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 6px' }, 'بازیابی از فایل بکاپ'), fileI, field('رمز بکاپ (اگر فایل رمزنگاری‌شده است)', rsPw),
     h('p', { class: 'hint' }, 'بکاپ شامل نماینده‌ها (با رمز هش‌شده)، لیست کاربرهای هر نماینده و وضعیت مسدود/قفل آن‌هاست؛ بعد از بازیابی روی سرور جدید هر کاربر دوباره زیر نماینده‌ی خودش نمایش داده می‌شود. فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
-    h('div', { class: 'btns' }, vfB, rsB));
+    h('div', { class: 'btns' }, vfB, rsB, rcB));
   // ─── نماینده‌ها ───
   let reps = [], topups = []; try { const rr = await api('/reps'); reps = rr.reps; topups = rr.topups || []; } catch { /* خطا: لیست خالی */ }
   const TYPE_FA = { charge: '➕ شارژ ادمین', deduct: '➖ کسر ادمین', topup: '✅ افزایش موجودی', purchase: '🛒 خرید اکانت', refund: '↩️ بازگشت وجه' };
