@@ -7,7 +7,7 @@
 <title>پنل </title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
-<script>try{var t=localStorage.getItem("rb-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<script>try{var t=localStorage.getItem("rb-theme");if(t)document.documentElement.dataset.theme=t;var k=localStorage.getItem("rb-skin");if(k==="aura")document.documentElement.dataset.skin=k}catch(e){}</script>
 <style>
 :root{
   --bg:#080c14;--s1:#0f1622;--s2:#182130;--line:#222d3d;--tx:#e9f0f6;--mu:#8497aa;
@@ -277,10 +277,42 @@ html[data-theme=emerald]{--bg:#07130e;--s0:#0a1812;--s1:#0f1f18;--s2:#173026;--l
 html[data-theme=rose]{--bg:#140a10;--s0:#180d14;--s1:#1f121a;--s2:#2d1a26;--line:#3a2231;--ac:#fb7185;--ac2:#c084fc;--ac-ink:#1b0710}
 html[data-theme=sunset]{--bg:#0a1016;--s0:#0f1821;--s1:#121b24;--s2:#1a2632;--line:#233241;--ac:#f0b429;--ac2:#ff8a3d;--ac-ink:#1c1503}
 .themesel{cursor:pointer;font:inherit;font-size:var(--fs-xs);width:auto!important;min-height:0!important;padding:3px 8px!important;border-radius:99px!important}
+
+/* ───────── پوسته‌ی «اورا» (شکل و آیکون؛ مستقل از رنگ قالب) — پیش‌فرض: کلاسیک ───────── */
+.logo svg{display:none}
+html[data-skin=aura]{--r:26px}
+html[data-skin=aura] body{background:radial-gradient(700px 320px at 50% -160px,color-mix(in srgb,var(--ac) 14%,transparent),transparent 70%),var(--bg);background-attachment:fixed}
+html[data-skin=aura] header{background:var(--s0);backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:1px solid var(--line)}
+html[data-skin=aura] .logo{width:34px;height:34px;border-radius:50%;font-size:0;background:var(--ac);box-shadow:0 0 0 4px color-mix(in srgb,var(--ac) 18%,transparent)}
+html[data-skin=aura] .logo svg{display:block;width:20px;height:20px;fill:none;stroke:var(--ac-ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+html[data-skin=aura] .card,html[data-skin=aura] .stat div,html[data-skin=aura] .item,html[data-skin=aura] .hero{background:var(--s1);border:1px solid var(--line);border-radius:24px;box-shadow:0 2px 0 color-mix(in srgb,var(--fg) 3%,transparent),0 14px 30px -20px #000b}
+html[data-skin=aura] .card:hover,html[data-skin=aura] .stat div:hover{border-color:var(--ac);transform:none}
+html[data-skin=aura] .card h2::before,html[data-skin=aura] .sec h2::before{width:8px;height:8px;border-radius:50%}
+html[data-skin=aura] .btn,html[data-skin=aura] .pill,html[data-skin=aura] .chip,html[data-skin=aura] .seg,html[data-skin=aura] .seg button{border-radius:999px}
+html[data-skin=aura] .btn.pri{background:var(--ac);color:var(--ac-ink);box-shadow:0 8px 20px -10px var(--ac)}
+html[data-skin=aura] .btn.pri:hover{transform:none;box-shadow:0 10px 24px -8px var(--ac)}
+html[data-skin=aura] .chip.on,html[data-skin=aura] .seg button.on{background:var(--ac);color:var(--ac-ink)}
+html[data-skin=aura] input,html[data-skin=aura] select,html[data-skin=aura] textarea{border-radius:16px;background:var(--s0);border-color:var(--line)}
+html[data-skin=aura] input:focus,html[data-skin=aura] select:focus,html[data-skin=aura] textarea:focus{border-color:var(--ac);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 22%,transparent)}
+html[data-skin=aura] .bar,html[data-skin=aura] .bar i{border-radius:99px}
+/* نوار پایین: چسبیده به لبه، آیکون دو‌رنگ، نشانگر بالای تب فعال */
+html[data-skin=aura] nav{inset:auto 0 0 0;max-width:none;border-radius:26px 26px 0 0;border-width:1px 0 0;background:var(--s0);backdrop-filter:none;-webkit-backdrop-filter:none;padding:6px 8px calc(8px + env(safe-area-inset-bottom));box-shadow:0 -10px 30px -18px #000c}
+html[data-skin=aura] nav button{border-radius:18px;padding:6px 0 5px;gap:2px;background:none}
+html[data-skin=aura] nav button svg{width:24px;height:24px;stroke-width:1.6;padding:3px;box-sizing:content-box;border-radius:14px;transition:background .2s,transform .2s}
+html[data-skin=aura] nav button svg .f{fill:color-mix(in srgb,currentColor 14%,transparent)}
+html[data-skin=aura] nav button.on{background:none;color:var(--ac)}
+html[data-skin=aura] nav button.on svg{background:color-mix(in srgb,var(--ac) 18%,transparent);transform:none}
+html[data-skin=aura] nav button.on svg .f{fill:color-mix(in srgb,var(--ac) 45%,transparent)}
+html[data-skin=aura] nav button.on{box-shadow:none}
+html[data-skin=aura] nav button.on::after{bottom:auto;top:-7px;left:50%;transform:translateX(-50%);width:26px;height:4px;border-radius:0 0 6px 6px}
+html.desk[data-skin=aura] nav{inset:auto;top:76px;inset-inline-start:14px;bottom:auto;width:92px;max-width:none;border-radius:24px;border-width:1px;padding:6px}
+html.desk[data-skin=aura] nav button.on::after{top:auto;bottom:3px;left:50%;transform:translateX(-50%);border-radius:3px;width:16px;height:3px}
+.skinbtn{cursor:pointer;font:inherit;display:inline-flex;align-items:center;justify-content:center;width:30px;height:28px;padding:0!important}
+.skinbtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 </style>
 </head>
 <body>
-<header><h1><span class="logo">R</span>پنل مدیریت ربکا</h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:var(--fs-sm)"></select><span id="conn" class="pill">…</span><select id="themesel" class="pill themesel" aria-label="قالب"></select><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="خروج">خروج</button></div></header>
+<header><h1><span class="logo">R<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7v5c0 4.5 3.2 7.8 8 9 4.8-1.2 8-4.5 8-9V7z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg></span>پنل مدیریت ربکا</h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:var(--fs-sm)"></select><span id="conn" class="pill">…</span><select id="themesel" class="pill themesel" aria-label="قالب"></select><button id="skinbtn" class="pill skinbtn" type="button" aria-label="پوسته" title="تعویض پوسته"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4C21 7 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15" cy="7.5" r="1"/></svg></button><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="خروج">خروج</button></div></header>
 <main id="view"></main>
 <nav id="nav"></nav>
 <script>
@@ -385,7 +417,14 @@ const ICONS = {   // آیکون‌های خطی (ثابت و داخلی)
   tpl: '<rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="10" height="6" rx="2"/><path d="M18 14v6M15 17h6"/>',
   set: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/>'
 };
-const svgIcon = k => { const w = document.createElement('span'); w.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`; return w.firstChild; };
+const ICONS2 = {   // آیکون‌های دو‌رنگ پوسته‌ی «اورا» (کلاس f = ناحیه‌ی پرشونده)
+  create: '<circle class="f" cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
+  users: '<circle class="f" cx="9" cy="8.5" r="3.5"/><path class="f" d="M2.5 20c.4-3.6 3.1-5.5 6.5-5.5s6.1 1.9 6.5 5.5z"/><path d="M16 5.3a3.5 3.5 0 0 1 0 6.4M18.5 14.9c1.7.8 2.7 2.5 3 5.1h-3"/>',
+  home: '<path class="f" d="M3.5 10.8 12 3.5l8.5 7.3V19a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19z"/><path d="M9.5 20.5v-6h5v6"/>',
+  tpl: '<path class="f" d="m12 3 9 4.8-9 4.8-9-4.8z"/><path d="m3 12.2 9 4.8 9-4.8M3 16.4l9 4.8 9-4.8"/>',
+  set: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle class="f" cx="15" cy="7" r="2.2"/><circle class="f" cx="9" cy="17" r="2.2"/>'
+};
+const svgIcon = k => { const set = document.documentElement.dataset.skin === 'aura' ? ICONS2 : ICONS; const w = document.createElement('span'); w.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${set[k] || ICONS[k]}</svg>`; return w.firstChild; };
 const TABS = [['create', 'create', 'ساخت'], ['users', 'users', 'کاربران'], ['home', 'home', 'خانه'], ['tpl', 'tpl', 'تمپلت'], ['set', 'set', 'تنظیمات']];
 
 function renderNav() {
@@ -1590,6 +1629,10 @@ var cur="violet";try{cur=localStorage.getItem("rb-theme")||"violet"}catch(e){}ap
 var s=document.getElementById("themesel");if(!s)return;
 T.forEach(function(x){var o=document.createElement("option");o.value=x[0];o.textContent=x[1];if(x[0]===cur)o.selected=true;s.appendChild(o)});
 s.onchange=function(){apply(s.value);try{localStorage.setItem("rb-theme",s.value)}catch(e){}}})();
+(function(){var r=document.documentElement,b=document.getElementById("skinbtn");if(!b)return;
+function refresh(){try{if(typeof renderNav==="function")renderNav()}catch(e){}b.title=r.dataset.skin==="aura"?"پوسته: اورا ← کلاسیک":"پوسته: کلاسیک ← اورا"}
+b.onclick=function(){var on=r.dataset.skin==="aura";if(on)delete r.dataset.skin;else r.dataset.skin="aura";try{localStorage.setItem("rb-skin",on?"classic":"aura")}catch(e){}refresh()};
+refresh()})();
 </script>
 </body>
 </html>
