@@ -937,6 +937,116 @@ def _backup_slot(iv: int) -> int:
     return int(local // (iv * 60))
 
 
+_BB: dict = {"token": None, "obj": None}
+
+
+def backup_bot(main_bot, cfg: dict | None = None):
+    """رباتی که فایل بکاپ را می‌فرستد: اگر «ربات بکاپ» جدا تعریف شده همان، وگرنه ربات اصلی."""
+    cfg = cfg or load_config()
+    tok = (cfg["backup"].get("bot_token") or "").strip()
+    if not tok:
+        return main_bot
+    if _BB["token"] != tok:
+        from telegram import Bot
+        _BB.update(token=tok, obj=Bot(tok))
+    return _BB["obj"]
+
+
+LIVE_MIN_GAP = 180        # حداقل فاصله‌ی دو به‌روزرسانی «بکاپ آنلاین» (ثانیه)؛ جلوگیری از فشار روی تلگرام
+
+
+def _chat_id(v):
+    v = str(v).strip()
+    return int(v) if v.lstrip("-").isdigit() else v
+
+
+async def _live_push(bot, targets: list, msgs: dict) -> int:
+    """فایل بکاپ را «داخل همان پیام قبلی» جایگزین می‌کند (ویرایش بی‌صدا)؛ فقط اگر پیام وجود نداشت پیام تازه می‌فرستد."""
+    import io
+    from telegram import InputMediaDocument
+    try:
+        data = await asyncio.to_thread(full_backup_bytes)
+    except (OSError, ValueError) as e:
+        log.warning("live backup read: %s", e)
+        return 0
+    name = "rebecca-live-backup.json"
+    pw = load_config()["backup"].get("password") or ""
+    cap = f"🟢 بکاپ آنلاین — آخرین به‌روزرسانی: {datetime.now(TEHRAN).strftime('%Y-%m-%d %H:%M')} (تهران)"
+    if pw:
+        try:
+            data = await asyncio.to_thread(encrypt_backup, data, pw)
+        except Exception as e:  # noqa: BLE001
+            log.warning("live backup encrypt: %s", e)           # هرگز بدون رمز نمی‌فرستیم
+            return 0
+        name, cap = name[:-5] + ".enc", cap + "\n🔐 رمزنگاری‌شده؛ برای ریستور رمز بکاپ لازم است."
+    try:
+        b = backup_summary()
+        cap += f"\n👥 {b['reps']} نماینده · {b['rep_users']} کاربر"
+        cap += f"\n💰 جمع موجودی نماینده‌ها: {sum(r['balance'] for r in load_config()['reps'].values()):,} تومان"
+    except Exception:  # noqa: BLE001
+        pass
+    ok = 0
+    for chat in targets:
+        key, mid, done = str(chat), msgs.get(str(chat)), False
+        if mid:
+            try:
+                bio = io.BytesIO(data)
+                bio.name = name
+                await bot.edit_message_media(chat_id=_chat_id(chat), message_id=int(mid), media=InputMediaDocument(bio, caption=cap))
+                done = True
+            except Exception as e:  # noqa: BLE001
+                m = str(e).lower()
+                if "not modified" in m:
+                    done = True
+                elif any(k in m for k in ("not found", "can't be edited", "message_id_invalid", "to edit")):
+                    msgs.pop(key, None)                          # پیام حذف شده؛ پایین پیام تازه ساخته می‌شود
+                    mid = None
+                else:
+                    log.warning("live backup edit %s: %s", chat, e)   # خطای موقت (شبکه…) ← پیام تکراری نساز
+                    continue
+        if not done:
+            try:
+                bio = io.BytesIO(data)
+                bio.name = name
+                sent = await bot.send_document(_chat_id(chat), bio, caption=cap, disable_notification=True)
+                msgs[key] = sent.message_id
+                done = True
+            except Exception as e:  # noqa: BLE001
+                log.warning("live backup send %s: %s", chat, e)
+        ok += 1 if done else 0
+    return ok
+
+
+async def _live_step(bot, cfg: dict) -> None:
+    """«بکاپ آنلاین»: هر بار محتوا عوض شد (حداکثر هر LIVE_MIN_GAP ثانیه) همان یک پیام در تلگرام به‌روز می‌شود."""
+    bc = cfg["backup"]
+    targets = [bc["live_chat"]] if bc.get("live_chat") else list(cfg["admin_ids"])
+    if not targets:
+        return
+    st = await asyncio.to_thread(_load_backup_state)
+    lv = st.get("live") if isinstance(st.get("live"), dict) else {}
+    import hashlib
+    tk = hashlib.sha256((bc.get("bot_token") or "").encode()).hexdigest()[:10]
+    msgs = lv.get("msgs") if isinstance(lv.get("msgs"), dict) else {}
+    if lv.get("tk") != tk:                                       # فرستنده عوض شده: پیام‌های ربات قبلی قابل ویرایش نیستند
+        msgs = {}
+        lv = {}
+    now = _time.time()
+    if now < float(lv.get("retry") or 0):
+        return
+    fp = await asyncio.to_thread(_backup_fingerprint)
+    missing = any(str(t) not in msgs for t in targets)
+    if fp == lv.get("fp") and not missing:
+        return
+    if not missing and now - float(lv.get("ts") or 0) < LIVE_MIN_GAP:
+        return
+    ok = await _live_push(bot, targets, msgs)
+    extra = {"live": {"fp": fp if ok else lv.get("fp"), "ts": now if ok else lv.get("ts", 0), "msgs": msgs, "retry": 0 if ok else now + 120, "tk": tk}}
+    if ok:
+        extra["last_ok"] = now
+    await asyncio.to_thread(_save_backup_state, int(st.get("iv") or 0), int(st.get("slot") or 0), **extra)
+
+
 async def backup_loop(bot):
     """بکاپ اصلی را طبق زمان‌بندی ثابت به ادمین‌ها می‌فرستد (چه تغییری شده باشد چه نه).
     interval_min = ۱۴۴۰ ← روزانه ساعت ۱۲:۰۰ تهران؛ کمتر ← سر ساعتِ مضرب N دقیقه (مثلاً ۶۰ دقیقه: ۱۰:۰۰، ۱۱:۰۰، ...).
@@ -951,7 +1061,14 @@ async def backup_loop(bot):
             if not (bc["enabled"] and cfg["admin_ids"]):
                 continue
             iv = int(bc.get("interval_min", 1440))
-            iv = 1440 if iv >= 1440 else max(5, iv)
+            live = bool(bc.get("live"))
+            iv = 1440 if (iv >= 1440 or live) else max(5, iv)         # بکاپ آنلاین روشن: پیام‌های تازه فقط روزانه (آرشیو)
+            bbot = backup_bot(bot, cfg)                                # ربات بکاپِ جدا (اگر تعریف شده) یا ربات اصلی
+            if live:
+                try:
+                    await _live_step(bbot, cfg)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("live backup: %s", e)
             cur = _backup_slot(iv)
             st = await asyncio.to_thread(_load_backup_state)
             if st.get("iv") != iv or not isinstance(st.get("slot"), int):
@@ -960,16 +1077,22 @@ async def backup_loop(bot):
                 continue
             if cur <= st["slot"] or _time.time() < retry_after:
                 continue
+            fp_now = None
+            if iv < 1440:                                              # بازه‌ی کوتاه: اگر از آخرین بکاپِ ارسال‌شده چیزی عوض نشده، پیام تکراری نفرست
+                fp_now = await asyncio.to_thread(_backup_fingerprint)
+                if fp_now == st.get("sent_fp"):
+                    await asyncio.to_thread(_save_backup_state, iv, cur)
+                    continue
             cap = ("💾 بکاپ اصلی روزانه" if iv >= 1440 else f"💾 بکاپ خودکار (هر {iv} دقیقه)") + \
                 " — شامل همه‌ی تنظیمات، نماینده‌ها، موجودی‌ها و تراکنش‌ها؛ شامل توکن و رمزهاست، جای امن نگه دارید."
-            if await send_backup(bot, cfg["admin_ids"], cap):
-                await asyncio.to_thread(_save_backup_state, iv, cur)
+            if await send_backup(bbot, cfg["admin_ids"], cap):
+                await asyncio.to_thread(_save_backup_state, iv, cur, **({"sent_fp": fp_now} if fp_now else {}))
                 retry_after = 0.0
             else:
                 if cfg.get("smart_alerts", {}).get("backup_failed", True):
                     for uid in cfg["admin_ids"]:
                         try:
-                            await bot.send_message(uid, "⚠️ ارسال بکاپ ربکا ناموفق بود؛ ربات تا ۲ دقیقه دیگر دوباره تلاش می‌کند.")
+                            await bot.send_message(uid, "⚠️ ارسال بکاپ ربکا ناموفق بود؛ ربات تا ۲ دقیقه دیگر دوباره تلاش می‌کند." + ("\nربات بکاپ را با حساب ادمین Start کرده‌اید؟ (بدون Start تلگرام اجازه‌ی پیام نمی‌دهد)" if bbot is not bot else ""))
                         except Exception:
                             pass
                 retry_after = _time.time() + 120           # ارسال ناموفق: ۲ دقیقه بعد دوباره
