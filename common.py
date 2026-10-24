@@ -89,7 +89,9 @@ DEFAULT_CFG = {
     "audit_log": [],
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
     "unpaid": {"hours": 24, "pending": {}},   # تمدیدهای «واریز نشده»: pending = {panel_id: {username: {"due": ts, "set": ts}}}
-    "web": {"user": "admin", "salt": "", "hash": "", "secret": ""},
+    "web": {"user": "admin", "salt": "", "hash": "", "secret": "", "totp": "", "totp_pending": "", "totp_last": 0, "recovery": [], "known_ips": []},
+    "security": {"wallet_code_threshold": 2000000},   # شارژ/کسر/تأییدِ بالاتر از این مبلغ (تومان) با ورود دومرحله‌ای، کد 2FA جداگانه می‌خواهد
+    "login_log": [],     # تلاش‌های ورود (موفق/ناموفق) با IP: [{ts, ip, user, ok, why}]
     "reps": {},          # نمایندگان: {id: {name, label, salt, hash, blocked, created}}
     "rep_users": {},     # کاربرهای هر نماینده: {panel_id: {username: rep_id}}
     "rep_paid": {},      # کاربرهایی که نماینده «پرداخت شد» زده: {panel_id: {username: timestamp}}
@@ -221,6 +223,23 @@ def _normalize(data: dict) -> dict:
         cfg["web"] = {}
     for k, v in DEFAULT_CFG["web"].items():
         cfg["web"].setdefault(k, v)
+    w_ = cfg["web"]
+    w_["recovery"] = [str(x) for x in w_["recovery"]][:12] if isinstance(w_.get("recovery"), list) else []
+    w_["known_ips"] = [str(x)[:64] for x in w_["known_ips"]][-30:] if isinstance(w_.get("known_ips"), list) else []
+    w_["totp"] = str(w_.get("totp") or "")
+    w_["totp_pending"] = str(w_.get("totp_pending") or "")
+    try:
+        w_["totp_last"] = int(w_.get("totp_last") or 0)
+    except (TypeError, ValueError):
+        w_["totp_last"] = 0
+    sec = cfg.get("security") if isinstance(cfg.get("security"), dict) else {}
+    try:
+        thr = max(0, int(sec.get("wallet_code_threshold", 2000000)))
+    except (TypeError, ValueError):
+        thr = 2000000
+    cfg["security"] = {"wallet_code_threshold": thr}
+    cfg["login_log"] = [{"ts": float(x.get("ts") or 0), "ip": str(x.get("ip") or "")[:64], "user": str(x.get("user") or "")[:60], "ok": bool(x.get("ok")), "why": str(x.get("why") or "")[:60]}
+                        for x in (cfg.get("login_log") if isinstance(cfg.get("login_log"), list) else []) if isinstance(x, dict)][-300:]
     ssl_cfg = copy.deepcopy(DEFAULT_CFG["ssl"])
     if isinstance(cfg.get("ssl"), dict):
         ssl_cfg.update({k: v for k, v in cfg["ssl"].items() if k in ssl_cfg})
@@ -519,6 +538,223 @@ def check_web_login(user: str, pw: str) -> bool:
         _auth_ok[key] = now + 300
         return True
     return False
+
+
+# ─────────────────────── ورود دومرحله‌ای (TOTP، RFC 6238) ───────────────────────
+import base64
+import hmac as _hmac
+import struct
+
+
+def totp_new_secret() -> str:
+    return base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+
+
+def _totp_at(secret: str, step: int) -> str:
+    key = base64.b32decode(secret + "=" * (-len(secret) % 8), casefold=True)
+    mac = _hmac.new(key, struct.pack(">Q", step), hashlib.sha1).digest()
+    o = mac[-1] & 0x0F
+    return f"{(struct.unpack('>I', mac[o:o + 4])[0] & 0x7FFFFFFF) % 1_000_000:06d}"
+
+
+def totp_match(secret: str, code: str) -> int | None:
+    """شماره‌ی گامِ منطبق (با ±۱ گام تحمل ساعت) یا None."""
+    code = re.sub(r"\D", "", str(code or "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")))
+    if len(code) != 6 or not secret:
+        return None
+    now = int(time.time()) // 30
+    for st in (now, now - 1, now + 1):
+        if secrets.compare_digest(_totp_at(secret, st), code):
+            return st
+    return None
+
+
+def totp_uri(secret: str, user: str) -> str:
+    return f"otpauth://totp/Rebecca:{quote(user)}?secret={secret}&issuer=Rebecca&digits=6&period=30"
+
+
+def _rec_hash(code: str) -> str:
+    return hashlib.sha256(re.sub(r"[^a-z0-9]", "", code.lower()).encode()).hexdigest()
+
+
+def totp_enabled() -> bool:
+    return bool(load_config()["web"].get("totp"))
+
+
+def totp_verify_use(code: str) -> bool:
+    """کد ۶ رقمی یا یکی از کدهای بازیابی را می‌پذیرد. هر کد فقط یک‌بار قابل استفاده است (ضد تکرار)."""
+    ok = {"v": False}
+
+    def mut(c):
+        w = c["web"]
+        if not w.get("totp"):
+            return
+        st = totp_match(w["totp"], code)
+        if st is not None and st > int(w.get("totp_last") or 0):
+            w["totp_last"] = st
+            ok["v"] = True
+            return
+        if st is None:
+            h = _rec_hash(str(code or ""))
+            if len(re.sub(r"[^a-z0-9]", "", str(code or "").lower())) >= 8 and h in w["recovery"]:
+                w["recovery"] = [x for x in w["recovery"] if x != h]
+                ok["v"] = True
+    update_config(mut)
+    return ok["v"]
+
+
+def totp_begin() -> dict:
+    """ساخت راز جدید (هنوز فعال نیست تا کاربر با یک کد درست تأیید کند)."""
+    sec = totp_new_secret()
+    update_config(lambda c: c["web"].__setitem__("totp_pending", sec))
+    return {"secret": sec, "uri": totp_uri(sec, load_config()["web"].get("user", "admin"))}
+
+
+def totp_confirm(code: str) -> list[str]:
+    """با کد درست، 2FA فعال می‌شود و ۸ کد بازیابی (فقط همین یک‌بار نمایش) برمی‌گردد."""
+    codes: list[str] = []
+
+    def mut(c):
+        w = c["web"]
+        sec = w.get("totp_pending")
+        if not sec:
+            raise ValueError("ابتدا «فعال‌سازی» را بزنید.")
+        st = totp_match(sec, code)
+        if st is None:
+            raise ValueError("کد اشتباه است؛ کد فعلیِ اپلیکیشن را وارد کنید.")
+        w["totp"], w["totp_pending"], w["totp_last"] = sec, "", st
+        for _ in range(8):
+            codes.append(secrets.token_hex(3) + "-" + secrets.token_hex(3))
+        w["recovery"] = [_rec_hash(x) for x in codes]
+        w["secret"] = secrets.token_hex(32)           # نشست‌های قبلی (بدون 2FA) باطل شوند
+    update_config(mut)
+    return codes
+
+
+def totp_disable() -> None:
+    def mut(c):
+        c["web"].update(totp="", totp_pending="", totp_last=0, recovery=[])
+    update_config(mut)
+
+
+# ─────────────────────── مرحله‌ی دوم ورود، کد برای عملیات مالی بزرگ، بازیابی امن ───────────────────────
+PRE_TTL = 300
+
+
+def make_pre_token(user: str, remember: bool) -> str:
+    """توکن کوتاه‌مدت بین «رمز درست» و «کد 2FA». کوکی نشست نیست و فقط برای /api/login/2fa قابل استفاده است."""
+    import hmac
+    key = _session_key()
+    if key is None:
+        raise ValueError("رمز وب‌پنل تنظیم نشده است.")
+    body = f"2fa|{user}|{int(bool(remember))}|{int(time.time()) + PRE_TTL}"
+    return body + "|" + hmac.new(key, body.encode(), hashlib.sha256).hexdigest()
+
+
+def check_pre_token(tok: str) -> tuple[str, bool] | None:
+    import hmac
+    try:
+        body, sig = str(tok).rsplit("|", 1)
+        tag, user, rem, exp = body.split("|")
+        key = _session_key()
+        if tag != "2fa" or key is None or int(exp) < time.time():
+            return None
+        if hmac.compare_digest(sig, hmac.new(key, body.encode(), hashlib.sha256).hexdigest()):
+            return user, rem == "1"
+    except (ValueError, AttributeError):
+        pass
+    return None
+
+
+def wallet_code_threshold() -> int:
+    return int(load_config()["security"].get("wallet_code_threshold", 2000000))
+
+
+def code_needed_for(amount: int) -> bool:
+    """عملیات مالی با مبلغِ ≥ آستانه، وقتی 2FA روشن است، کد تازه می‌خواهد. آستانه‌ی ۰ = خاموش."""
+    thr = wallet_code_threshold()
+    return totp_enabled() and thr > 0 and abs(int(amount)) >= thr
+
+
+_WALLET_KEYS = ("wallet_tx", "wallet_income", "rep_sales", "topups", "audit_log", "login_log")
+
+
+def restore_diff(cur: dict, new: dict) -> dict:
+    """مقایسه‌ی وضعیت فعلی با بکاپ، قبل از بازیابی: کدام موجودی‌ها عوض می‌شود و چه تراکنش‌هایی از بین می‌رود."""
+    rows = []
+    for rid in set(cur["reps"]) | set(new["reps"]):
+        a, b = cur["reps"].get(rid), new["reps"].get(rid)
+        ref = a or b
+        rows.append({"id": rid, "name": ref.get("label") or ref["name"], "now": a["balance"] if a else None, "backup": b["balance"] if b else None})
+    changed = [r for r in rows if r["now"] != r["backup"]]
+    changed.sort(key=lambda r: -abs((r["backup"] or 0) - (r["now"] or 0)))
+    latest = 0.0
+    for r in new["reps"].values():
+        latest = max([latest] + [float(e.get("ts") or 0) for e in r.get("log", [])])
+    for t in new.get("wallet_tx", []):
+        latest = max(latest, float(t.get("ts") or 0))
+    lost = sum(1 for r in cur["reps"].values() for e in r.get("log", []) if float(e.get("ts") or 0) > latest)
+    return {"changed": changed[:40], "changed_n": len(changed),
+            "total_now": sum(r["balance"] for r in cur["reps"].values()), "total_backup": sum(r["balance"] for r in new["reps"].values()),
+            "only_now": [r["name"] for r in rows if r["backup"] is None], "only_backup": [r["name"] for r in rows if r["now"] is None],
+            "lost_tx": lost, "backup_latest_ts": latest, "pending_topups_now": sum(1 for t in cur["topups"] if t.get("status") == "pending")}
+
+
+def restore_keep_wallet(new: dict, cur: dict) -> None:
+    """بازیابی «فقط تنظیمات»: موجودی، تراکنش‌ها و لاگ‌های فعلی دست‌نخورده می‌مانند. نماینده‌ی فقط-در-فعلی حذف نمی‌شود،
+    نماینده‌ی فقط-در-بکاپ با موجودی صفر اضافه می‌شود."""
+    only_cur = set(cur["reps"]) - set(new["reps"])
+    for rid, r in cur["reps"].items():
+        if rid in new["reps"]:
+            new["reps"][rid]["balance"], new["reps"][rid]["log"] = r["balance"], r["log"]
+        else:
+            new["reps"][rid] = r
+    for rid, r in new["reps"].items():
+        if rid not in cur["reps"]:
+            r["balance"], r["log"] = 0, []
+    for pid, m in cur["rep_users"].items():
+        for u, rid in m.items():
+            if rid in only_cur:
+                new["rep_users"].setdefault(pid, {})[u] = rid
+    for k in _WALLET_KEYS:
+        new[k] = cur[k]
+
+
+def preserve_security(new: dict, cur: dict) -> None:
+    """بازیابی هرگز ورود دومرحله‌ای را خاموش یا عوض نمی‌کند (بکاپ قدیمی ممکن است قبل از فعال‌شدن 2FA باشد)."""
+    if cur["web"].get("totp"):
+        for k in ("totp", "totp_pending", "totp_last", "recovery"):
+            new["web"][k] = cur["web"][k]
+    new["web"]["known_ips"] = cur["web"]["known_ips"]
+    new["security"] = cur["security"]
+
+
+# ─────────────────────── لاگ تلاش‌های ورود ───────────────────────
+_login_last: dict[str, float] = {}
+
+
+def login_log_add(ip: str, user: str, ok: bool, why: str = "") -> bool:
+    """ثبت تلاش ورود. ناموفق‌ها برای هر IP حداکثر هر ۱۰ ثانیه یک‌بار ثبت می‌شوند (ضد پر کردن لاگ). خروجی: True اگر ورود موفق از IP جدید بود."""
+    now = time.time()
+    if not ok:
+        if now - _login_last.get(ip, 0) < 10:
+            return False
+        _login_last[ip] = now
+        if len(_login_last) > 500:
+            _login_last.clear()
+    new_ip = {"v": False}
+
+    def mut(c):
+        c["login_log"].append({"ts": now, "ip": ip, "user": str(user)[:60], "ok": bool(ok), "why": why})
+        c["login_log"] = c["login_log"][-300:]
+        if ok and why == "admin":
+            kn = c["web"]["known_ips"]
+            if ip not in kn:
+                new_ip["v"] = bool(kn)               # اولین ورود بعد از نصب «جدید» حساب نمی‌شود
+                kn.append(ip)
+                c["web"]["known_ips"] = kn[-30:]
+    update_config(mut)
+    return new_ip["v"]
 
 
 # ─────────────────────── نشست ورود (کوکی امضاشده) ───────────────────────
@@ -1859,6 +2095,8 @@ def _cli(argv):
     w.add_argument("--password", default="")
     s_ = sp.add_parser("ssl")
     s_.add_argument("action", choices=["off", "status"])
+    t_ = sp.add_parser("twofa")
+    t_.add_argument("action", choices=["off", "status"])
     a = p.parse_args(argv)
 
     cfg = load_config()
@@ -1871,6 +2109,13 @@ def _cli(argv):
         else:
             ss = cfg["ssl"]
             print(f"SSL={'on' if ss['enabled'] else 'off'}\nCERT={ss['cert']}\nKEY={ss['key']}\nERROR={ss['error']}")
+        return
+    if a.cmd == "twofa":                      # بازیابی اضطراری (گم‌شدن گوشی و کدهای بازیابی)؛ فقط با دسترسی root به سرور
+        if a.action == "off":
+            totp_disable()
+            print("TWOFA=off")
+        else:
+            print("TWOFA=" + ("on" if totp_enabled() else "off"))
         return
     # رمز از متغیر محیطی خوانده می‌شود تا در لیست پروسه‌ها (ps) دیده نشود
     env_pw = os.environ.get("REBECCA_INIT_PASSWORD", "")
