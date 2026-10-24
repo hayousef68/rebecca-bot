@@ -89,6 +89,26 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Rebecca Panel", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+class _SlowLog:
+    """لاگ درخواست‌های کند API (بیش از ۰٫۸ ثانیه) برای پیدا کردن علت کندی: journalctl -u rebecca-webapp | grep SLOW"""
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope.get("path", "").startswith("/api/"):
+            return await self.inner(scope, receive, send)
+        t0 = time.perf_counter()
+        try:
+            await self.inner(scope, receive, send)
+        finally:
+            dt = time.perf_counter() - t0
+            if dt > 0.8:
+                log.warning("SLOW %s %s %.2fs", scope.get("method", "?"), scope.get("path"), dt)
+
+
+app.add_middleware(_SlowLog)
 _fails: dict[str, list[float]] = {}
 
 
@@ -651,6 +671,7 @@ async def rep_users(offset: int = Query(0, ge=0, le=100000), limit: int = Query(
     cfg = load_config()
     q = search.translate(_FA_DIGITS).strip().lstrip("@").lower()
     notes = cfg["rep_notes"]
+    can_np = bool(cfg["reps"][rid].get("next_plan"))
 
     def note_of(pid, u):
         return notes.get(pid, {}).get(u, "")
@@ -666,8 +687,11 @@ async def rep_users(offset: int = Query(0, ge=0, le=100000), limit: int = Query(
                 api = get_api(pid)
                 if not api.is_configured():
                     return None
-                d = _slim_rep(await api.request("GET", api.upath(u)), api)
+                raw = await api.request("GET", api.upath(u))
+                d = _slim_rep(raw, api)
                 d["pid"], d["note"], d["paid"] = pid, note_of(pid, u), bool(cfg["rep_paid"].get(pid, {}).get(u))
+                if can_np:
+                    d["next_plans"] = [{"gb": x["gb"], "days": x["days"]} for x in C.next_plans_view(raw)]
                 return d
             except C.RebeccaError:        # حذف‌شده از پنل یا خطای موقت
                 return None
@@ -857,7 +881,7 @@ async def rep_wallet(rep=Depends(rep_guard)):
     rid, rp = rep
     cfg = load_config()
     rp = cfg["reps"][rid]
-    return {"balance": rp["balance"],
+    return {"balance": rp["balance"], "can_next_plan": bool(rp.get("next_plan")),
             "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t["price"], "kind": t.get("kind", "single")} for n, t in _rep_templates(cfg, rp).items()],
             "sales": await asyncio.to_thread(sales.rep_daily_sales, rid, 7),
             "log": list(reversed(rp["log"]))[:30],
@@ -905,6 +929,7 @@ async def rep_next_name(rep=Depends(rep_guard)):
 class RepBuyReq(BaseModel):
     template: str = Field(min_length=1, max_length=40)
     note: str = Field(default="", max_length=100)
+    paid: bool = False                                                 # نماینده همان موقع ساخت «پرداخت شد» را هم می‌زند (مشتری پول را داده)
 
 
 @app.post("/api/rep/buy")
@@ -991,8 +1016,15 @@ async def _rep_buy(r: RepBuyReq, rid: str, txid: str):
             await asyncio.to_thread(C.set_rep_note, rid, pid, uname, r.note)
         except Exception:  # noqa: BLE001
             pass
+    paid = False
+    if r.paid:
+        try:
+            paid = await asyncio.to_thread(C.set_rep_paid, rid, pid, uname, True)
+            C.audit_event(f"نماینده: {rp['label'] or rp['name']}", "تغییر وضعیت پرداخت مشتری", uname, "پرداخت شد (هنگام ساخت)")
+        except Exception:  # noqa: BLE001
+            log.exception("set paid on buy (%s)", uname)
     bal = load_config()["reps"][rid]["balance"]
-    result = {"ok": True, "username": uname, "sub": results[0]["sub"], "balance": bal, "gb": tpl["gb"], "days": tpl["days"]}
+    result = {"ok": True, "username": uname, "sub": results[0]["sub"], "balance": bal, "gb": tpl["gb"], "days": tpl["days"], "paid": paid}
     _idem_put(txid, result)
     try:                                                               # اعلان‌ها بعد از ثبت نتیجه؛ خطایشان نباید جواب موفق را خراب کند
         await _notify_low_wallet(rid, bal)
@@ -1117,6 +1149,125 @@ async def rep_renew(r: RepRenewReq, request: Request, rep=Depends(rep_guard)):
         return result
 
 
+class RepNextPlanReq(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    pid: str = Field(default="", max_length=20)
+    template: str = Field(min_length=1, max_length=40)
+
+
+REP_MAX_NEXT_PLANS = 3          # سقف پلن‌های بعدیِ صف‌شده برای هر کاربر (جلوگیری از اشتباه/سوءاستفاده)
+
+
+@app.post("/api/rep/next-plan")
+async def rep_next_plan(r: RepNextPlanReq, request: Request, rep=Depends(rep_guard)):
+    """افزودن «پلن بعدی» (طبق یکی از تمپلت‌های مجاز نماینده) به کاربرِ خود نماینده؛ قیمت تمپلت از کیف پول کم می‌شود.
+    پلن وقتی حجم/زمان فعلی تمام شد خودکار شروع می‌شود. ارسال دوباره‌ی همان درخواست پول را دوباره کم نمی‌کند."""
+    rid = rep[0]
+    txid = _idem_txid(request, rid, "nextplan")
+    async with _money_guard(rid):
+        done = _idem_get(txid)
+        if done:
+            return done
+        cfg = load_config()
+        rp = cfg["reps"][rid]
+        if not rp.get("next_plan"):
+            raise HTTPException(403, "دسترسی «پلن بعدی» برای شما فعال نیست؛ با ادمین تماس بگیرید.")
+        pids = [p for p, m in cfg["rep_users"].items() if m.get(r.username) == rid and (not r.pid or p == r.pid)]
+        if not pids:
+            raise HTTPException(404, "این کاربر در لیست شما نیست.")
+        pid = pids[0]
+        tpl = _rep_templates(cfg, rp).get(r.template)
+        if not tpl:
+            raise HTTPException(403, "این تمپلت برای شما فعال نیست.")
+        prev = await asyncio.to_thread(C.wallet_tx_get, txid)
+        if prev:
+            if prev.get("state") == "done":
+                return {"ok": True, "duplicate": True, "balance": rp["balance"]}
+            if prev.get("state") == "refunded":
+                raise HTTPException(400, "این درخواست قبلاً ناموفق بود و مبلغ برگشت داده شد؛ دوباره تلاش کنید.")
+            raise HTTPException(409, "این درخواست در حال پردازش است؛ چند لحظه بعد وضعیت کاربر را ببینید و دوباره پول نپردازید.")
+        api = get_api(pid)
+        if not api.is_configured():
+            raise HTTPException(502, "پنل در دسترس نیست؛ به ادمین اطلاع دهید.")
+        price = int(tpl["price"])
+        if price <= 0:
+            raise HTTPException(400, "قیمت این تمپلت نامعتبر است.")
+        gb, days = float(tpl.get("gb") or 0), int(tpl.get("days") or 0)
+        if gb <= 0 and days <= 0:
+            raise HTTPException(400, "این تمپلت حجم یا مدت ندارد و برای پلن بعدی مناسب نیست.")
+        try:                                                              # قبل از کسر پول: کاربر باید در پنل باشد؛ وضعیت فعلی صف را بگیر
+            before = await api.request("GET", api.upath(r.username))
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(404 if isinstance(e, C.RebeccaError) and e.status == 404 else 502, "کاربر در پنل پیدا نشد یا پنل در دسترس نیست؛ پولی کسر نشد.")
+        view = C.next_plans_view(before)
+        if len(view) >= REP_MAX_NEXT_PLANS:
+            raise HTTPException(400, f"برای این کاربر از قبل {len(view)} پلن بعدی ثبت شده (حداکثر {REP_MAX_NEXT_PLANS}). پولی کسر نشد.")
+        if any(x.get("broken") for x in view):
+            raise HTTPException(409, "پلن‌های بعدیِ این کاربر نیاز به بررسی ادمین دارد؛ پولی کسر نشد.")
+        plans = [{"idx": x["idx"], "gb": x["gb"], "days": x["days"], "add_remaining": x["add_remaining"]} for x in view]
+        plans.append({"idx": None, "gb": gb, "days": days, "add_remaining": False})
+        t_start = time.time()
+        sale_meta = {"action": "next", "template": r.template, "gb": int(gb), "days": days, "username": r.username}
+        sig = f"nextplan|{rid}|{r.username}|{r.template}"
+        if _dup_window(sig, 20):                                           # دابل‌کلیک؛ فقط درست قبل از کسر پول (خطاهای اعتبارسنجی قفل نمی‌سازند)
+            raise HTTPException(429, "درخواست تکراری: برای همین کاربر چند لحظه‌ی پیش پلن بعدی ثبت شد.")
+        try:
+            w = await asyncio.to_thread(lambda: C.wallet_adjust_ex(rid, -price, "purchase", f"پلن بعدی {r.username} — {r.template}", sale_meta, txid))
+        except ValueError:
+            _recent_ops.pop(sig, None)                                     # پولی کم نشد؛ بعد از شارژ می‌تواند فوراً دوباره تلاش کند
+            raise HTTPException(402, f"موجودی کافی نیست. قیمت: {price:,} تومان — موجودی شما: {rp['balance']:,} تومان")
+        if w.get("dup"):
+            raise HTTPException(409, "این درخواست قبلاً ثبت شده است.")
+        res, err = None, None
+        try:
+            res = await C.set_next_plans(api, r.username, plans, None)
+        except Exception as e:  # noqa: BLE001
+            err = e
+            log.exception("rep next plan failed %s", r.username)
+        if err is not None:
+            applied, after = False, None                                  # شکست مبهم: ببین پلن واقعاً روی پنل اضافه شده یا نه
+            try:
+                after = await api.request("GET", api.upath(r.username))
+                applied = len(C._raw_plans(after)) > len(C._raw_plans(before))
+            except Exception:  # noqa: BLE001
+                applied = False
+            if applied:
+                await asyncio.to_thread(C.wallet_tx_mark, txid, "done", r.username)
+                await _notify_admins(cfg, f"⚠️ پلن بعدیِ <code>{C.esc(r.username)}</code> (نماینده {C.esc(rp['label'] or rp['name'])}) با خطا برگشت ولی روی پنل اعمال شده بود؛ مبلغ برنگشت. لطفاً بررسی کنید.")
+                res = after
+            else:
+                ok = await _refund_safely(rid, txid, f"بازگشت وجه — پلن بعدی {r.username} ناموفق بود", sale_meta)
+                if ok:
+                    _recent_ops.pop(sig, None)                             # پول برگشت؛ تلاش دوباره‌ی فوری مجاز است
+                raise HTTPException(400, "ثبت پلن بعدی ناموفق بود؛ " + ("مبلغ برگشت داده شد." if ok else "بازگشت وجه خودکار انجام نشد و به ادمین اطلاع داده شد.") + (f" ({err})" if isinstance(err, C.RebeccaError) else ""))
+        else:
+            await asyncio.to_thread(C.wallet_tx_mark, txid, "done", r.username)
+        await _hide_from_sales(r.username, t_start)
+        bal = load_config()["reps"][rid]["balance"]
+        result = {"ok": True, "balance": bal, "next_plans": [{"gb": x["gb"], "days": x["days"]} for x in C.next_plans_view(res or {})]}
+        _idem_put(txid, result)
+        try:
+            await _notify_low_wallet(rid, bal)
+            await _notify_admins(cfg, f"🔁 نماینده <b>{C.esc(rp['label'] or rp['name'])}</b> برای <code>{C.esc(r.username)}</code> پلن بعدی اضافه کرد ({C.esc(r.template)} — {price:,} تومان). موجودی باقی‌مانده: {bal:,}")
+        except Exception:  # noqa: BLE001
+            log.exception("notify after next plan")
+        return result
+
+
+class RepNextAccessReq(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/reps/{rid}/next-plan-access", dependencies=[Depends(guard)])
+async def reps_next_plan_access(rid: str, r: RepNextAccessReq):
+    try:
+        v = await asyncio.to_thread(C.set_rep_next_plan, rid, r.enabled)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    C.audit_event("ادمین وب‌پنل", "دسترسی پلن بعدی نماینده", rid, "فعال شد" if v else "غیرفعال شد")
+    return {"ok": True, "next_plan": v}
+
+
 class RepRevokeReq(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     pid: str = Field(default="", max_length=20)
@@ -1180,7 +1331,7 @@ async def reps_list():
         for r in m.values():
             cnt[r] = cnt.get(r, 0) + 1
     return {"reps": [{"id": i, "name": r["name"], "label": r["label"], "blocked": r["blocked"], "locked": r["locked"], "fails": r["fails"], "locked_at": r["locked_at"],
-                      "count": cnt.get(i, 0), "created": r["created"], "balance": r["balance"], "tpls": r["tpls"], "panel": r["panel"]}
+                      "count": cnt.get(i, 0), "created": r["created"], "balance": r["balance"], "tpls": r["tpls"], "panel": r["panel"], "next_plan": bool(r.get("next_plan"))}
                      for i, r in cfg["reps"].items()],
             "topups": [{**t, "rep": cfg["reps"][t["rid"]]["label"] or cfg["reps"][t["rid"]]["name"]} for t in cfg["topups"] if t["status"] == "pending"]}
 
