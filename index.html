@@ -114,6 +114,8 @@ img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:1
 .tplopt{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:14px;margin-bottom:8px;cursor:pointer;background:var(--bg)}
 .tplopt.on{border-color:var(--ac);background:#f0b4291a}.tplopt input{width:auto;min-height:0}.tplopt .tn{flex:1;min-width:0;font-weight:700}.tplopt .tp{font-size:12px;color:var(--mu)}.tplopt b{color:var(--ac);white-space:nowrap}
 .lg{display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px dashed var(--line);font-size:12.5px}.lg:last-child{border:0}.lg .pos{color:var(--ok)}.lg .neg{color:var(--bad)}.lg small{display:block;color:var(--mu);font-size:11px}
+.hl{display:flex;gap:10px;padding:9px 2px;border-bottom:1px dashed var(--line);font-size:12.5px}.hl:last-child{border:0}.hl i{width:10px;height:10px;border-radius:50%;margin-top:5px;flex:none;background:var(--ok)}.hl i.warn{background:var(--ac)}.hl i.bad{background:var(--bad)}.hl b{display:block}.hl small{display:block;color:var(--mu);font-size:11.5px;margin-top:2px}
+.rc{direction:ltr;text-align:center;font-family:ui-monospace,monospace;font-size:13px;line-height:1.9;background:var(--bg);border:1px dashed var(--ac);border-radius:12px;padding:10px;margin:8px 0;user-select:all}
 .au-day{position:sticky;top:0;z-index:1;background:var(--s1);color:var(--mu);font-size:11px;font-weight:700;padding:8px 2px 6px;border-bottom:1px solid var(--line)}
 .au{display:flex;gap:10px;padding:10px 2px;border-bottom:1px dashed var(--line)}.au:last-child{border:0}
 .au-ic{flex:none;width:32px;height:32px;border-radius:10px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-style:normal;font-size:15px}
@@ -297,8 +299,18 @@ async function api(path, method = 'GET', body) {
   if (money) delete _idem[slot];
   if (r.status === 401) { location.href = '/login'; throw new Error('نشست شما تمام شد؛ دوباره وارد شوید.'); }
   let d = {}; try { d = await r.json(); } catch {}
-  if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : (Array.isArray(d.detail) ? 'ورودی نامعتبر است.' : 'خطا ' + r.status));
+  if (!r.ok) { const er = new Error(typeof d.detail === 'string' ? d.detail : (Array.isArray(d.detail) ? 'ورودی نامعتبر است.' : 'خطا ' + r.status)); er.needCode = r.headers.get('X-Need-Code') === '1'; throw er; }
   return d;
+}
+// عملیات حساس (مبلغ بالا، بازیابی بکاپ…) وقتی ورود دومرحله‌ای روشن است کد تازه می‌خواهد؛ هر کد فقط یک‌بار قابل استفاده است.
+async function withCode(fn) {
+  try { return await fn(''); }
+  catch (e) {
+    if (!e.needCode) throw e;
+    const c = (prompt(e.message + '\n\nکد ۶ رقمی اپلیکیشن (یا یک کد بازیابی) را وارد کنید:') || '').trim();
+    if (!c) throw new Error('لغو شد.');
+    return await fn(c);
+  }
 }
 let tt;
 function toast(msg, bad) {
@@ -1118,7 +1130,7 @@ async function vSet() {
   });
   const tok = i(c.bot_token, '123456:ABC…'), adm = i(c.admin_ids.join(', '), 'شناسه عددی ادمین‌ها، با کاما'), wp = i('', 'حداقل ۸ کاراکتر', 'password');
   const saveB = h('button', { class: 'btn pri' }, 'ذخیره تنظیمات ربات');
-  saveB.onclick = () => run(saveB, async () => { const r = await api('/settings', 'POST', { bot_token: tok.value, admin_ids: adm.value }); toast(r.bot_restarted ? 'ذخیره شد و ربات ریستارت شد' : 'ذخیره شد'); await refreshState(); });
+  saveB.onclick = () => run(saveB, async () => { const r = await withCode(code => api('/settings', 'POST', { bot_token: tok.value, admin_ids: adm.value, code })); toast(r.bot_restarted ? 'ذخیره شد و ربات ریستارت شد' : 'ذخیره شد'); await refreshState(); });
   const dpre = i(c.default_prefix, 'MS_'); dpre.maxLength = 28; dpre.autocapitalize = 'none';
   const saveDp = h('button', { class: 'btn pri' }, 'ذخیره اسم پیش‌فرض');
   saveDp.onclick = () => run(saveDp, async () => { await api('/settings', 'POST', { default_prefix: dpre.value.trim() }); toast('✅ اسم پیش‌فرض ذخیره شد'); S.setOpen = 'newuser'; await refreshState(); await vSet(); });
@@ -1195,8 +1207,82 @@ async function vSet() {
       h('button', { class: 'btn', type: 'button', onclick: () => auLoad(true) }, '🔄 تازه‌سازی'),
       h('a', { class: 'btn', href: '/api/audit/export', onclick: e => { e.currentTarget.href = `/api/audit/export?${auQuery()}`; } }, '⬇️ دانلود CSV')));
   auLoad(true);
+  // ───── سلامت سیستم
+  const HL_FA = { ok: 'سالم', warn: 'هشدار', bad: 'مشکل' };
+  const hlList = h('div', {}), hlSum = h('p', { class: 'hint' }, 'برای بررسی، دکمه‌ی «بررسی کن» را بزنید.');
+  const hlBtn = h('button', { class: 'btn', type: 'button' }, '🩺 بررسی کن');
+  const hlRun = () => run(hlBtn, async () => {
+    const x = await api('/health');
+    hlSum.textContent = (x.overall === 'ok' ? '✅ همه چیز سالم است' : x.overall === 'warn' ? '⚠️ چند هشدار دارید' : '🚨 مشکل جدی دارید') + ` · بالا بودن وب‌پنل: ${x.uptime}`;
+    const order = { bad: 0, warn: 1, ok: 2 };
+    hlList.replaceChildren(...x.items.slice().sort((a, b) => order[a.level] - order[b.level]).map(i =>
+      h('div', { class: 'hl' }, h('i', { class: i.level }), h('div', {}, h('b', {}, `${i.title} — ${HL_FA[i.level]}`), h('small', {}, i.text)))));
+  });
+  hlBtn.onclick = hlRun;
+  const healthCard = h('div', { class: 'card' }, h('h2', {}, '🩺 سلامت سیستم'),
+    h('p', { class: 'hint' }, 'اتصال پنل‌ها و دیتابیس، سرویس ربات، آخرین بکاپ، فضای دیسک، کیف پول‌ها و امنیت ورود در یک نگاه. موارد مشکل‌دار بالا می‌آیند.'), hlSum, hlList, h('div', { class: 'btns' }, hlBtn));
+  if (!S.healthDone) { S.healthDone = 1; setTimeout(hlRun, 300); }
+
+  // ───── امنیت ورود (2FA، لاگ ورود، آستانه‌ی کد برای مبلغ بالا)
+  const secBox = h('div', {});
+  const secLoad = async () => {
+    const x = await api('/security');
+    const pw = h('input', { type: 'password', placeholder: 'رمز وب‌پنل', autocomplete: 'current-password' });
+    const parts = [];
+    if (!x.totp) {
+      const area = h('div', {});
+      const go = h('button', { class: 'btn', type: 'button' }, '🛡 فعال‌سازی ورود دومرحله‌ای');
+      go.onclick = () => run(go, async () => {
+        if (!pw.value) throw new Error('رمز وب‌پنل را وارد کنید.');
+        const b = await api('/security/2fa/begin', 'POST', { password: pw.value });
+        const code = h('input', { placeholder: 'کد ۶ رقمی اپلیکیشن', inputmode: 'numeric', dir: 'ltr', maxlength: 8, autocomplete: 'one-time-code' });
+        const ok = h('button', { class: 'btn', type: 'button' }, '✅ تأیید و فعال‌سازی');
+        ok.onclick = () => run(ok, async () => {
+          const r = await api('/security/2fa/confirm', 'POST', { code: code.value.trim() });
+          const rc = h('div', { class: 'rc' }, r.codes.map(t => h('div', {}, t)));
+          const cp = h('button', { class: 'btn', type: 'button' }, '📋 کپی کدهای بازیابی');
+          cp.onclick = async () => { try { await navigator.clipboard.writeText(r.codes.join('\n')); toast('کپی شد'); } catch { toast('دستی کپی کنید', true); } };
+          const fin = h('button', { class: 'btn', type: 'button' }, 'ذخیره کردم؛ ادامه');
+          fin.onclick = () => secLoad().catch(e => toast(e.message, true));
+          area.replaceChildren(h('p', { style: 'color:var(--ok);font-weight:700' }, '✅ ورود دومرحله‌ای فعال شد'),
+            h('p', { class: 'hint' }, '⚠️ این ۸ کد بازیابی فقط همین یک‌بار نمایش داده می‌شود. جای امن (نه روی همین گوشی) ذخیره کنید؛ اگر گوشی گم شود فقط با این‌ها وارد می‌شوید. هر کد یک‌بار مصرف است.'), rc, h('div', { class: 'btns' }, cp, fin));
+        });
+        area.replaceChildren(
+          h('p', { class: 'hint' }, '۱) در گوشی اپلیکیشن Google Authenticator / Authy / 2FAS را باز کنید و این QR را اسکن کنید (یا کلید را دستی بزنید):'),
+          h('div', { style: 'text-align:center;margin:8px 0' }, h('img', { src: '/api/qr?text=' + encodeURIComponent(b.uri), alt: 'QR', style: 'width:210px;height:210px;background:#fff;padding:8px;border-radius:12px' })),
+          h('div', { class: 'rc' }, b.secret), h('p', { class: 'hint' }, '۲) کد ۶ رقمیِ نمایش‌داده‌شده در اپلیکیشن را اینجا بزنید:'), code, h('div', { class: 'btns' }, ok));
+      });
+      parts.push(h('p', { class: 'hint' }, '🔓 ورود دومرحله‌ای خاموش است؛ هر کسی رمز را بداند وارد می‌شود. با فعال‌کردنش، علاوه بر رمز، یک کد ۶ رقمی از گوشی شما لازم است و شارژ/کسر بالای آستانه و بازیابی بکاپ هم کد می‌خواهند.'), field('رمز وب‌پنل (برای تأیید هویت)', pw), area, h('div', { class: 'btns' }, go));
+    } else {
+      const dpw = h('input', { type: 'password', placeholder: 'رمز وب‌پنل', autocomplete: 'current-password' });
+      const dcode = h('input', { placeholder: 'کد اپلیکیشن', inputmode: 'numeric', dir: 'ltr', maxlength: 20 });
+      const off = h('button', { class: 'btn bad', type: 'button' }, 'خاموش کردن ورود دومرحله‌ای');
+      off.onclick = () => run(off, async () => { if (!confirm('ورود دومرحله‌ای خاموش شود؟ امنیت کیف پول‌ها کمتر می‌شود.')) return; await api('/security/2fa/disable', 'POST', { password: dpw.value, code: dcode.value.trim() }); toast('خاموش شد'); await secLoad(); });
+      const th = h('input', { type: 'number', inputmode: 'numeric', value: x.threshold, min: 0, dir: 'ltr' });
+      const thc = h('input', { placeholder: 'کد اپلیکیشن', inputmode: 'numeric', dir: 'ltr', maxlength: 20 });
+      const thb = h('button', { class: 'btn', type: 'button' }, 'ذخیره‌ی آستانه');
+      thb.onclick = () => run(thb, async () => { await api('/security/settings', 'POST', { wallet_code_threshold: +th.value || 0, code: thc.value.trim() }); toast('✅ ذخیره شد'); });
+      parts.push(h('p', { style: 'color:var(--ok);font-weight:700' }, `🛡 ورود دومرحله‌ای روشن است · ${x.recovery_left} کد بازیابی باقی مانده`),
+        x.recovery_left < 3 ? h('p', { class: 'hint', style: 'color:var(--bad)' }, 'کدهای بازیابی کم است؛ برای ساختن مجدد، 2FA را خاموش و دوباره فعال کنید.') : null,
+        h('h2', { style: 'font-size:13px;margin:12px 0 6px' }, 'کد برای شارژ/کسر/تأیید مبلغ بالا'),
+        h('p', { class: 'hint' }, 'هر عملیاتِ کیف پول با مبلغ ≥ این عدد (تومان) کد تازه می‌خواهد. ۰ = خاموش. اگر کسی با سرقت نشست وارد شود، بدون کد نمی‌تواند مبلغ بزرگ جابه‌جا کند.'),
+        field('آستانه (تومان)', th), field('کد اپلیکیشن (برای ذخیره)', thc), h('div', { class: 'btns' }, thb),
+        h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, 'خاموش کردن'), field('رمز وب‌پنل', dpw), field('کد اپلیکیشن', dcode), h('div', { class: 'btns' }, off));
+    }
+    const WHY = { admin: 'ادمین', rep: 'نماینده', 'bad-password': 'رمز اشتباه', 'bad-2fa': 'کد 2FA اشتباه', 'bad-2fa-op': 'کد اشتباه (عملیات مالی)', 'bad-password-op': 'رمز اشتباه (عملیات حساس)', 'rep-locked': 'حساب قفل', 'rep-blocked': 'مسدود' };
+    parts.push(h('h2', { style: 'font-size:13px;margin:16px 0 4px' }, `📋 تلاش‌های اخیر ورود${x.fails_24h ? ` — ${x.fails_24h} ناموفق در ۲۴ ساعت` : ''}`),
+      !x.https ? h('p', { class: 'hint', style: 'color:var(--bad)' }, '⚠️ وب‌پنل با HTTP ساده باز شده؛ رمز و کوکی رمزنگاری نمی‌شوند. SSL را فعال کنید.') : null,
+      h('div', {}, ...(x.log.length ? x.log.map(e => h('div', { class: 'au' }, h('i', { class: 'au-ic' }, e.ok ? '✅' : '❌'),
+        h('div', { class: 'au-bd' }, h('div', { class: 'au-top' }, h('b', {}, e.user || '—'), h('span', { dir: 'ltr', style: 'font-size:11px;color:var(--mu)' }, e.ip)),
+          h('div', { class: 'au-sub' }, h('span', {}, WHY[e.why] || e.why || ''), h('span', {}, new Date(e.ts * 1000).toLocaleString('fa-IR')))))) : [h('p', { class: 'hint' }, 'هنوز ثبت نشده.')])));
+    secBox.replaceChildren(...parts.filter(Boolean));
+  };
+  secLoad().catch(e => secBox.replaceChildren(h('p', { class: 'hint' }, e.message)));
+  const securityCard = h('div', { class: 'card' }, h('h2', {}, '🛡 امنیت ورود'), secBox);
+
   const saveW = h('button', { class: 'btn' }, 'تغییر رمز وب‌پنل');
-  saveW.onclick = () => run(saveW, async () => { await api('/settings', 'POST', { web_password: wp.value }); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
+  const curPw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'رمز فعلی' });
+  saveW.onclick = () => run(saveW, async () => { await withCode(code => api('/settings', 'POST', { web_password: wp.value, current_password: curPw.value, code })); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
   // قیمت‌ها و لیست فروش
   let sc = null; try { sc = await api('/sales/settings'); } catch (e) { sc = null; }
   let priceCard = h('div', { class: 'card' }, h('h2', {}, '💰 قیمت‌ها'), h('p', { class: 'err' }, 'خطا در دریافت تنظیمات فروش'));
@@ -1273,56 +1359,44 @@ async function vSet() {
       h('div', { class: 'btns' }, saveSsl),
       h('p', { class: 'hint' }, 'پنل ربکا باید روی همین سرور باشد تا فایل‌های گواهی‌اش خوانده شود. بعد از تمدید گواهی، وب‌پنل خودش ریستارت می‌شود. اگر بعد از تغییر به آدرس نرسیدید، روی سرور بزنید: rebecca-bot ssl off'));
   } catch (e) { sslCard = h('div', { class: 'card' }, h('h2', {}, '🔒 SSL و پورت وب‌پنل'), h('p', { class: 'err' }, e.message)); }
-  // بکاپ و بازیابی رمزگذاری‌شده
+  // بکاپ و بازیابی
   const autoB = h('input', { type: 'checkbox', id: 'autob', checked: c.backup_enabled });
   const IV = [[5, 'هر ۵ دقیقه'], [15, 'هر ۱۵ دقیقه'], [30, 'هر ۳۰ دقیقه'], [60, 'هر ۱ ساعت'], [120, 'هر ۲ ساعت'], [360, 'هر ۶ ساعت'], [720, 'هر ۱۲ ساعت'], [1440, 'روزانه (ساعت ۱۲:۰۰)']];
   const ivSel = h('select', {}, IV.map(([v, t]) => h('option', { value: v, selected: v === (c.backup_interval || 1440) }, t)));
   const saveBk = (okMsg) => api('/backup/settings', 'POST', { enabled: autoB.checked, interval_min: +ivSel.value }).then(() => toast(okMsg)).catch(e => toast(e.message, true));
   autoB.onchange = () => saveBk(autoB.checked ? 'بکاپ خودکار روشن شد' : 'بکاپ خودکار خاموش شد');
   ivSel.onchange = () => saveBk('✅ زمان‌بندی بکاپ ذخیره شد');
-  let cryptoReady = false;
-  try { cryptoReady = (await api('/backup/crypto-status')).configured === true; } catch {}
-  const bkPass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'رمز دلخواه بکاپ (حداقل ۱۲ نویسه)', maxlength: 1024 });
-  const bkPass2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'تکرار رمز بکاپ', maxlength: 1024 });
-  const bkStatus = h('p', { class: 'hint' }, cryptoReady ? '🔐 رمز بکاپ تنظیم شده است؛ فایل‌های جدید رمزگذاری می‌شوند.' : '⚠️ هنوز رمز بکاپ تعیین نشده؛ ابتدا رمزگذاری را فعال کنید.');
-  const bkSet = h('button', { class: 'btn pri', type: 'button' }, cryptoReady ? '🔑 تغییر رمز بکاپ' : '🔐 ذخیره رمز بکاپ');
-  bkSet.onclick = () => run(bkSet, async () => {
-    if (bkPass.value.length < 12) throw new Error('رمز بکاپ باید حداقل ۱۲ نویسه باشد.');
-    if (bkPass.value !== bkPass2.value) throw new Error('تکرار رمز با رمز بکاپ یکسان نیست.');
-    if (!confirm('رمز بکاپ ذخیره/تغییر شود؟ بکاپ‌های جدید با رمز جدید ساخته می‌شوند؛ فایل‌های قبلی با رمز قبلی باز می‌شوند.')) return;
-    await api('/backup/password', 'POST', { password: bkPass.value });
-    cryptoReady = true; bkPass.value = ''; bkPass2.value = '';
-    bkStatus.textContent = '🔐 رمز بکاپ تنظیم شده است؛ فایل‌های جدید رمزگذاری می‌شوند.';
-    bkSet.textContent = '🔑 تغییر رمز بکاپ';
-    toast('✅ رمز بکاپ ذخیره شد');
-  });
-  const dlB = h('button', { class: 'btn', type: 'button' }, '⬇️ دانلود بکاپ رمزگذاری‌شده');
-  dlB.onclick = () => { if (!cryptoReady) return toast('ابتدا رمز بکاپ را تعیین کنید.', true); location.href = '/api/backup'; };
-  const tgB = h('button', { class: 'btn', type: 'button' }, '📤 ارسال بکاپ رمزگذاری‌شده به تلگرام');
-  tgB.onclick = () => run(tgB, async () => { if (!cryptoReady) throw new Error('ابتدا رمز بکاپ را تعیین کنید.'); await api('/backup/send', 'POST'); toast('✅ بکاپ رمزگذاری‌شده به تلگرام ارسال شد'); });
-  const fileI = h('input', { type: 'file', accept: '.rbak,.json,application/json,application/octet-stream' });
-  const restorePass = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'رمز بکاپ برای بازیابی', maxlength: 1024 });
+  const dlB = h('button', { class: 'btn', type: 'button' }, '⬇️ دانلود بکاپ'); dlB.onclick = () => { location.href = '/api/backup'; };
+  const tgB = h('button', { class: 'btn', type: 'button' }, '📤 ارسال بکاپ به تلگرام'); tgB.onclick = () => run(tgB, async () => { await api('/backup/send', 'POST'); toast('✅ بکاپ به تلگرام ارسال شد'); });
+  const fileI = h('input', { type: 'file', accept: '.json,application/json' });
   const rsB = h('button', { class: 'btn bad', type: 'button' }, '♻️ بازیابی از فایل');
   rsB.onclick = () => run(rsB, async () => {
     const f = fileI.files[0]; if (!f) throw new Error('ابتدا فایل بکاپ را انتخاب کنید.');
-    if (f.size > 19e6) throw new Error('حجم فایل بیشتر از حد مجاز است.');
-    if (!confirm('همه‌ی تنظیمات فعلی (پنل‌ها، توکن، قیمت‌ها، نماینده‌ها و موجودی/تراکنش‌ها) با این فایل جایگزین شود؟ از وضعیت فعلی نسخه پشتیبان گرفته می‌شود.')) return;
-    const r = await api('/backup/restore', 'POST', { content: await f.text(), password: restorePass.value || null });
-    toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · ${r.rep_users} کاربرِ نماینده · موجودی کل ${toman(r.balance)}${r.reps_kept ? ' (بکاپ قدیمی بود؛ نماینده‌های فعلی حفظ شد)' : ''} · ربات در حال ریستارت`);
+    if (f.size > 2e6) throw new Error('حجم فایل زیاد است.');
+    const content = await f.text();
+    const pv = await api('/backup/restore/preview', 'POST', { content });
+    let mode = 'keep', confirmWallet = false;
+    const d = pv.diff;
+    if (d && (d.changed_n || d.lost_tx)) {
+      const n = v => v == null ? '—' : (+v).toLocaleString('en-US');
+      const lines = d.changed.slice(0, 8).map(x => `• ${x.name}: الان ${n(x.now)} ← در بکاپ ${n(x.backup)}`).join('\n');
+      const msg = `⚠️ موجودیِ ${d.changed_n} نماینده در این بکاپ با وضعیت فعلی فرق دارد.\nجمع فعلی: ${toman(d.total_now)}\nجمع در بکاپ: ${toman(d.total_backup)}\n${lines}${d.lost_tx ? `\n\n${d.lost_tx} تراکنش جدیدتر از این بکاپ هست که با بازیابی کامل از بین می‌رود.` : ''}\n\n✅ تأیید (پیشنهادی): فقط تنظیمات برگردد؛ موجودی و تراکنش‌های فعلی دست‌نخورده بماند.\n✖ لغو: گزینه‌ی دیگر…`;
+      if (!confirm(msg)) {
+        if (!confirm('برگرداندن کاملِ موجودی و تراکنش‌ها از بکاپ؟\nموجودی‌های فعلی با اعداد بالا جایگزین می‌شود (فقط یک نسخه‌ی پشتیبان روی سرور می‌ماند).\nمطمئنید؟')) return;
+        mode = 'restore'; confirmWallet = true;
+      }
+    } else if (!confirm('تنظیمات از این فایل بازیابی شود؟ (موجودی نماینده‌ها تغییری نمی‌کند)\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
+    const r = await withCode(code => api('/backup/restore', 'POST', { content, wallet_mode: mode, confirm_wallet: confirmWallet, code }));
+    toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · موجودی کل ${toman(r.balance)}${r.wallet_kept ? ' (کیف پول‌ها دست‌نخورده)' : ''} · ربات در حال ریستارت`);
     setTimeout(() => location.reload(), r.web_changed ? 1800 : 1200);
   });
-  const backupCard = h('div', { class: 'card' }, h('h2', {}, '💾 بکاپ و بازیابی امن'),
-    bkStatus,
-    field('رمز دستی بکاپ', bkPass), field('تکرار رمز بکاپ', bkPass2),
-    h('p', { class: 'hint' }, 'رمز باید حداقل ۱۲ نویسه باشد. رمز داخل فایل بکاپ ذخیره نمی‌شود؛ سرور فقط کلید رمزنگاری و salt را با مجوز محدود نگه می‌دارد. رمز را در جای امن خارج از سرور ذخیره کن.'),
-    bkSet,
-    h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ رمزگذاری‌شده به ادمین‌ها در تلگرام'),
+  const backupCard = h('div', { class: 'card' }, h('h2', {}, '💾 بکاپ و بازیابی'),
+    h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ به ادمین‌ها در تلگرام'),
     field('زمان‌بندی بکاپ', ivSel),
-    h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'بکاپ خودکار، دانلود و ارسال تلگرام همگی فایل رمزگذاری‌شده می‌سازند. روی سرور جدید برای بازیابی فقط فایل و رمز دستی لازم است. برای کیف پول، بازه ۱۵ تا ۶۰ دقیقه مناسب است.'),
+    h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'بکاپ دقیقاً طبق زمان‌بندی ثابت فرستاده می‌شود (مثلاً «هر ۱ ساعت» = سر هر ساعت به وقت تهران؛ «روزانه» = ساعت ۱۲:۰۰). ریستارت ربات زمان‌بندی را به‌هم نمی‌زند. بکاپ شامل موجودی و تراکنش‌های همه‌ی نماینده‌هاست و با بازیابی روی سرور جدید برمی‌گردد. برای کیف پول، ۱۵ تا ۶۰ دقیقه پیشنهاد می‌شود.'),
     h('div', { class: 'btns' }, dlB, tgB),
     h('h2', { style: 'font-size:13px;margin:14px 0 6px' }, 'بازیابی از فایل بکاپ'), fileI,
-    field('رمز بکاپ برای ریستور (فایل‌های رمزگذاری‌شده)', restorePass),
-    h('p', { class: 'hint' }, 'فایل‌های جدید با پسوند .rbak رمزگذاری‌شده هستند. رمز اشتباه یا فایل دست‌کاری‌شده رد می‌شود. فایل‌های JSON قدیمی نیز برای سازگاری پذیرفته می‌شوند؛ آن‌ها رمزگذاری‌شده نیستند. پس از بازیابی، ربات خودکار ریستارت می‌شود.'),
+    h('p', { class: 'hint' }, 'بکاپ شامل نماینده‌ها (با رمز هش‌شده)، لیست کاربرهای هر نماینده و وضعیت مسدود/قفل آن‌هاست؛ بعد از بازیابی روی سرور جدید هر کاربر دوباره زیر نماینده‌ی خودش نمایش داده می‌شود. فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
     h('div', { class: 'btns' }, rsB));
   // ─── نماینده‌ها ───
   let reps = [], topups = []; try { const rr = await api('/reps'); reps = rr.reps; topups = rr.topups || []; } catch { /* خطا: لیست خالی */ }
@@ -1367,8 +1441,8 @@ async function vSet() {
         h('div', { class: 'psec' }, h('b', {}, '💰 کیف پول'), h('span', {}, 'موجودی: ' + toman(r.balance))),
         h('div', { class: 'attach', style: 'grid-template-columns:1fr 1.4fr' }, wAmt, wNote),
         h('div', { class: 'btns' },
-          act('➕ شارژ', 'pri', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await api(`/reps/${r.id}/wallet`, 'POST', { amount: v, note: wNote.value.trim() }); await done('✅ شارژ شد · موجودی: ' + toman(x.balance)); }),
-          act('➖ کسر', 'bad', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await api(`/reps/${r.id}/wallet`, 'POST', { amount: -v, note: wNote.value.trim() }); await done('کسر شد · موجودی: ' + toman(x.balance)); }),
+          act('➕ شارژ', 'pri', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await withCode(code => api(`/reps/${r.id}/wallet`, 'POST', { amount: v, note: wNote.value.trim(), code })); await done('✅ شارژ شد · موجودی: ' + toman(x.balance)); }),
+          act('➖ کسر', 'bad', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await withCode(code => api(`/reps/${r.id}/wallet`, 'POST', { amount: -v, note: wNote.value.trim(), code })); await done('کسر شد · موجودی: ' + toman(x.balance)); }),
           act('🧾 تراکنش‌ها', '', async () => { const x = await api(`/reps/${r.id}/log`); logBox.hidden = !logBox.hidden; logBox.replaceChildren(...(x.log.length ? x.log.map(e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('span', { style: 'text-align:end' }, h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))))) : [h('p', { class: 'hint' }, 'تراکنشی ثبت نشده.')])); })),
         logBox,
         h('div', { class: 'psec' }, h('b', {}, '🧩 تمپلت‌های فعال این نماینده'), h('span', {}, 'فقط تمپلت‌های دارای قیمت قابل خرید است')),
@@ -1389,7 +1463,7 @@ async function vSet() {
   };
   const tuBox = (topups.length ? h('div', { class: 'banner', style: 'margin-bottom:10px' }, h('b', {}, `💰 ${topups.length} درخواست افزایش موجودی`),
     ...topups.map(t => { const amt = moneyIn(t.amount, 'مبلغ', { style: 'margin-top:6px' });
-      const bt = (label, cls, ap) => { const b = h('button', { class: 'btn sm ' + cls, type: 'button' }, label); b.onclick = () => run(b, async () => { await api('/topups/' + t.id, 'POST', { approve: ap, amount: ap ? mv(amt) : null }); S.setOpen = 'reps'; toast(ap ? '✅ تأیید و شارژ شد' : 'رد شد'); await vSet(); }); return b; };
+      const bt = (label, cls, ap) => { const b = h('button', { class: 'btn sm ' + cls, type: 'button' }, label); b.onclick = () => run(b, async () => { await withCode(code => api('/topups/' + t.id, 'POST', { approve: ap, amount: ap ? mv(amt) : null, code })); S.setOpen = 'reps'; toast(ap ? '✅ تأیید و شارژ شد' : 'رد شد'); await vSet(); }); return b; };
       return h('div', { style: 'margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)' }, h('div', {}, `${t.rep} — ${toman(t.amount)}`), t.note ? h('div', { class: 'hint', style: 'margin:2px 0' }, '📝 ' + t.note) : null,
         h('div', { class: 'hint', style: 'margin:2px 0' }, new Date(t.ts * 1000).toLocaleString('fa-IR')), amt, h('div', { class: 'btns', style: 'margin-top:6px' }, bt('✅ تأیید و شارژ', 'pri', true), bt('✖ رد', 'bad', false))); })) : null);
   const repBody = h('div', { class: 'acc-in' },
@@ -1415,6 +1489,8 @@ async function vSet() {
       h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)')))),
     drawer('bot', '🤖', 'ربات تلگرام', tok.value ? 'تنظیم شده' : 'تنظیم نشده', strip(h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)))),
     drawer('alerts', '🔔', 'اعلان‌های هوشمند', '۴ هشدار قابل تنظیم', strip(alertsCard)),
+    drawer('health', '🩺', 'سلامت سیستم', 'اتصال‌ها · بکاپ · دیسک', strip(healthCard)),
+    drawer('security', '🛡', 'امنیت ورود', c.totp ? 'ورود دومرحله‌ای روشن' : '⚠️ ورود دومرحله‌ای خاموش', strip(securityCard)),
     drawer('audit', '🧾', 'لاگ فعالیت', `${c.audit_count || 0} رویداد`, strip(auditCard)),
     drawer('newuser', '🆕', 'کاربر جدید', `پیش‌فرض: ${c.default_prefix}`, strip(h('div', { class: 'card' }, h('h2', {}, 'کاربر جدید'), field('اسم پیش‌فرض (پیشوند نام کاربری)', dpre),
       h('p', { class: 'hint' }, 'در فرم «ساخت اکانت» همین اسم از قبل پر می‌شود و شماره‌ی بعدی خودکار پیدا می‌شود. فقط حرف انگلیسی، عدد و _ (مثلاً MS_).'), h('div', { class: 'btns' }, saveDp)))),
@@ -1424,7 +1500,7 @@ async function vSet() {
     drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
     drawer('backup', '💾', 'بکاپ و بازیابی', c.backup_enabled ? 'خودکار روشن · ' + ((IV.find(x => x[0] === c.backup_interval) || [0, 'روزانه'])[1]) : 'خودکار خاموش', strip(backupCard)),
     drawer('ssl', '🔒', 'SSL و پورت وب‌پنل', sslSub, strip(sslCard)),
-    drawer('pw', '🔑', 'رمز وب‌پنل', `کاربر: ${c.web_user}`, strip(h('div', { class: 'card' }, h('h2', {}, `رمز وب‌پنل (کاربر: ${c.web_user})`), field('رمز جدید', wp), h('div', { class: 'btns' }, saveW)))));
+    drawer('pw', '🔑', 'رمز وب‌پنل', `کاربر: ${c.web_user}`, strip(h('div', { class: 'card' }, h('h2', {}, `رمز وب‌پنل (کاربر: ${c.web_user})`), field('رمز فعلی (برای تأیید هویت)', curPw), field('رمز جدید', wp), h('div', { class: 'btns' }, saveW)))));
 }
 
 (async () => {
