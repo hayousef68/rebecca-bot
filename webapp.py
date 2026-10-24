@@ -1742,18 +1742,45 @@ class BackupSettingsReq(BaseModel):
     interval_min: int | None = Field(default=None, ge=5, le=1440)       # ۱۴۴۰ = روزانه؛ کمتر = هر N دقیقه (فقط در صورت تغییر)
 
 
+class BackupPasswordReq(BaseModel):
+    password: str = Field(min_length=12, max_length=1024)
+
+
 class RestoreReq(BaseModel):
-    content: str = Field(min_length=2, max_length=2_000_000)
+    content: str = Field(min_length=2, max_length=20_000_000)
+    password: str | None = Field(default=None, max_length=1024)
+
+
+@app.get("/api/backup/crypto-status", dependencies=[Depends(guard)])
+async def backup_crypto_status():
+    return {"configured": await asyncio.to_thread(sales.backup_crypto_status)}
+
+
+@app.post("/api/backup/password", dependencies=[Depends(guard)])
+async def backup_password_set(r: BackupPasswordReq):
+    try:
+        await asyncio.to_thread(sales.set_backup_password, r.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("setting backup password failed")
+        raise HTTPException(500, "ذخیره رمز بکاپ ناموفق بود.") from e
+    return {"ok": True}
 
 
 @app.get("/api/backup", dependencies=[Depends(guard)])
 async def backup_download():
     try:
-        data = await asyncio.to_thread(C.config_backup_bytes)
-    except OSError:
-        raise HTTPException(404, "فایل تنظیمات پیدا نشد.")
-    return Response(data, media_type="application/json",
-                    headers={"Content-Disposition": f'attachment; filename="rebecca-config-{sales.tehran_day()}.json"'})
+        if not await asyncio.to_thread(sales.backup_crypto_status):
+            raise HTTPException(409, "ابتدا رمز بکاپ را در پنل تعیین کنید.")
+        raw = await asyncio.to_thread(sales.full_backup_bytes)
+        data = await asyncio.to_thread(sales.encrypt_backup_bytes, raw)
+    except HTTPException:
+        raise
+    except (OSError, ValueError, ImportError) as e:
+        raise HTTPException(500, "ساخت بکاپ رمزگذاری‌شده ناموفق بود؛ تنظیم رمز بکاپ و نصب وابستگی‌ها را بررسی کنید.") from e
+    return Response(data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="rebecca-full-backup-{sales.tehran_day()}.rbak"'})
 
 
 @app.post("/api/backup/settings", dependencies=[Depends(guard)])
@@ -1782,10 +1809,29 @@ async def backup_restore(r: RestoreReq):
     """فایل بکاپ را اعتبارسنجی، از وضعیت فعلی نسخه‌ی پشتیبان می‌گیرد، اعمال می‌کند و ربات را ریستارت می‌کند."""
     import json
     import shutil
+    encrypted_restore = False
     try:
-        data = json.loads(r.content)
+        raw = json.loads(r.content)
+        if isinstance(raw, dict) and raw.get("format") == sales.ENCRYPTED_BACKUP_FORMAT:
+            encrypted_restore = True
+            if not r.password:
+                raise HTTPException(400, "رمز بکاپ را وارد کنید.")
+            try:
+                raw = json.loads(sales.decrypt_backup_text(r.content, r.password))
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
+        if isinstance(raw, dict) and raw.get("format") == sales.BACKUP_FORMAT:
+            data = raw.get("config")
+            if not isinstance(data, dict):
+                raise HTTPException(400, "بکاپ کامل ناقص است.")
+            attach_log = raw.get("attach_log")
+        else:
+            data = raw
+            attach_log = None
+    except HTTPException:
+        raise
     except ValueError:
-        raise HTTPException(400, "فایل JSON معتبر نیست.")
+        raise HTTPException(400, "فایل بکاپ معتبر نیست.")
     if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates"}):
         raise HTTPException(400, "این فایل شبیه بکاپ تنظیمات ربات نیست.")
     new = C._normalize(data)
@@ -1800,7 +1846,20 @@ async def backup_restore(r: RestoreReq):
         safety = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
         shutil.copy2(C.CONFIG_FILE, safety)
         os.chmod(safety, 0o600)
+    # Initialize future automatic backups on a new server using the password
+    # that successfully decrypted this backup. The password itself is not stored.
+    if encrypted_restore and r.password:
+        try:
+            await asyncio.to_thread(sales.set_backup_password, r.password)
+        except Exception as e:
+            log.exception("initializing backup encryption after restore failed")
+            raise HTTPException(500, "تنظیم کلید بکاپ ناموفق بود؛ پس از ورود دوباره رمز بکاپ را در تنظیمات تعیین کنید.") from e
     C.save_config(new)
+    if isinstance(attach_log, list):
+        try:
+            await asyncio.to_thread(sales.attach_import, attach_log)
+        except Exception:
+            log.exception("restoring backup attach log failed")
     for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
         C.drop_api(p)
     _bot.update(token=None, obj=None)
