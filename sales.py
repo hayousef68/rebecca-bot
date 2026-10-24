@@ -9,6 +9,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import os
+import secrets
 import html as _html
 import logging
 import re
@@ -837,7 +841,91 @@ async def report_loop(bot):
 
 
 BACKUP_FORMAT = "rebecca-full-backup"
-BACKUP_HOUR = 12          # ساعت ارسال بکاپ اصلی (به وقت تهران)
+ENCRYPTED_BACKUP_FORMAT = "rebecca-encrypted-backup"
+BACKUP_HOUR = 12
+
+
+def _backup_key_file() -> str:
+    from common import CONFIG_FILE
+    return os.path.join(os.path.dirname(CONFIG_FILE), ".rebecca-backup-key.json")
+
+
+def backup_crypto_status() -> bool:
+    try:
+        with open(_backup_key_file(), encoding="utf-8") as f:
+            d = json.load(f)
+        return bool(d.get("salt") and d.get("key") and d.get("version") == 1)
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def set_backup_password(password: str) -> None:
+    """Set the manually chosen backup password; only derived key and salt are stored."""
+    if not isinstance(password, str) or len(password) < 12:
+        raise ValueError("رمز بکاپ باید حداقل ۱۲ نویسه داشته باشد.")
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    salt = secrets.token_bytes(16)
+    key = Scrypt(salt=salt, length=32, n=2**15, r=8, p=1).derive(password.encode("utf-8"))
+    path = _backup_key_file()
+    tmp = path + ".tmp"
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "salt": base64.b64encode(salt).decode("ascii"),
+                       "key": base64.b64encode(key).decode("ascii")}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _backup_key() -> tuple[bytes, bytes]:
+    try:
+        with open(_backup_key_file(), encoding="utf-8") as f:
+            d = json.load(f)
+        if d.get("version") != 1:
+            raise ValueError
+        return base64.b64decode(d["salt"], validate=True), base64.b64decode(d["key"], validate=True)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise ValueError("رمزگذاری بکاپ تنظیم نشده است؛ ابتدا رمز بکاپ را در پنل تعیین کنید.") from e
+
+
+def encrypt_backup_bytes(data: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    salt, key = _backup_key()
+    nonce = secrets.token_bytes(12)
+    ciphertext = AESGCM(key).encrypt(nonce, data, ENCRYPTED_BACKUP_FORMAT.encode("ascii"))
+    envelope = {"format": ENCRYPTED_BACKUP_FORMAT, "version": 1,
+                "kdf": "scrypt", "n": 32768, "r": 8, "p": 1,
+                "salt": base64.b64encode(salt).decode("ascii"),
+                "nonce": base64.b64encode(nonce).decode("ascii"),
+                "ciphertext": base64.b64encode(ciphertext).decode("ascii")}
+    return json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+
+
+def decrypt_backup_text(text: str, password: str) -> str:
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    try:
+        envelope = json.loads(text)
+        if not isinstance(envelope, dict) or envelope.get("format") != ENCRYPTED_BACKUP_FORMAT or envelope.get("version") != 1:
+            raise ValueError
+        salt = base64.b64decode(envelope["salt"], validate=True)
+        nonce = base64.b64decode(envelope["nonce"], validate=True)
+        ciphertext = base64.b64decode(envelope["ciphertext"], validate=True)
+        if len(salt) != 16 or len(nonce) != 12 or len(ciphertext) < 16 or len(ciphertext) > 15_000_000:
+            raise ValueError
+        key = Scrypt(salt=salt, length=32, n=2**15, r=8, p=1).derive(password.encode("utf-8"))
+        plain = AESGCM(key).decrypt(nonce, ciphertext, ENCRYPTED_BACKUP_FORMAT.encode("ascii"))
+        return plain.decode("utf-8")
+    except Exception as e:
+        raise ValueError("رمز بکاپ اشتباه است یا فایل بکاپ خراب/دست‌کاری شده است.") from e
+          # ساعت ارسال بکاپ اصلی (به وقت تهران)
 
 
 def attach_import(items: list) -> int:
@@ -977,11 +1065,12 @@ async def send_backup(bot, admin_ids, caption: str) -> int:
     """بکاپ اصلی را به ادمین‌ها می‌فرستد؛ تعداد ارسال موفق را برمی‌گرداند."""
     import io
     try:
-        data = await asyncio.to_thread(full_backup_bytes)
-    except (OSError, ValueError) as e:
-        log.warning("backup read: %s", e)
+        raw = await asyncio.to_thread(full_backup_bytes)
+        data = await asyncio.to_thread(encrypt_backup_bytes, raw)
+    except (OSError, ValueError, ImportError) as e:
+        log.warning("backup read/encrypt: %s", e)
         return 0
-    name = f"rebecca-full-backup-{tehran_day()}.json"
+    name = f"rebecca-full-backup-{tehran_day()}.rbak"
     try:
         b = backup_summary()
         caption += f"\n👥 {b['reps']} نماینده · {b['rep_users']} کاربر تخصیص‌یافته در این بکاپ است."
