@@ -2143,4 +2143,143 @@ async def backup_send():
     if not (cfg["bot_token"] and cfg["admin_ids"]):
         raise HTTPException(400, "توکن ربات یا ادمین تنظیم نشده")
     n = await sales.send_backup(_tg_bot(cfg["bot_token"]), cfg["admin_ids"], "💾 بکاپ تنظیمات — جای امن نگه دارید.")
-    if 
+    if not n:
+        raise HTTPException(502, "ارسال به تلگرام ناموفق بود (ربات را در تلگرام Start کرده‌اید؟)")
+    return {"sent": n}
+
+
+@app.post("/api/backup/restore", dependencies=[Depends(guard)])
+async def backup_restore(r: RestoreReq, request: Request):
+    """فایل بکاپ را اعتبارسنجی، از وضعیت فعلی نسخه‌ی پشتیبان می‌گیرد، اعمال می‌کند و ربات را ریستارت می‌کند.
+    پیش‌فرض (wallet_mode=keep): فقط تنظیمات برمی‌گردد و موجودی/تراکنش‌های فعلی حفظ می‌شود. ورود دومرحله‌ای هیچ‌وقت خاموش نمی‌شود."""
+    import shutil
+    data, new, extra = _parse_restore(r.content, r.password)
+    await _gate_code(request, r.code, None, "بازیابی بکاپ", always=True)
+    cur = load_config()
+    if not (new.get("web") or {}).get("hash"):          # بکاپ بدون رمز وب: رمز فعلی حفظ شود
+        new["web"] = cur["web"]
+    has_reps = "reps" in data
+    if not has_reps:                                    # بکاپ قدیمی (قبل از نماینده‌ها): نماینده‌های فعلی پاک نشوند
+        new["reps"], new["rep_users"], new["rep_notes"], new["rep_paid"] = cur["reps"], cur["rep_users"], cur["rep_notes"], cur["rep_paid"]
+    # سرور خالی/تازه (بدون موجودی و تراکنش): کیف پول همیشه از بکاپ برگردد
+    fresh_srv = not any(x["balance"] for x in cur["reps"].values()) and not cur["wallet_tx"]
+    keep = (r.wallet_mode == "keep" and not fresh_srv) or not has_reps
+    if not keep and not r.confirm_wallet and not fresh_srv:
+        raise HTTPException(400, "برای برگرداندنِ موجودی و تراکنش‌ها از بکاپ، تأیید صریح لازم است.")
+    C.preserve_security(new, cur)
+    if keep:
+        C.restore_keep_wallet(new, cur)
+    web_changed = (new["web"].get("hash"), new["web"].get("user")) != (cur["web"].get("hash"), cur["web"].get("user"))
+    safety = None
+    if os.path.exists(C.CONFIG_FILE):
+        safety = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.copy2(C.CONFIG_FILE, safety)
+        os.chmod(safety, 0o600)
+    C.save_config(new)
+    if extra:                                                   # لاگ فروش و ویرایش‌های گزارش (فقط در بکاپ کامل هست)
+        if isinstance(extra.get("attach_log"), list):
+            sales.attach_import(extra["attach_log"])
+        ov = extra.get("sales_overrides")
+        if isinstance(ov, dict):
+            base = {"hide": {}, "edit": {}, "spans": []}
+            base.update({k: ov[k] for k in base if isinstance(ov.get(k), type(base[k]))})
+            sales._save_ovr(base)
+    for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
+        C.drop_api(p)
+    _bot.update(token=None, obj=None)
+    C.audit_event("ادمین وب‌پنل", "بازیابی بکاپ", "", f"حالت کیف پول: {'حفظ وضعیت فعلی' if keep else 'برگردانده‌شده از بکاپ'}؛ نسخه‌ی پشتیبان: {os.path.basename(safety) if safety else '-'}")
+    _bg_notify(f"♻️ <b>بکاپ بازیابی شد</b>\nکیف پول: {'وضعیت فعلی حفظ شد' if keep else '⚠️ از بکاپ برگردانده شد'}\nIP: <code>{C.esc(_client_ip(request))}</code>")
+    try:
+        proc = await asyncio.create_subprocess_exec("systemctl", "restart", "rebecca-bot")
+        asyncio.create_task(proc.wait())
+    except Exception:  # noqa: BLE001
+        log.warning("ریستارت خودکار ربات ممکن نشد")
+    fresh = load_config()
+    return {"ok": True, "panels": len(fresh["panels"]), "reps": len(fresh["reps"]),
+            "balance": sum(x["balance"] for x in fresh["reps"].values()),
+            "wallet_kept": keep, "web_changed": web_changed,
+            "recon": ops.recon_summary(ops.reconcile(fresh, None), 8)}
+
+
+@app.get("/api/reconcile", dependencies=[Depends(guard)])
+async def reconcile_api():
+    """بررسی تطابق مالی: موجودی هر نماینده با زنجیره‌ی تراکنش‌هایش و با وضعیت بررسی قبلی (چیزی تغییر نمی‌کند)."""
+    return await asyncio.to_thread(ops.reconcile_now, False)
+
+
+@app.post("/api/backup/verify", dependencies=[Depends(guard)])
+async def backup_verify(r: RestoreReq):
+    """فقط بررسی فایل بکاپ (رمزگشایی + اعتبارسنجی + خلاصه‌ی محتوا)؛ هیچ چیزی تغییر نمی‌کند."""
+    data, new, extra = _parse_restore(r.content, r.password)
+    s = C.backup_summary(new)
+    return {"ok": True, "encrypted": C.is_encrypted_backup(r.content), "full": extra is not None,
+            "old_format": "reps" not in data, "panels": s["panels"], "reps": s["reps"], "rep_users": s["rep_users"],
+            "balance": sum(x["balance"] for x in new["reps"].values()),
+            "attach_log": len((extra or {}).get("attach_log") or [])}
+
+
+# ───────────────────────────── پنل‌های ربکا و تست اتصال ─────────────────────────────
+class PanelReq(BaseModel):
+    id: str | None = None
+    name: str = Field(min_length=1, max_length=40)
+    panel_url: str
+    sub_url: str = ""
+    username: str = Field(min_length=1, max_length=100)
+    password: str | None = None
+    verify_ssl: bool = False
+
+
+@app.post("/api/panels", dependencies=[Depends(guard)])
+async def panel_save(r: PanelReq):
+    url = r.panel_url.strip().rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("آدرس پنل باید با http:// یا https:// شروع شود.")
+    out = {}
+
+    def mut(c):
+        pn = get_panel(c, r.id) if r.id else None
+        if r.id and not pn:
+            raise ValueError("پنل پیدا نشد.")
+        if not pn:
+            if not r.password:
+                raise ValueError("رمز عبور پنل الزامی است.")
+            pn = {"id": new_panel_id(c), "services": [], "password": ""}
+            c["panels"].append(pn)
+            if not c["active_panel"]:
+                c["active_panel"] = pn["id"]
+        pn.update(name=r.name.strip(), panel_url=url, sub_url=r.sub_url.strip().rstrip("/"), username=r.username.strip(), verify_ssl=r.verify_ssl)
+        if r.password:
+            pn["password"] = r.password
+        out["id"] = pn["id"]
+    update_config(mut)
+    C.drop_api(out["id"])                      # اطلاعات ورود/آدرس عوض شده؛ نشست قدیمی دور ریخته شود
+    return {"ok": True, "id": out["id"]}
+
+
+@app.post("/api/panels/delete", dependencies=[Depends(guard)])
+async def panel_delete(r: NameReq):  # name = panel id
+    def mut(c):
+        c["panels"] = [p for p in c["panels"] if p["id"] != r.name]
+        if c["active_panel"] == r.name:        # پنل فعالِ حذف‌شده: به اولین پنل باقی‌مانده برگرد
+            c["active_panel"] = c["panels"][0]["id"] if c["panels"] else ""
+    update_config(mut)
+    C.drop_api(r.name)
+    return {"ok": True}
+
+
+@app.post("/api/panels/active", dependencies=[Depends(guard)])
+async def panel_active(r: NameReq):
+    def mut(c):
+        if not get_panel(c, r.name):
+            raise ValueError("پنل پیدا نشد.")
+        c["active_panel"] = r.name
+    update_config(mut)
+    return {"ok": True}
+
+
+@app.post("/api/settings/test", dependencies=[Depends(guard)])
+async def settings_test(api: RebeccaClient = Depends(P)):
+    await api.login()
+    s = await api.request("GET", "/api/system")
+    svc = await api.list_services(force=True)
+    return {"ok": True, "total_user": s.get("total_user", 0), "services": len(svc)}
