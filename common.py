@@ -1685,6 +1685,8 @@ async def create_users(api, names, tpl, service_id, *, concurrency=5, on_progres
                     pass
 
     await asyncio.gather(*(one(n) for n in names))
+    if ok:
+        await asyncio.to_thread(hist_add_many, [{"pid": getattr(api, "pid", ""), "u": n, "k": "new", "gb": tpl.get("gb") or 0, "days": tpl.get("days") or 0} for n in ok])
     return [ok[n] for n in names if n in ok], [(n, failed[n]) for n in names if n in failed]
 
 
@@ -1999,6 +2001,58 @@ async def undo_restore(api, username: str) -> tuple[dict, dict, list[str]]:
     return after, snap, warns
 
 
+# ───────────────────────────── تاریخچه‌ی کاربر (ساخت / تمدید) ─────────────────────────────
+# فقط‌نمایشی: در فایل محلی user_history.json ثبت می‌شود و هیچ‌وقت روی عملیات اصلی (ساخت/تمدید/کیف پول) اثر ندارد.
+# هر رکورد: {"ts", "pid", "u": username, "k": new|renew|renew-keep|attach|next, "gb", "days"}
+_HIST_LOCK = threading.Lock()
+_HIST_MAX = 60000          # سقف کل رکوردها؛ قدیمی‌ترها حذف می‌شوند
+_HIST_KINDS = ("new", "renew", "renew-keep", "attach", "next")
+
+
+def _hist_file() -> str:
+    return os.path.join(os.path.dirname(CONFIG_FILE) or ".", "user_history.json")
+
+
+def _hist_read() -> list[dict]:
+    try:
+        with open(_hist_file(), encoding="utf-8") as f:
+            data = json.load(f)
+        return [x for x in data if isinstance(x, dict) and "u" in x and "ts" in x] if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def hist_add_many(items: list[dict]) -> None:
+    """ثبت چند رویداد با یک بار نوشتن فایل. هیچ‌وقت خطا نمی‌دهد."""
+    try:
+        now = time.time()
+        rows = []
+        for x in items or []:
+            k = x.get("k")
+            if k not in _HIST_KINDS or not x.get("u"):
+                continue
+            rows.append({"ts": float(x.get("ts") or now), "pid": str(x.get("pid") or ""), "u": str(x["u"]), "k": k,
+                         "gb": float(x.get("gb") or 0), "days": int(x.get("days") or 0)})
+        if not rows:
+            return
+        with _HIST_LOCK:
+            data = (_hist_read() + rows)[-_HIST_MAX:]
+            path = _hist_file()
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+    except Exception:  # noqa: BLE001
+        log.exception("hist_add_many")
+
+
+def hist_get(pid: str, username: str) -> list[dict]:
+    """رویدادهای ثبت‌شده‌ی این کاربر (قدیمی‌ترین اول)."""
+    pid = str(pid or "")
+    return [x for x in _hist_read() if x.get("u") == username and str(x.get("pid", "")) == pid]
+
+
 async def renew_user(api, username: str, tpl: dict, reset_usage: bool = True):
     """حجم/مدت جدید طبق تمپلت. با reset_usage مصرف صفر می‌شود (ابتدا ریست، بعد وضعیت تا On-Hold خراب نشود)."""
     p = api.upath(username)
@@ -2007,6 +2061,8 @@ async def renew_user(api, username: str, tpl: dict, reset_usage: bool = True):
     if reset_usage:
         await api.request("POST", p + "/reset")
     res = await api.request("PUT", p, json=build_renew_payload(tpl))
+    await asyncio.to_thread(hist_add_many, [{"pid": getattr(api, "pid", ""), "u": username, "k": "renew" if reset_usage else "renew-keep",
+                                             "gb": tpl.get("gb") or 0, "days": tpl.get("days") or 0}])
     return await rebase_plans(api, username, before) or res
 
 
