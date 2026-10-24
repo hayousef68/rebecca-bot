@@ -452,6 +452,71 @@ def _fetch(a, b, include_hidden: bool = False) -> list[dict]:
     return _apply_overrides(rows, off, include_hidden)
 
 
+# ───────────────────────────── تاریخچه‌ی یک کاربر (ساخت / تمدید، تاریخ شمسی) ─────────────────────────────
+_HIST_FA = {"new": "🆕 ساخت اکانت", "renew": "🔄 تمدید / ریست", "renew-keep": "➕ تمدید (بدون ریست مصرف)", "attach": "➕ افزودن حجم", "next": "🔁 پلن بعدی"}
+
+
+def jdatetime(ts: float) -> str:
+    """زمان یونیکس ← «شنبه ۱۴۰۵/۰۸/۰۲ ۱۴:۳۰» به وقت تهران."""
+    dt = datetime.fromtimestamp(float(ts), TEHRAN)
+    return f"{jdate(dt.strftime('%Y-%m-%d'))} {dt.strftime('%H:%M').translate(_FA)}"
+
+
+def _user_history_db(username: str) -> list[dict]:
+    """تاریخ ساخت و ریست/تمدیدهای این کاربر از دیتابیس پنل (فقط‌خواندنی). اگر دیتابیس وصل نیست لیست خالی."""
+    if not (load_config()["sales"].get("db") or {}).get("name"):
+        return []
+    s = _schema()
+    off = int(load_config()["sales"].get("db_tz_offset_minutes", 0))
+    U, R = _ident(s["users"]), _ident(s["resets"])
+    sql_new = f"SELECT u.{_ident(s['u_created'])} AS at FROM {U} u WHERE u.{_ident(s['u_name'])} = %s LIMIT 1"
+    sql_rst = (f"SELECT r.{_ident(s['r_at'])} AS at FROM {R} r JOIN {U} u ON u.{_ident(s['u_id'])} = r.{_ident(s['r_user'])} "
+               f"WHERE u.{_ident(s['u_name'])} = %s ORDER BY r.{_ident(s['r_at'])} DESC LIMIT 200")
+    out = []
+    conn = _connect()
+    try:
+        with conn.cursor() as c:
+            c.execute(sql_new, (username,))
+            for r in c.fetchall():
+                out.append({"k": "new", "ts": _ts_of({"at": r["at"]}, off)})
+            c.execute(sql_rst, (username,))
+            for r in c.fetchall():
+                out.append({"k": "renew", "ts": _ts_of({"at": r["at"]}, off)})
+    finally:
+        conn.close()
+    return [x for x in out if x["ts"] > 0]
+
+
+def user_history(pid: str, username: str, api_created_ts: float = 0.0, limit: int = 60) -> list[dict]:
+    """تاریخچه‌ی ادغام‌شده (جدیدترین اول): لاگ محلی ربات + دیتابیس پنل (برای قبل از فعال‌شدن لاگ). هیچ‌وقت خطا نمی‌دهد."""
+    from common import hist_get
+    rows = [dict(x, src="log") for x in hist_get(pid, username)]
+    try:
+        db = _user_history_db(username)
+    except Exception:  # noqa: BLE001
+        log.exception("user_history db")
+        db = []
+    if api_created_ts and not any(x["k"] == "new" for x in db):
+        db.append({"k": "new", "ts": float(api_created_ts)})
+    created = [x["ts"] for x in rows + db if x["k"] == "new"]
+    for d in db:
+        if d["k"] == "new":                                   # ساخت در هر دو منبع یکی است (پنجره ۱۰ دقیقه)
+            if any(r["k"] == "new" and abs(r["ts"] - d["ts"]) <= 600 for r in rows):
+                continue
+        else:
+            if any(r["k"] in ("renew", "renew-keep", "next", "attach") and abs(r["ts"] - d["ts"]) <= 120 for r in rows):
+                continue                                       # همان تمدید در لاگ محلی هست (با حجم/مدت)
+            if any(abs(d["ts"] - c) <= 120 for c in created):  # ریستِ لحظه‌ی ساخت، تمدید حساب نمی‌شود
+                continue
+        rows.append(dict(d, src="db"))
+    rows.sort(key=lambda x: x["ts"], reverse=True)
+    out = []
+    for x in rows[:limit]:
+        out.append({"ts": int(x["ts"]), "date": jdatetime(x["ts"]), "kind": x["k"], "kind_fa": _HIST_FA.get(x["k"], x["k"]),
+                    "gb": round(float(x.get("gb") or 0), 2), "days": int(x.get("days") or 0), "info": x.get("src") == "log"})
+    return out
+
+
 # ───────────────────────────── طبقه‌بندی و قیمت ─────────────────────────────
 def _is_hamkari(r: dict, cfg: dict) -> bool:
     if r.get("force_type") in ("ham", "single"):      # ویرایش دستی نوع فروش
