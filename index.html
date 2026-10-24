@@ -1444,6 +1444,26 @@ async function vSet() {
   const saveBk = (okMsg) => api('/backup/settings', 'POST', { enabled: autoB.checked, interval_min: +ivSel.value }).then(() => toast(okMsg)).catch(e => toast(e.message, true));
   autoB.onchange = () => saveBk(autoB.checked ? 'بکاپ خودکار روشن شد' : 'بکاپ خودکار خاموش شد');
   ivSel.onchange = () => saveBk('✅ زمان‌بندی بکاپ ذخیره شد');
+  const liveB = h('input', { type: 'checkbox', id: 'liveb', checked: !!c.backup_live });
+  const liveChat = h('input', { type: 'text', dir: 'ltr', autocomplete: 'off', placeholder: '-1001234567890 یا @mychannel (اختیاری)', value: c.backup_live_chat || '' });
+  const bbTok = h('input', { type: 'password', dir: 'ltr', autocomplete: 'off', placeholder: c.backup_bot_id ? `ربات بکاپ تنظیم است (شناسه ${c.backup_bot_id}) — برای تغییر، توکن جدید را بنویسید` : '123456789:AAH... (توکن ربات بکاپ از BotFather)' });
+  const svBb = h('button', { class: 'btn', type: 'button' }, '🤖 ذخیره ربات بکاپ');
+  svBb.onclick = () => run(svBb, async () => {
+    if (!bbTok.value.trim()) throw new Error('توکن ربات بکاپ را وارد کنید.');
+    const r = await withCode(code => api('/backup/settings', 'POST', { enabled: autoB.checked, interval_min: +ivSel.value, bot_token: bbTok.value.trim(), code }));
+    bbTok.value = ''; toast(`✅ ربات بکاپ ${r.bot || ''} ذخیره شد؛ با حساب ادمین یک بار به آن /start بزنید`); setTimeout(() => location.reload(), 1500);
+  });
+  const rmBb = h('button', { class: 'btn bad', type: 'button' }, '🗑 حذف ربات بکاپ');
+  rmBb.onclick = () => run(rmBb, async () => {
+    if (!confirm('ربات بکاپ حذف شود؟ بکاپ‌ها دوباره با ربات اصلی ارسال می‌شوند.')) return;
+    await withCode(code => api('/backup/settings', 'POST', { enabled: autoB.checked, interval_min: +ivSel.value, bot_token: '', code }));
+    toast('ربات بکاپ حذف شد'); setTimeout(() => location.reload(), 1000);
+  });
+  const svLive = h('button', { class: 'btn', type: 'button' }, '☁️ ذخیره بکاپ آنلاین');
+  svLive.onclick = () => run(svLive, async () => {
+    await withCode(code => api('/backup/settings', 'POST', { enabled: autoB.checked, interval_min: +ivSel.value, live: liveB.checked, live_chat: liveChat.value.trim(), code }));
+    toast(liveB.checked ? '✅ بکاپ آنلاین روشن شد؛ تا چند دقیقه‌ی دیگر پیام در تلگرام ساخته می‌شود' : 'بکاپ آنلاین خاموش شد');
+  });
   const bkPw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: c.backup_has_password ? 'رمز فعلی تنظیم است — برای تغییر، رمز جدید را بنویسید' : 'رمز بکاپ (حداقل ۶ کاراکتر)' });
   const svPw = h('button', { class: 'btn', type: 'button' }, '🔐 ذخیره رمز بکاپ');
   svPw.onclick = () => run(svPw, async () => {
@@ -1501,6 +1521,14 @@ async function vSet() {
     field('زمان‌بندی بکاپ', ivSel),
     h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'بکاپ دقیقاً طبق زمان‌بندی ثابت فرستاده می‌شود (مثلاً «هر ۱ ساعت» = سر هر ساعت به وقت تهران؛ «روزانه» = ساعت ۱۲:۰۰). ریستارت ربات زمان‌بندی را به‌هم نمی‌زند. بکاپ شامل موجودی و تراکنش‌های همه‌ی نماینده‌هاست و با بازیابی روی سرور جدید برمی‌گردد. برای کیف پول، ۱۵ تا ۶۰ دقیقه پیشنهاد می‌شود.'),
     h('div', { class: 'btns' }, dlB, tgB),
+    h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 6px' }, '☁️ بکاپ آنلاین (بدون پیام‌های تکراری)'),
+    h('label', { class: 'chk', for: 'liveb' }, liveB, 'یک پیام ثابت در تلگرام که با هر تغییر، فایل داخلش جایگزین می‌شود'),
+    field('🤖 ربات جدا برای بکاپ (اختیاری)', bbTok),
+    h('div', { class: 'btns' }, svBb, c.backup_bot_id ? rmBb : null),
+    h('p', { class: 'hint' }, 'اگر توکن یک ربات جدید بدهید، همه‌ی بکاپ‌ها (آنلاین، روزانه و دکمه‌ی «ارسال به تلگرام») فقط با همان ربات می‌آید. قبل از هر چیز با حساب ادمین به آن ربات /start بزنید؛ اگر مقصد کانال/گروه است، آن ربات را ادمین همان کانال کنید.'),
+    field('کانال/گروه خصوصی برای بکاپ (اختیاری)', liveChat),
+    h('div', { class: 'btns' }, svLive),
+    h('p', { class: 'hint' }, 'با روشن بودن این گزینه فقط همان یک پیام به‌روز می‌شود (حداکثر هر ۳ دقیقه و فقط وقتی چیزی عوض شده)، و پیام جدید فقط یک‌بار در روز (ساعت ۱۲:۰۰) به‌عنوان آرشیو می‌آید. برای کانال/گروه، ربات را ادمین همان کانال کنید (دسترسی ارسال و ویرایش پیام). حتماً رمز بکاپ را هم تنظیم کنید؛ فایل شامل توکن و رمزهاست.'),
     h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 6px' }, '🔐 رمز بکاپ ' + (c.backup_has_password ? '(فعال)' : '(غیرفعال)')),
     field('رمز بکاپ', bkPw),
     h('div', { class: 'btns' }, svPw, c.backup_has_password ? rmPw : null),
