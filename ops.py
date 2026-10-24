@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import math
+import os
 import time
 from datetime import datetime, timedelta
 
@@ -155,3 +158,151 @@ async def unpaid_loop(bot):
         except Exception:  # noqa: BLE001
             log.exception("unpaid_loop")
         await asyncio.sleep(60)
+
+
+# ───────────────────────────── ردیاب اختلاف مالی (تطابق کیف پول‌ها) ─────────────────────────────
+# قاعده‌ها (بدون نیاز به سابقه‌ی کامل؛ لاگ هر نماینده فقط ۱۰۰ رکورد آخر را نگه می‌دارد):
+#  ۱) هر رکورد لاگ: موجودیِ بعد از آن = موجودیِ رکورد قبلی + مبلغ همان رکورد.
+#  ۲) موجودیِ بعد از آخرین رکورد لاگ باید برابر موجودی فعلی نماینده باشد.
+#  ۳) موجودی منفی یا بیش از سقف مجاز، و موجودیِ بدون هیچ سابقه (مثل بعد از بازیابی ناقص).
+#  ۴) نسبت به بررسی قبلی: برگشت زمانی داده (جدیدترین تراکنش قدیمی‌تر شده) یا حذف نماینده.
+_LVL = {"warn": 1, "bad": 2}
+
+
+def _recon_state_file() -> str:
+    return os.path.join(os.path.dirname(C.CONFIG_FILE) or ".", "recon_state.json")
+
+
+def recon_load_state() -> dict:
+    try:
+        with open(_recon_state_file(), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def recon_save_state(st: dict) -> None:
+    path = _recon_state_file()
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as e:
+        log.warning("recon state save: %s", e)
+
+
+def recon_snapshot(cfg: dict) -> dict:
+    reps = cfg.get("reps") or {}
+    latest = 0
+    for r in reps.values():
+        for e in r.get("log", []):
+            latest = max(latest, int(e.get("ts") or 0))
+    return {"ts": time.time(), "latest_log_ts": latest,
+            "total": sum(int(r.get("balance") or 0) for r in reps.values()),
+            "reps": {rid: {"name": r.get("label") or r.get("name") or rid, "balance": int(r.get("balance") or 0)} for rid, r in reps.items()}}
+
+
+def reconcile(cfg: dict, prev: dict | None = None) -> list[dict]:
+    """بررسی تطابق مالی. خروجی: فهرست مشکل‌ها [{level, rid, name, code, text}] (خالی = همه چیز می‌خواند)."""
+    out: list[dict] = []
+
+    def add(level, rid, name, code, text):
+        out.append({"level": level, "rid": rid, "name": name, "code": code, "text": text})
+
+    for rid, r in (cfg.get("reps") or {}).items():
+        name = r.get("label") or r.get("name") or rid
+        bal = int(r.get("balance") or 0)
+        lg = [e for e in (r.get("log") or []) if isinstance(e, dict)]
+        if bal < 0:
+            add("bad", rid, name, "negative", f"موجودی منفی: {bal:,}")
+        if bal > C.WALLET_MAX:
+            add("bad", rid, name, "over_cap", "موجودی از سقف مجاز بیشتر است")
+        if not lg:
+            if bal > 0:
+                add("warn", rid, name, "no_history", f"موجودی {bal:,} بدون هیچ سابقه‌ی تراکنش (بعد از بازیابی/انتقال؟)")
+            continue
+        for a, b in zip(lg, lg[1:]):
+            try:
+                if int(b.get("balance")) != int(a.get("balance")) + int(b.get("amount")):
+                    add("bad", rid, name, "chain", f"زنجیره‌ی تراکنش‌ها پاره است (رکورد {time.strftime('%Y-%m-%d %H:%M', time.localtime(int(b.get('ts') or 0)))})")
+                    break
+            except (TypeError, ValueError):
+                add("bad", rid, name, "chain", "رکورد تراکنش ناخوانا است")
+                break
+        try:
+            last_bal = int(lg[-1].get("balance"))
+            if last_bal != bal:
+                d = bal - last_bal
+                add("bad", rid, name, "mismatch", f"موجودی فعلی {bal:,} با آخرین تراکنش ({last_bal:,}) نمی‌خواند؛ اختلاف {d:+,}")
+        except (TypeError, ValueError):
+            pass
+
+    if prev:
+        snap = recon_snapshot(cfg)
+        if snap["latest_log_ts"] < int(prev.get("latest_log_ts") or 0):
+            add("bad", "", "کل سیستم", "rollback", "جدیدترین تراکنش از بررسی قبلی قدیمی‌تر شده؛ داده به گذشته برگشته (بکاپ قدیمی روی سرور؟)")
+        for rid, old in (prev.get("reps") or {}).items():
+            if rid not in snap["reps"]:
+                add("warn", rid, old.get("name") or rid, "removed", f"نماینده حذف شده (موجودی قبلی {int(old.get('balance') or 0):,})")
+    return out
+
+
+def recon_fingerprint(issues: list[dict]) -> str:
+    key = sorted((i["rid"], i["code"], i["text"]) for i in issues)
+    return hashlib.sha256(json.dumps(key, ensure_ascii=False).encode("utf-8")).hexdigest() if key else ""
+
+
+def recon_summary(issues: list[dict], limit: int = 15) -> dict:
+    lvl = max((_LVL[i["level"]] for i in issues), default=0)
+    return {"ok": not issues, "level": {0: "ok", 1: "warn", 2: "bad"}[lvl], "count": len(issues), "issues": issues[:limit]}
+
+
+def reconcile_now(save: bool = False) -> dict:
+    """اجرای دستی/وب‌پنل. save=True وضعیت مقایسه‌ی بعدی را هم به‌روز می‌کند."""
+    cfg = C.load_config()
+    prev = recon_load_state()
+    res = recon_summary(reconcile(cfg, prev.get("snap")))
+    res["total"] = sum(int(r.get("balance") or 0) for r in cfg["reps"].values())
+    res["reps"] = len(cfg["reps"])
+    if save:
+        st = dict(prev)
+        st["snap"] = recon_snapshot(cfg)
+        recon_save_state(st)
+    return res
+
+
+def format_recon(issues: list[dict], limit: int = 15) -> str:
+    lines = [f"🧮 <b>اختلاف مالی کیف پول</b> — {len(issues)} مورد:"]
+    for i in issues[:limit]:
+        lines.append(f"{'🔴' if i['level'] == 'bad' else '🟡'} <b>{C.esc(i['name'])}</b>: {C.esc(i['text'])}")
+    if len(issues) > limit:
+        lines.append(f"… و {len(issues) - limit} مورد دیگر")
+    lines.append("\nبرای جزئیات: وب‌پنل ← تنظیمات ← بکاپ ← «بررسی تطابق مالی»")
+    return "\n".join(lines)
+
+
+async def recon_loop(bot):
+    """هر ۶ ساعت تطابق مالی را بررسی می‌کند؛ فقط وقتی مشکلِ جدید/متفاوت پیدا شود (یا برطرف شود) به ادمین‌ها پیام می‌دهد."""
+    await asyncio.sleep(90)
+    while True:
+        try:
+            cfg = C.load_config()
+            st = recon_load_state()
+            issues = await asyncio.to_thread(reconcile, cfg, st.get("snap"))
+            fp = recon_fingerprint(issues)
+            alerts_on = cfg.get("smart_alerts", {}).get("finance_mismatch", True)
+            if fp != st.get("fp", ""):
+                if alerts_on and cfg.get("admin_ids"):
+                    if issues:
+                        await notify(bot, format_recon(issues))
+                    elif st.get("fp"):
+                        await notify(bot, "✅ اختلاف‌های مالیِ کیف پول برطرف شد؛ همه‌ی موجودی‌ها با تراکنش‌ها می‌خوانند.")
+            st["fp"] = fp
+            st["snap"] = recon_snapshot(cfg)
+            st["last_run"] = time.time()
+            await asyncio.to_thread(recon_save_state, st)
+        except Exception:  # noqa: BLE001
+            log.exception("recon_loop")
+        await asyncio.sleep(6 * 3600)
