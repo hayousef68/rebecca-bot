@@ -53,6 +53,12 @@ def admin_only(fn):
     return wrapper
 
 
+def _aud(update, action: str, target: str = "", details: str = "", cat: str = "user") -> None:
+    """ثبت تغییر ادمینِ ربات در لاگ فعالیت."""
+    u = update.effective_user
+    C.audit_event(f"ادمین ربات ({u.id if u else '?'})", action, target, details, cat=cat)
+
+
 def nav(fn):
     """هندلرهای مستقل (غیر گفتگو): هر گفتگوی نیمه‌کاره بسته می‌شود."""
     @functools.wraps(fn)
@@ -93,7 +99,7 @@ def main_kb() -> M:
         [B("⚡ ساخت سریع", callback_data="c:quick"), B("🎯 ساخت با انتخاب تمپلت", callback_data="c:pick")],
         [B("🔍 جستجو و مدیریت کاربر", callback_data="search"), B("📋 لیست کاربران", callback_data="l:all:0")],
         [B("⚙️ تمپلت‌ها", callback_data="t:menu"), B("📊 وضعیت سرور", callback_data="stats")],
-        [B("🧹 پاکسازی منقضی‌ها", callback_data=f"clean:ask:{pid}"), B("📥 خروجی لینک‌ها", callback_data="export")],
+        [B("📥 خروجی لینک‌ها", callback_data="export")],
         [B("📈 گزارش فروش امروز", callback_data="rp:today"), B("📈 دیروز", callback_data="rp:yday")],
         [B(f"🖥 پنل‌ها (فعال: {pn['name']})", callback_data="pn:list"), B("🗄 اتصال دیتابیس", callback_data="db:start")],
     ])
@@ -354,6 +360,8 @@ async def create_go(update, context):
         return END
 
     pname = (get_panel(cfg, cr["pid"]) or {}).get("name", "")
+    _aud(update, "ساخت کاربر", results[0]["username"] if len(results) == 1 else f"{results[0]['username']} … {results[-1]['username']}",
+         f"تعداد: {len(results)}؛ پنل: {pname}؛ تمپلت: {cr['tpl']}" + (f"؛ ناموفق: {len(failed)}" if failed else ""))
     header = f"🖥 {pname} | 💾 {tpl['gb'] or 'نامحدود'} GB | 📅 {tpl['days'] or 'نامحدود'} روز ({tpl['mode']}) | 📂 {cr['services'].get(cr['service_id'], cr['service_id'])}"
     try:
         await C.send_results(context.bot, chat_id, results, header, cfg["max_qr"], send_qr)
@@ -409,6 +417,7 @@ async def tpl_action(update, context):
         def rm(c):
             c["templates"].pop(name, None)
         update_config(rm)
+        _aud(update, "حذف تمپلت", name, "", "sys")
         await q.answer("🗑 حذف شد")
         await render_tpl_menu(update, context)
     elif act == "mode":
@@ -485,6 +494,7 @@ async def tpl_new_days(update, context):
         c["templates"][nt["name"]] = {"gb": nt["gb"], "days": days, "mode": "on_hold"}
         c["active_template"] = nt["name"]
     update_config(add)
+    _aud(update, "ذخیره تمپلت", nt["name"], f"حجم: {nt['gb']}؛ روز: {days}", "sys")
     await render_tpl_menu(update, context, f"✅ تمپلت «{esc(nt['name'])}» ساخته و فعال شد.\n\n")
     return END
 
@@ -571,6 +581,7 @@ async def panel_action(update, context):
             c["panels"] = [p for p in c["panels"] if p["id"] != pid]
         update_config(rm)
         C.drop_api(pid)
+        _aud(update, "حذف پنل ربکا از ربات", pn["name"], "کاربران داخل پنل دست نخوردند", "sys")
         await q.answer("🗑 حذف شد")
         await render_panel_list(update, context)
 
@@ -762,7 +773,13 @@ async def user_action(update, context):
             kb = M([[B("✅ بله، حذف شود", callback_data=f"u:delok:{pid}:{uname}"), B("↩️ خیر", callback_data=f"u:view:{pid}:{uname}")]])
             return await show(update, context, f"⚠️ کاربر <b>{esc(uname)}</b> برای همیشه حذف شود؟", kb)
         if act == "delok":
+            # حذف کاربر فقط دستی و تکی؛ قبل از حذف وضعیت کاربر در لاگ ثبت می‌شود
+            try:
+                before = await api.request("GET", p)
+            except Exception:  # noqa: BLE001
+                before = {}
             await api.request("DELETE", p)
+            _aud(update, "حذف کاربر (دستی)", uname, f"پنل: {api.name}؛ {C.user_brief(before)}", "del")
             await q.answer("🗑 حذف شد", show_alert=True)
             return await home(update, context, f"✅ کاربر {esc(uname)} حذف شد.\n\n")
         if act == "undo":
@@ -772,6 +789,7 @@ async def user_action(update, context):
                 await asyncio.to_thread(sales.ovr_add_span, uname, float(snap["ts"]) - 120, time.time() + 60)
             except Exception:  # noqa: BLE001
                 warns.append("حذف از گزارش فروش انجام نشد")
+            _aud(update, "برگشت تمدید/ریست کاربر", uname, "به وضعیت قبل از آخرین تمدید/ریست برگشت")
             await q.answer("✅ به حالت قبل برگشت" + (" ⚠️ " + " | ".join(warns) if warns else ""), show_alert=True)
             text, kb = render_user(after, api)
             return await show(update, context, text, kb)
@@ -781,14 +799,17 @@ async def user_action(update, context):
             except Exception:  # noqa: BLE001
                 log.warning("undo snapshot before reset failed")
             await api.request("POST", p + "/reset")
+            _aud(update, "ریست مصرف کاربر", uname)
             await q.answer("✅ مصرف صفر شد", show_alert=True)
         elif act == "rev":
             await api.request("POST", p + "/revoke_sub")
+            _aud(update, "تغییر لینک اشتراک کاربر", uname, "لینک قبلی از کار افتاد")
             await q.answer("✅ لینک جدید ساخته شد", show_alert=True)
         elif act == "tg":
             cur = await api.request("GET", p)
             new = "active" if cur.get("status") == "disabled" else "disabled"
             await api.request("PUT", p, json={"status": new})
+            _aud(update, "فعال‌سازی کاربر" if new == "active" else "غیرفعال‌سازی کاربر", uname)
             await q.answer(f"وضعیت: {new}")
         else:
             await q.answer()
@@ -845,6 +866,7 @@ async def edit_days(update, context):
     try:
         api = get_api(eu["pid"])
         u = await C.apply_user_edit(api, eu["u"], eu.get("gb"), days)
+        _aud(update, "ویرایش کاربر", eu["u"], f"حجم جدید: {eu.get('gb')}؛ روز جدید: {days}")
         text, kb = render_user(u, api)
         await context.bot.send_message(update.effective_chat.id, "✅ ذخیره شد.\n\n" + text, reply_markup=kb, parse_mode=HTML)
     except Exception as e:  # noqa: BLE001
@@ -915,26 +937,6 @@ async def core_cb(update, context):
         await q.answer("✅ ریستارت شد", show_alert=True)
     except Exception as e:  # noqa: BLE001
         await q.answer(f"❌ {str(e)[:180]}", show_alert=True)
-
-
-@nav
-async def clean_cb(update, context):
-    q = update.callback_query
-    await q.answer()
-    _, kind, pid = q.data.split(":")
-    api = get_api(pid)
-    try:
-        users = await api.iter_users("expired") + await api.iter_users("limited")
-    except Exception as e:  # noqa: BLE001
-        return await show(update, context, err_text(e), main_kb())
-    if kind == "ask":
-        if not users:
-            return await show(update, context, "✅ کاربر منقضی/محدودشده‌ای وجود ندارد.", main_kb())
-        return await show(update, context, f"⚠️ در پنل «{esc(api.name)}» تعداد <b>{len(users)}</b> کاربر منقضی/محدودشده برای همیشه حذف شوند؟",
-                          M([[B("✅ حذف شوند", callback_data=f"clean:go:{pid}"), B("↩️ انصراف", callback_data="back")]]))
-    await show(update, context, f"⏳ در حال حذف {len(users)} کاربر…")
-    n = await C.delete_users(api, [u["username"] for u in users])
-    await show(update, context, f"🧹 {n} از {len(users)} کاربر حذف شد.", main_kb())
 
 
 @nav
@@ -1095,7 +1097,7 @@ def build_app() -> Application:
             # مستقل‌ها: هرکدام گفتگوی باز را می‌بندند
             cb(db_start, pattern=r"^db:start$"), cb(tpl_menu, pattern=r"^t:menu$"), cb(tpl_action, pattern=r"^t:(sel|del|mode|edit):\d+$"),
             cb(list_users, pattern=r"^l:"), cb(stats, pattern=r"^stats$"), cb(core_cb, pattern=r"^core:(ask|go):\w+$"),
-            cb(clean_cb, pattern=r"^clean:(ask|go):\w+$"), cb(export_cb, pattern=r"^export$"),
+            cb(export_cb, pattern=r"^export$"),
             cb(user_action, pattern=r"^u:(view|qr|rst|rev|tg|del|delok|undo):"),
         ],
         states={
