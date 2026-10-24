@@ -98,6 +98,8 @@ def _client_ip(request: Request) -> str:
 def _basic_ok(request: Request) -> bool:
     """سازگاری با اسکریپت‌های قدیمی (curl -u)؛ مرورگر دیگر از Basic استفاده نمی‌کند."""
     import base64
+    if C.totp_enabled():                       # Basic فقط رمز دارد؛ با 2FA روشن نباید راه دور زدن کد باشد
+        return False
     h = request.headers.get("authorization", "")
     if not h.lower().startswith("basic "):
         return False
@@ -212,6 +214,41 @@ class LoginReq(BaseModel):
     remember: bool = False
 
 
+def _bg_notify(text: str) -> None:
+    async def go():
+        try:
+            await _notify_admins(load_config(), text)
+        except Exception:  # noqa: BLE001
+            log.exception("bg notify")
+    t = asyncio.create_task(go())
+    _bg.add(t)
+    t.add_done_callback(_bg.discard)
+
+
+async def _log_login(ip: str, user: str, ok: bool, why: str) -> None:
+    """ثبت تلاش ورود با IP؛ ورود موفق ادمین از IP تازه ← هشدار تلگرام."""
+    try:
+        new_ip = await asyncio.to_thread(C.login_log_add, ip, user, ok, why)
+    except Exception:  # noqa: BLE001
+        log.exception("login log")
+        return
+    if ok and why == "admin" and new_ip:
+        _bg_notify(f"🔔 <b>ورود ادمین از IP جدید</b>\nIP: <code>{C.esc(ip)}</code>\nاگر خودتان نیستید فوراً رمز وب‌پنل را عوض و ورود دومرحله‌ای را فعال کنید.")
+
+
+def _fail_hit(ip: str, recent: list[float], now: float, user: str) -> None:
+    recent.append(now)
+    _fails[ip] = recent
+    if len(recent) == 5:
+        _bg_notify(f"🚨 <b>چند تلاش ناموفق ورود به وب‌پنل</b>\nIP: <code>{C.esc(ip)}</code>\nنام کاربری: <code>{C.esc(user[:40])}</code>\nاین IP به‌مدت ۵ دقیقه مسدود شد.")
+
+
+def _admin_cookie(resp, tok: str, ttl: int, secure: bool):
+    resp.set_cookie(COOKIE, tok, max_age=ttl, httponly=True, samesite="strict", secure=secure, path="/")
+    resp.delete_cookie(COOKIE_REP, path="/")
+    return resp
+
+
 @app.post("/api/login")
 async def login(r: LoginReq, request: Request):
     if request.headers.get("x-requested-with") != "rebecca":
@@ -229,28 +266,58 @@ async def login(r: LoginReq, request: Request):
         if st in ("locked", "locked_now"):
             if st == "locked_now":
                 _notify_lock(user)
-            recent.append(now)
-            _fails[ip] = recent
+            _fail_hit(ip, recent, now, user)
+            await _log_login(ip, user, False, "rep-locked")
             raise HTTPException(423, "این حساب به‌خاطر چند بار رمز اشتباه موقتاً غیرفعال شده است؛ با مدیر تماس بگیرید.")
         if st in ("ok", "blocked"):
             if st == "blocked":
+                await _log_login(ip, user, False, "rep-blocked")
                 raise HTTPException(403, "حساب شما مسدود شده است؛ با مدیر تماس بگیرید.")
             _fails.pop(ip, None)
+            await _log_login(ip, user, True, "rep")
             tok, ttl = C.make_rep_session(rid)
             resp = JSONResponse({"ok": True, "role": "rep"})
             resp.set_cookie(COOKIE_REP, tok, max_age=ttl, httponly=True, samesite="strict", secure=secure, path="/")
             resp.delete_cookie(COOKIE, path="/")
             return resp
-        recent.append(now)
-        _fails[ip] = recent
+        _fail_hit(ip, recent, now, user)
+        await _log_login(ip, user, False, "bad-password")
         await asyncio.sleep(0.6)   # کند کردن حدس رمز
         raise HTTPException(401, "نام کاربری یا رمز اشتباه است.")
+    if C.totp_enabled():                                   # رمز درست است؛ کد دومرحله‌ای هنوز لازم است (نشست ساخته نمی‌شود)
+        return {"ok": True, "need_code": True, "pre": C.make_pre_token(user, r.remember)}
     _fails.pop(ip, None)
+    await _log_login(ip, user, True, "admin")
     tok, ttl = C.make_session(user, r.remember)
-    resp = JSONResponse({"ok": True, "role": "admin"})
-    resp.set_cookie(COOKIE, tok, max_age=ttl, httponly=True, samesite="strict", secure=secure, path="/")
-    resp.delete_cookie(COOKIE_REP, path="/")
-    return resp
+    return _admin_cookie(JSONResponse({"ok": True, "role": "admin"}), tok, ttl, secure)
+
+
+class Login2Req(BaseModel):
+    pre: str = Field(max_length=400)
+    code: str = Field(max_length=64)
+
+
+@app.post("/api/login/2fa")
+async def login_2fa(r: Login2Req, request: Request):
+    if request.headers.get("x-requested-with") != "rebecca":
+        raise HTTPException(403, "درخواست نامعتبر.")
+    ip, now = _client_ip(request), time.time()
+    recent = [t for t in _fails.get(ip, []) if now - t < 300]
+    if len(recent) >= 5:
+        raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
+    p = C.check_pre_token(r.pre)
+    if not p:
+        raise HTTPException(401, "زمان وارد کردن کد تمام شد؛ دوباره با رمز وارد شوید.")
+    user, remember = p
+    if not await asyncio.to_thread(C.totp_verify_use, r.code):
+        _fail_hit(ip, recent, now, user)
+        await _log_login(ip, user, False, "bad-2fa")
+        await asyncio.sleep(0.6)
+        raise HTTPException(401, "کد اشتباه یا قبلاً استفاده شده است. کد جدید اپلیکیشن (یا یک کد بازیابی) را وارد کنید.")
+    _fails.pop(ip, None)
+    await _log_login(ip, user, True, "admin")
+    tok, ttl = C.make_session(user, remember)
+    return _admin_cookie(JSONResponse({"ok": True, "role": "admin"}), tok, ttl, request.url.scheme == "https")
 
 
 @app.post("/api/logout")
@@ -1152,9 +1219,112 @@ async def reps_delete(rid: str):
     return {"ok": True}
 
 
+async def _gate_code(request: Request, code: str, amount: int | None, what: str, always: bool = False) -> None:
+    """اگر ورود دومرحله‌ای روشن باشد و عملیات مالیِ بزرگ (یا همیشه برای کارهای حساس) باشد، کد تازه لازم است."""
+    if not (C.totp_enabled() and (always or (amount is not None and C.code_needed_for(amount)))):
+        return
+    ip, now = _client_ip(request), time.time()
+    recent = [t for t in _fails.get(ip, []) if now - t < 300]
+    if len(recent) >= 5:
+        raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
+    code = (code or "").strip()
+    if code and await asyncio.to_thread(C.totp_verify_use, code):
+        return
+    if code:
+        _fail_hit(ip, recent, now, "admin")
+        await _log_login(ip, "admin", False, "bad-2fa-op")
+    msg = f"برای {what} کد ورود دومرحله‌ای لازم است."
+    if code:
+        msg = "کد اشتباه یا قبلاً استفاده شده است؛ کدِ بعدیِ اپلیکیشن را وارد کنید (هر کد فقط یک‌بار)."
+    raise HTTPException(403, msg, headers={"X-Need-Code": "1"})
+
+
+async def _pw_gate(request: Request, password: str) -> str:
+    ip, now = _client_ip(request), time.time()
+    recent = [t for t in _fails.get(ip, []) if now - t < 300]
+    if len(recent) >= 5:
+        raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
+    user = str(load_config()["web"].get("user", "admin"))
+    if not C.check_web_login(user, password):
+        _fail_hit(ip, recent, now, user)
+        await _log_login(ip, user, False, "bad-password-op")
+        await asyncio.sleep(0.6)
+        raise HTTPException(403, "رمز وب‌پنل اشتباه است.")
+    return user
+
+
+class PwReq(BaseModel):
+    password: str = Field(max_length=256)
+
+
+class TwoFaConfirmReq(BaseModel):
+    code: str = Field(max_length=64)
+
+
+class TwoFaDisableReq(BaseModel):
+    password: str = Field(max_length=256)
+    code: str = Field(max_length=64)
+
+
+class SecuritySettingsReq(BaseModel):
+    wallet_code_threshold: int = Field(ge=0, le=10 ** 10)
+    code: str = Field(default="", max_length=64)
+
+
+@app.get("/api/security", dependencies=[Depends(guard)])
+async def security_get(request: Request):
+    cfg = load_config()
+    now = time.time()
+    lg = cfg.get("login_log", [])
+    return {"totp": C.totp_enabled(), "threshold": C.wallet_code_threshold(), "https": request.url.scheme == "https",
+            "known_ips": len(cfg["web"].get("known_ips", [])), "recovery_left": len(cfg["web"].get("recovery", [])),
+            "fails_24h": sum(1 for x in lg if not x.get("ok") and now - float(x.get("ts") or 0) < 86400),
+            "log": list(reversed(lg[-40:]))}
+
+
+@app.post("/api/security/2fa/begin", dependencies=[Depends(guard)])
+async def twofa_begin(r: PwReq, request: Request):
+    await _pw_gate(request, r.password)
+    if C.totp_enabled():
+        raise HTTPException(400, "ورود دومرحله‌ای از قبل روشن است. برای تعویض، اول خاموشش کنید.")
+    return await asyncio.to_thread(C.totp_begin)
+
+
+@app.post("/api/security/2fa/confirm", dependencies=[Depends(guard)])
+async def twofa_confirm(r: TwoFaConfirmReq, request: Request):
+    try:
+        codes = await asyncio.to_thread(C.totp_confirm, r.code)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    C.audit_event("ادمین وب‌پنل", "فعال‌سازی ورود دومرحله‌ای", "", "کدهای بازیابی صادر شد")
+    _bg_notify("🛡 ورود دومرحله‌ای (2FA) برای وب‌پنل فعال شد.")
+    user = str(load_config()["web"].get("user", "admin"))
+    tok, ttl = C.make_session(user)                       # کلید نشست عوض شده؛ همین مرورگر وارد بماند
+    return _admin_cookie(JSONResponse({"ok": True, "codes": codes}), tok, ttl, request.url.scheme == "https")
+
+
+@app.post("/api/security/2fa/disable", dependencies=[Depends(guard)])
+async def twofa_disable(r: TwoFaDisableReq, request: Request):
+    await _pw_gate(request, r.password)
+    await _gate_code(request, r.code, None, "خاموش کردن ورود دومرحله‌ای", always=True)
+    await asyncio.to_thread(C.totp_disable)
+    C.audit_event("ادمین وب‌پنل", "خاموش‌کردن ورود دومرحله‌ای", "", "")
+    _bg_notify("⚠️ ورود دومرحله‌ای (2FA) وب‌پنل <b>خاموش</b> شد.")
+    return {"ok": True}
+
+
+@app.post("/api/security/settings", dependencies=[Depends(guard)])
+async def security_settings(r: SecuritySettingsReq, request: Request):
+    await _gate_code(request, r.code, None, "تغییر آستانه‌ی کد برای عملیات مالی", always=True)
+    await asyncio.to_thread(lambda: update_config(lambda c: c["security"].__setitem__("wallet_code_threshold", int(r.wallet_code_threshold))))
+    C.audit_event("ادمین وب‌پنل", "تغییر آستانه‌ی کد 2FA", "", f"{r.wallet_code_threshold:,} تومان")
+    return {"ok": True}
+
+
 class WalletReq(BaseModel):
     amount: int = Field(ge=-10 ** 10, le=10 ** 10)
     note: str = Field(default="", max_length=120)
+    code: str = Field(default="", max_length=64)
 
 
 @app.post("/api/reps/{rid}/wallet", dependencies=[Depends(guard)])
@@ -1163,6 +1333,8 @@ async def reps_wallet(rid: str, r: WalletReq, request: Request):
     if r.amount == 0:
         raise HTTPException(400, "مبلغ را وارد کنید.")
     txid = _idem_txid(request, rid, "adm")
+    if not await asyncio.to_thread(C.wallet_tx_get, txid):          # تلاش مجدد همان درخواست (کد قبلاً مصرف شده) دوباره کد نمی‌خواهد
+        await _gate_code(request, r.code, r.amount, "این شارژ/کسر")
     if "idempotency-key" not in request.headers and _dup_window(f"adm|{rid}|{r.amount}", 5):
         raise HTTPException(429, "درخواست تکراری: همین مبلغ چند ثانیه‌ی پیش ثبت شد.")
     try:
@@ -1208,10 +1380,15 @@ async def reps_panel(rid: str, r: RepPanelReq):
 class TopupResolveReq(BaseModel):
     approve: bool
     amount: int | None = Field(default=None, ge=1, le=10 ** 10)
+    code: str = Field(default="", max_length=64)
 
 
 @app.post("/api/topups/{tid}", dependencies=[Depends(guard)])
-async def topup_resolve(tid: str, r: TopupResolveReq):
+async def topup_resolve(tid: str, r: TopupResolveReq, request: Request):
+    if r.approve:
+        t0 = next((t for t in load_config()["topups"] if t.get("id") == tid and t.get("status") == "pending"), None)
+        if t0:
+            await _gate_code(request, r.code, r.amount or int(t0.get("amount") or 0), "تأیید این افزایش موجودی")
     try:
         t = await asyncio.to_thread(C.topup_resolve, tid, r.approve, r.amount)
     except ValueError as e:
@@ -1576,7 +1753,7 @@ async def settings_get():
             "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin"), "web_port": c["web_port"],
             "backup_enabled": c["backup"]["enabled"], "backup_interval": c["backup"]["interval_min"], "default_prefix": c["default_prefix"],
             "unpaid_hours": c["unpaid"]["hours"], "unpaid_count": sum(len(m) for m in c["unpaid"]["pending"].values()),
-            "smart_alerts": c.get("smart_alerts", {}), "audit_count": len(c.get("audit_log", []))}
+            "smart_alerts": c.get("smart_alerts", {}), "audit_count": len(c.get("audit_log", [])), "totp": C.totp_enabled()}
 
 
 class SettingsReq(BaseModel):
@@ -1590,11 +1767,22 @@ class SettingsReq(BaseModel):
     alert_backup_failed: bool | None = None
     alert_topup_request: bool | None = None
     alert_low_wallet_threshold: int | None = Field(default=None, ge=0, le=10**10)
+    current_password: str | None = Field(default=None, max_length=256)     # برای تغییر رمز وب‌پنل
+    code: str = Field(default="", max_length=64)                            # کد 2FA برای تغییرهای حساس
 
 
 @app.post("/api/settings", dependencies=[Depends(guard)])
-async def settings_save(r: SettingsReq):
+async def settings_save(r: SettingsReq, request: Request):
     restart_bot = False
+    cur = load_config()
+    new_ids = None if r.admin_ids is None else sorted(int(x) for x in r.admin_ids.replace("،", ",").replace(" ", ",").split(",") if x.strip().lstrip("-").isdigit())
+    sensitive = bool(r.web_password) or bool(r.bot_token and "…" not in r.bot_token and r.bot_token.strip() != cur["bot_token"]) \
+        or (new_ids is not None and new_ids != sorted(cur["admin_ids"]))
+    if r.web_password:                                   # با نشستِ دزدیده‌شده نباید بشود رمز را عوض و صاحب را بیرون کرد
+        await _pw_gate(request, r.current_password or "")
+    if sensitive:                                        # توکن ربات / ادمین‌ها / رمز = مسیر تصاحب پنل و دریافت هشدارها
+        await _gate_code(request, r.code, None, "تغییر رمز وب‌پنل، توکن ربات یا ادمین‌ها", always=True)
+        C.audit_event("ادمین وب‌پنل", "تغییر تنظیمات حساس", "", ", ".join(k for k, v in (("رمز وب‌پنل", r.web_password), ("توکن ربات", r.bot_token and "…" not in r.bot_token), ("ادمین‌ها", new_ids is not None and new_ids != sorted(cur["admin_ids"]))) if v))
 
     def mut(c):
         nonlocal restart_bot
@@ -1670,6 +1858,125 @@ async def audit_export(cat: str = Query("all", max_length=10), q: str = Query(""
                     headers={"Content-Disposition": f'attachment; filename="rebecca-audit-{sales.tehran_day()}.csv"'})
 
 
+_STARTED = time.time()
+_LV = {"ok": 0, "warn": 1, "bad": 2}
+
+
+def _fmt_dur(sec: float) -> str:
+    sec = int(sec)
+    d, r = divmod(sec, 86400)
+    h, r = divmod(r, 3600)
+    m = r // 60
+    return (f"{d} روز " if d else "") + (f"{h} ساعت " if h else "") + f"{m} دقیقه"
+
+
+async def _service_active(name: str) -> str | None:
+    try:
+        proc = await asyncio.create_subprocess_exec("systemctl", "is-active", name, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), 4)
+        return out.decode().strip()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@app.get("/api/health", dependencies=[Depends(guard)])
+async def health(request: Request):
+    """وضعیت سلامت: پنل‌ها، دیتابیس، ربات، دیسک، بکاپ، کیف پول و امنیت ورود؛ هر مورد ok / warn / bad."""
+    import shutil
+    import stat
+    cfg = load_config()
+    items: list[dict] = []
+
+    def add(key: str, title: str, level: str, text: str):
+        items.append({"key": key, "title": title, "level": level, "text": text})
+
+    async def chk_panel(p: dict):
+        t0 = time.time()
+        try:
+            api = get_api(p["id"])
+            if not api.is_configured():
+                return p, "bad", "تنظیمات پنل ناقص است"
+            svcs = await asyncio.wait_for(api.list_services(True), 12)
+            ms = int((time.time() - t0) * 1000)
+            return p, ("ok" if svcs else "warn"), (f"متصل · {ms} میلی‌ثانیه" if svcs else "متصل شد ولی سرویسی برنگشت")
+        except Exception as e:  # noqa: BLE001
+            return p, "bad", f"قطع: {str(e)[:100] or type(e).__name__}"
+
+    async def chk_db():
+        if not (cfg["sales"].get("db") or {}).get("name"):
+            return "warn", "دیتابیس فروش تنظیم نشده"
+        try:
+            ms = await asyncio.wait_for(asyncio.to_thread(sales.db_ping), 12)
+            return "ok", f"متصل · {ms} میلی‌ثانیه"
+        except Exception as e:  # noqa: BLE001
+            return "bad", f"قطع: {str(e)[:100] or type(e).__name__}"
+
+    panel_res, db_res, bot_st = await asyncio.gather(
+        asyncio.gather(*[chk_panel(p) for p in cfg["panels"]]), chk_db(), _service_active("rebecca-bot"))
+    if not cfg["panels"]:
+        add("panel", "پنل ربکا", "bad", "هیچ پنلی تنظیم نشده")
+    for p, lv, tx in panel_res:
+        add("panel", f"پنل «{p.get('name') or p['id']}»", lv, tx)
+    add("db", "دیتابیس فروش", *db_res)
+    if bot_st is None:
+        add("bot", "سرویس ربات", "warn", "وضعیت قابل بررسی نیست (systemctl در دسترس نیست)")
+    else:
+        add("bot", "سرویس ربات تلگرام", "ok" if bot_st == "active" else "bad", "در حال اجرا" if bot_st == "active" else f"وضعیت: {bot_st} ← rebecca-bot restart")
+    add("tg", "اعلان تلگرام", "ok" if (cfg["bot_token"] and cfg["admin_ids"]) else "warn",
+        f"{len(cfg['admin_ids'])} ادمین دریافت‌کننده" if (cfg["bot_token"] and cfg["admin_ids"]) else "توکن یا شناسه‌ی ادمین تنظیم نشده؛ هشدارها نمی‌رسند")
+
+    try:
+        du = shutil.disk_usage(os.path.dirname(C.CONFIG_FILE) or ".")
+        pct = du.free * 100 // du.total
+        add("disk", "فضای دیسک", "ok" if pct >= 15 else ("warn" if pct >= 7 else "bad"), f"{du.free / 2**30:.1f} گیگ آزاد ({pct}٪)")
+    except OSError:
+        add("disk", "فضای دیسک", "warn", "قابل بررسی نیست")
+    try:
+        st = os.stat(C.CONFIG_FILE)
+        mode = stat.S_IMODE(st.st_mode)
+        add("cfgfile", "فایل تنظیمات", "ok" if mode & 0o077 == 0 else "warn",
+            f"{st.st_size / 1024:.0f} کیلوبایت · دسترسی {oct(mode)[2:]}" + ("" if mode & 0o077 == 0 else " ← باید 600 باشد: chmod 600 config.json"))
+    except OSError:
+        add("cfgfile", "فایل تنظیمات", "bad", "فایل پیدا نشد")
+
+    bk = cfg["backup"]
+    last = sales.backup_last_ok()
+    iv = int(bk.get("interval_min") or 1440)
+    if not bk.get("enabled"):
+        add("backup", "بکاپ خودکار", "warn", "خاموش است؛ بدون بکاپ، خرابیِ دیسک یعنی از دست رفتن موجودی‌ها")
+    elif not last:
+        add("backup", "بکاپ خودکار", "warn", "روشن است ولی هنوز بکاپ موفقی ثبت نشده")
+    else:
+        age = time.time() - last
+        lim = 26 * 3600
+        late = age > lim and (iv >= 1440)
+        add("backup", "آخرین بکاپ", "bad" if late else ("warn" if age > lim else "ok"),
+            f"{_fmt_dur(age)} پیش ارسال شد" + ("" if age <= lim else (" ← بکاپ روزانه عقب افتاده؛ تلگرام/ربات را بررسی کنید" if iv >= 1440 else " (در بازه‌های کوتاه فقط با تغییر تنظیمات بکاپ می‌آید؛ اگر تغییری نبوده طبیعی است)")))
+
+    pend = [t for t in cfg["wallet_tx"] if t["state"] == "pending" and t["kind"] == "purchase"]
+    stale = [t for t in pend if time.time() - t["ts"] > 600]
+    tops = sum(1 for t in cfg["topups"] if t.get("status") == "pending")
+    neg = [r for r in cfg["reps"].values() if r["balance"] < 0]
+    lv = "bad" if (stale or neg) else ("warn" if (pend or tops) else "ok")
+    bits = [f"موجودی کل نماینده‌ها {sum(r['balance'] for r in cfg['reps'].values()):,} تومان"]
+    if tops:
+        bits.append(f"{tops} درخواست افزایش موجودی منتظر تأیید")
+    if pend:
+        bits.append(f"{len(pend)} خرید در حال انجام" + (f" ({len(stale)} مورد بیش از ۱۰ دقیقه — بررسی کنید)" if stale else ""))
+    if neg:
+        bits.append("موجودی منفی دارد!")
+    add("wallet", "کیف پول نماینده‌ها", lv, " · ".join(bits))
+
+    now = time.time()
+    fails = sum(1 for x in cfg.get("login_log", []) if not x.get("ok") and now - float(x.get("ts") or 0) < 86400)
+    add("2fa", "ورود دومرحله‌ای", "ok" if C.totp_enabled() else "warn", "روشن است" if C.totp_enabled() else "خاموش است؛ برای محافظت از کیف پول در «امنیت ورود» روشنش کنید")
+    add("https", "اتصال امن", "ok" if request.url.scheme == "https" else "warn", "HTTPS فعال" if request.url.scheme == "https" else "HTTP ساده؛ رمز و کوکی بدون رمزنگاری می‌رود (SSL را فعال کنید)")
+    add("fails", "تلاش‌های ناموفق ورود (۲۴ ساعت)", "ok" if fails < 10 else ("warn" if fails < 30 else "bad"), f"{fails} مورد")
+
+    overall = max((i["level"] for i in items), key=lambda x: _LV[x])
+    return {"overall": overall, "items": items, "uptime": _fmt_dur(time.time() - _STARTED), "ts": time.time()}
+
+
 # ───────────────────────────── SSL و پورت وب‌پنل ─────────────────────────────
 def _panel_domain(cfg) -> str:
     p = get_panel(cfg, cfg["active_panel"]) or (cfg["panels"][0] if cfg["panels"] else None)
@@ -1742,45 +2049,43 @@ class BackupSettingsReq(BaseModel):
     interval_min: int | None = Field(default=None, ge=5, le=1440)       # ۱۴۴۰ = روزانه؛ کمتر = هر N دقیقه (فقط در صورت تغییر)
 
 
-class BackupPasswordReq(BaseModel):
-    password: str = Field(min_length=12, max_length=1024)
-
-
 class RestoreReq(BaseModel):
-    content: str = Field(min_length=2, max_length=20_000_000)
-    password: str | None = Field(default=None, max_length=1024)
+    content: str = Field(min_length=2, max_length=2_000_000)
+    wallet_mode: str = Field(default="keep", pattern="^(keep|restore)$")   # keep = موجودی/تراکنش‌های فعلی حفظ شود (امن)؛ restore = همه چیز از بکاپ
+    confirm_wallet: bool = False
+    code: str = Field(default="", max_length=64)
 
 
-@app.get("/api/backup/crypto-status", dependencies=[Depends(guard)])
-async def backup_crypto_status():
-    return {"configured": await asyncio.to_thread(sales.backup_crypto_status)}
-
-
-@app.post("/api/backup/password", dependencies=[Depends(guard)])
-async def backup_password_set(r: BackupPasswordReq):
+def _parse_restore(content: str) -> tuple[dict, dict]:
+    import json
     try:
-        await asyncio.to_thread(sales.set_backup_password, r.password)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        log.exception("setting backup password failed")
-        raise HTTPException(500, "ذخیره رمز بکاپ ناموفق بود.") from e
-    return {"ok": True}
+        data = json.loads(content)
+    except ValueError:
+        raise HTTPException(400, "فایل JSON معتبر نیست.")
+    if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates"}):
+        raise HTTPException(400, "این فایل شبیه بکاپ تنظیمات ربات نیست.")
+    return data, C._normalize(data)
+
+
+@app.post("/api/backup/restore/preview", dependencies=[Depends(guard)])
+async def backup_restore_preview(r: RestoreReq):
+    """قبل از بازیابی: تفاوت موجودی نماینده‌ها و تراکنش‌هایی که از دست می‌رود (چیزی تغییر نمی‌کند)."""
+    data, new = _parse_restore(r.content)
+    cur = load_config()
+    if "reps" not in data:
+        return {"old_format": True, "needs_code": C.totp_enabled(), "diff": None}
+    d = C.restore_diff(cur, new)
+    return {"old_format": False, "needs_code": C.totp_enabled(), "diff": d}
 
 
 @app.get("/api/backup", dependencies=[Depends(guard)])
 async def backup_download():
     try:
-        if not await asyncio.to_thread(sales.backup_crypto_status):
-            raise HTTPException(409, "ابتدا رمز بکاپ را در پنل تعیین کنید.")
-        raw = await asyncio.to_thread(sales.full_backup_bytes)
-        data = await asyncio.to_thread(sales.encrypt_backup_bytes, raw)
-    except HTTPException:
-        raise
-    except (OSError, ValueError, ImportError) as e:
-        raise HTTPException(500, "ساخت بکاپ رمزگذاری‌شده ناموفق بود؛ تنظیم رمز بکاپ و نصب وابستگی‌ها را بررسی کنید.") from e
-    return Response(data, media_type="application/octet-stream",
-                    headers={"Content-Disposition": f'attachment; filename="rebecca-full-backup-{sales.tehran_day()}.rbak"'})
+        data = await asyncio.to_thread(C.config_backup_bytes)
+    except OSError:
+        raise HTTPException(404, "فایل تنظیمات پیدا نشد.")
+    return Response(data, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="rebecca-config-{sales.tehran_day()}.json"'})
 
 
 @app.post("/api/backup/settings", dependencies=[Depends(guard)])
@@ -1805,132 +2110,40 @@ async def backup_send():
 
 
 @app.post("/api/backup/restore", dependencies=[Depends(guard)])
-async def backup_restore(r: RestoreReq):
-    """فایل بکاپ را اعتبارسنجی، از وضعیت فعلی نسخه‌ی پشتیبان می‌گیرد، اعمال می‌کند و ربات را ریستارت می‌کند."""
-    import json
+async def backup_restore(r: RestoreReq, request: Request):
+    """فایل بکاپ را اعتبارسنجی، از وضعیت فعلی نسخه‌ی پشتیبان می‌گیرد، اعمال می‌کند و ربات را ریستارت می‌کند.
+    پیش‌فرض (wallet_mode=keep): فقط تنظیمات برمی‌گردد و موجودی/تراکنش‌های فعلی حفظ می‌شود. ورود دومرحله‌ای هیچ‌وقت خاموش نمی‌شود."""
     import shutil
-    encrypted_restore = False
-    try:
-        raw = json.loads(r.content)
-        if isinstance(raw, dict) and raw.get("format") == sales.ENCRYPTED_BACKUP_FORMAT:
-            encrypted_restore = True
-            if not r.password:
-                raise HTTPException(400, "رمز بکاپ را وارد کنید.")
-            try:
-                raw = json.loads(sales.decrypt_backup_text(r.content, r.password))
-            except ValueError as e:
-                raise HTTPException(400, str(e)) from e
-        if isinstance(raw, dict) and raw.get("format") == sales.BACKUP_FORMAT:
-            data = raw.get("config")
-            if not isinstance(data, dict):
-                raise HTTPException(400, "بکاپ کامل ناقص است.")
-            attach_log = raw.get("attach_log")
-        else:
-            data = raw
-            attach_log = None
-    except HTTPException:
-        raise
-    except ValueError:
-        raise HTTPException(400, "فایل بکاپ معتبر نیست.")
-    if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates"}):
-        raise HTTPException(400, "این فایل شبیه بکاپ تنظیمات ربات نیست.")
-    new = C._normalize(data)
+    data, new = _parse_restore(r.content)
+    await _gate_code(request, r.code, None, "بازیابی بکاپ", always=True)
     cur = load_config()
     if not (new.get("web") or {}).get("hash"):          # بکاپ بدون رمز وب: رمز فعلی حفظ شود
         new["web"] = cur["web"]
-    if "reps" not in data:                              # بکاپ قدیمی (قبل از نماینده‌ها): نماینده‌های فعلی پاک نشوند
+    has_reps = "reps" in data
+    if not has_reps:                                    # بکاپ قدیمی (قبل از نماینده‌ها): نماینده‌های فعلی پاک نشوند
         new["reps"], new["rep_users"], new["rep_notes"], new["rep_paid"] = cur["reps"], cur["rep_users"], cur["rep_notes"], cur["rep_paid"]
+    keep = r.wallet_mode == "keep" or not has_reps
+    if not keep and not r.confirm_wallet:
+        raise HTTPException(400, "برای برگرداندنِ موجودی و تراکنش‌ها از بکاپ، تأیید صریح لازم است.")
+    C.preserve_security(new, cur)
+    if keep:
+        C.restore_keep_wallet(new, cur)
     web_changed = (new["web"].get("hash"), new["web"].get("user")) != (cur["web"].get("hash"), cur["web"].get("user"))
     safety = None
     if os.path.exists(C.CONFIG_FILE):
         safety = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
         shutil.copy2(C.CONFIG_FILE, safety)
         os.chmod(safety, 0o600)
-    # Initialize future automatic backups on a new server using the password
-    # that successfully decrypted this backup. The password itself is not stored.
-    if encrypted_restore and r.password:
-        try:
-            await asyncio.to_thread(sales.set_backup_password, r.password)
-        except Exception as e:
-            log.exception("initializing backup encryption after restore failed")
-            raise HTTPException(500, "تنظیم کلید بکاپ ناموفق بود؛ پس از ورود دوباره رمز بکاپ را در تنظیمات تعیین کنید.") from e
     C.save_config(new)
-    if isinstance(attach_log, list):
-        try:
-            await asyncio.to_thread(sales.attach_import, attach_log)
-        except Exception:
-            log.exception("restoring backup attach log failed")
     for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
         C.drop_api(p)
     _bot.update(token=None, obj=None)
+    C.audit_event("ادمین وب‌پنل", "بازیابی بکاپ", "", f"حالت کیف پول: {'حفظ وضعیت فعلی' if keep else 'برگردانده‌شده از بکاپ'}؛ نسخه‌ی پشتیبان: {os.path.basename(safety) if safety else '-'}")
+    _bg_notify(f"♻️ <b>بکاپ بازیابی شد</b>\nکیف پول: {'وضعیت فعلی حفظ شد' if keep else '⚠️ از بکاپ برگردانده شد'}\nIP: <code>{C.esc(_client_ip(request))}</code>")
     try:
         proc = await asyncio.create_subprocess_exec("systemctl", "restart", "rebecca-bot")
         asyncio.create_task(proc.wait())
     except Exception:  # noqa: BLE001
         log.warning("ریستارت خودکار ربات ممکن نشد")
-    return {"ok": True, "panels": len(new["panels"]), "web_changed": web_changed, "safety": os.path.basename(safety) if safety else None,
-            "reps": len(new["reps"]), "rep_users": C.backup_summary(new)["rep_users"], "reps_kept": "reps" not in data,
-            "balance": sum(x["balance"] for x in new["reps"].values()), "topups": len(new["topups"])}
-
-
-class PanelReq(BaseModel):
-    id: str | None = None
-    name: str = Field(min_length=1, max_length=40)
-    panel_url: str
-    sub_url: str = ""
-    username: str = Field(min_length=1, max_length=100)
-    password: str | None = None
-    verify_ssl: bool = False
-
-
-@app.post("/api/panels", dependencies=[Depends(guard)])
-async def panel_save(r: PanelReq):
-    url = r.panel_url.strip().rstrip("/")
-    if not url.startswith(("http://", "https://")):
-        raise ValueError("آدرس پنل باید با http:// یا https:// شروع شود.")
-    out = {}
-
-    def mut(c):
-        pn = get_panel(c, r.id) if r.id else None
-        if r.id and not pn:
-            raise ValueError("پنل پیدا نشد.")
-        if not pn:
-            if not r.password:
-                raise ValueError("رمز عبور پنل الزامی است.")
-            pn = {"id": new_panel_id(c), "services": [], "password": ""}
-            c["panels"].append(pn)
-            if not c["active_panel"]:
-                c["active_panel"] = pn["id"]
-        pn.update(name=r.name.strip(), panel_url=url, sub_url=r.sub_url.strip().rstrip("/"), username=r.username.strip(), verify_ssl=r.verify_ssl)
-        if r.password:
-            pn["password"] = r.password
-        out["id"] = pn["id"]
-    update_config(mut)
-    return {"ok": True, "id": out["id"]}
-
-
-@app.post("/api/panels/delete", dependencies=[Depends(guard)])
-async def panel_delete(r: NameReq):  # name = panel id
-    def mut(c):
-        c["panels"] = [p for p in c["panels"] if p["id"] != r.name]
-    update_config(mut)
-    C.drop_api(r.name)
-    return {"ok": True}
-
-
-@app.post("/api/panels/active", dependencies=[Depends(guard)])
-async def panel_active(r: NameReq):
-    def mut(c):
-        if not get_panel(c, r.name):
-            raise ValueError("پنل پیدا نشد.")
-        c["active_panel"] = r.name
-    update_config(mut)
-    return {"ok": True}
-
-
-@app.post("/api/settings/test", dependencies=[Depends(guard)])
-async def settings_test(api: RebeccaClient = Depends(P)):
-    await api.login()
-    s = await api.request("GET", "/api/system")
-    svc = await api.list_services(force=True)
-    return {"ok": True, "total_user": s.get("total_user", 0), "services": len(svc)}
+    fresh = load_config()
+    re
