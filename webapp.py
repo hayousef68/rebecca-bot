@@ -1752,7 +1752,7 @@ async def settings_get():
                "has_password": bool(p["password"]), "verify_ssl": p["verify_ssl"]} for p in c["panels"]]
     return {"panels": panels, "active_panel": c["active_panel"], "bot_token": _mask(c["bot_token"]),
             "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin"), "web_port": c["web_port"],
-            "backup_enabled": c["backup"]["enabled"], "backup_interval": c["backup"]["interval_min"], "backup_has_password": bool(c["backup"].get("password")), "default_prefix": c["default_prefix"],
+            "backup_enabled": c["backup"]["enabled"], "backup_interval": c["backup"]["interval_min"], "backup_has_password": bool(c["backup"].get("password")), "backup_live": c["backup"].get("live", False), "backup_live_chat": c["backup"].get("live_chat", ""), "backup_bot_id": (c["backup"].get("bot_token") or "").split(":")[0], "default_prefix": c["default_prefix"],
             "unpaid_hours": c["unpaid"]["hours"], "unpaid_count": sum(len(m) for m in c["unpaid"]["pending"].values()),
             "smart_alerts": c.get("smart_alerts", {}), "audit_count": len(c.get("audit_log", [])), "totp": C.totp_enabled()}
 
@@ -2057,6 +2057,9 @@ class BackupSettingsReq(BaseModel):
     enabled: bool
     interval_min: int | None = Field(default=None, ge=5, le=1440)       # ۱۴۴۰ = روزانه؛ کمتر = هر N دقیقه (فقط در صورت تغییر)
     password: str | None = Field(default=None, max_length=128)           # None = بدون تغییر؛ "" = حذف رمز؛ غیر خالی = رمز جدید (حداقل ۶ کاراکتر)
+    live: bool | None = None                                             # بکاپ آنلاین: یک پیام که خودش به‌روز می‌شود
+    live_chat: str | None = Field(default=None, max_length=64)           # شناسه‌ی کانال/گروه خصوصی (خالی = پیام خصوصی ادمین‌ها)
+    bot_token: str | None = Field(default=None, max_length=128)          # توکن «ربات بکاپ» جدا (خالی = حذف و استفاده از ربات اصلی)
     code: str = Field(default="", max_length=64)
 
 
@@ -2125,16 +2128,46 @@ async def backup_settings(r: BackupSettingsReq, request: Request):
         if r.password != (load_config()["backup"].get("password") or ""):
             await _gate_code(request, r.code, None, "تغییر رمز بکاپ", always=True)
 
+    cur_bk = load_config()["backup"]
+    need_gate, bot_user = False, None
+    if r.live_chat is not None:
+        r.live_chat = r.live_chat.strip()
+        if r.live_chat and not re.fullmatch(r"-?\d{5,20}|@[A-Za-z0-9_]{5,32}", r.live_chat):
+            raise HTTPException(400, "شناسه‌ی کانال/گروه باید عددی (مثل -1001234567890) یا @username باشد.")
+        need_gate = need_gate or r.live_chat != (cur_bk.get("live_chat") or "")
+    if r.bot_token is not None:
+        r.bot_token = r.bot_token.strip()
+        if r.bot_token:
+            if not re.fullmatch(r"\d{6,14}:[A-Za-z0-9_-]{30,60}", r.bot_token):
+                raise HTTPException(400, "فرمت توکن ربات درست نیست (مثل 123456789:AAH...).")
+            try:                                                    # قبل از ذخیره مطمئن شو توکن واقعاً کار می‌کند
+                from telegram import Bot
+                me = await asyncio.wait_for(Bot(r.bot_token).get_me(), 20)
+                bot_user = "@" + (me.username or str(me.id))
+            except Exception:  # noqa: BLE001
+                raise HTTPException(400, "تلگرام این توکن را قبول نکرد؛ توکن را از @BotFather دوباره کپی کنید.")
+        need_gate = need_gate or r.bot_token != (cur_bk.get("bot_token") or "")
+    if need_gate:                                                   # مقصد/فرستنده‌ی بکاپ = دسترسی به توکن‌ها و رمزها
+        await _gate_code(request, r.code, None, "تغییر مقصد یا ربات بکاپ", always=True)
+
     def mut(c):
         c["backup"]["enabled"] = r.enabled
         if r.interval_min is not None:
             c["backup"]["interval_min"] = r.interval_min
+        if r.live is not None:
+            c["backup"]["live"] = r.live
+        if r.live_chat is not None:
+            c["backup"]["live_chat"] = r.live_chat
+        if r.bot_token is not None:
+            c["backup"]["bot_token"] = r.bot_token
         if r.password is not None:
             c["backup"]["password"] = r.password
     update_config(mut)
     if r.password is not None:
         C.audit_event("ادمین وب‌پنل", "رمز بکاپ", "", "تنظیم شد" if r.password else "حذف شد")
-    return {"ok": True}
+    if r.bot_token is not None:
+        C.audit_event("ادمین وب‌پنل", "ربات بکاپ", "", f"تنظیم شد ({bot_user})" if r.bot_token else "حذف شد")
+    return {"ok": True, "bot": bot_user}
 
 
 @app.post("/api/backup/send", dependencies=[Depends(guard)])
@@ -2142,7 +2175,7 @@ async def backup_send():
     cfg = load_config()
     if not (cfg["bot_token"] and cfg["admin_ids"]):
         raise HTTPException(400, "توکن ربات یا ادمین تنظیم نشده")
-    n = await sales.send_backup(_tg_bot(cfg["bot_token"]), cfg["admin_ids"], "💾 بکاپ تنظیمات — جای امن نگه دارید.")
+    n = await sales.send_backup(sales.backup_bot(_tg_bot(cfg["bot_token"]), cfg), cfg["admin_ids"], "💾 بکاپ تنظیمات — جای امن نگه دارید.")
     if not n:
         raise HTTPException(502, "ارسال به تلگرام ناموفق بود (ربات را در تلگرام Start کرده‌اید؟)")
     return {"sent": n}
