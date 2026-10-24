@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 
 try:                                  # قفل فایل بین پروسه‌ها (ربات و وب‌پنل دو سرویس جدا هستند)
     import fcntl
@@ -42,6 +43,8 @@ DEFAULT_TEMPLATES = {
     "پیش‌فرض (30 گیگ - 30 روز)": {"gb": 30, "days": 30, "mode": "on_hold", "kind": "single"},
     "تست (5 گیگ - 3 روز)": {"gb": 5, "days": 3, "mode": "active", "kind": "single"},
 }
+AUDIT_MAX = 3000          # سقف رویدادهای لاگ فعالیت (قدیمی‌ترها حذف می‌شوند)
+AUDIT_CATS = ("wallet", "rep", "user", "del", "sys")
 DEFAULT_SERVICES = [{"id": 6, "name": "Hamkari"}, {"id": 1, "name": "ms"}, {"id": 5, "name": "Tes"}]
 
 DEFAULT_CFG = {
@@ -272,7 +275,7 @@ def _normalize(data: dict) -> dict:
     except (TypeError, ValueError):
         alerts["low_wallet_threshold"] = DEFAULT_CFG["smart_alerts"]["low_wallet_threshold"]
     cfg["smart_alerts"] = alerts
-    cfg["audit_log"] = [x for x in cfg.get("audit_log", []) if isinstance(x, dict)][-1000:] if isinstance(cfg.get("audit_log"), list) else []
+    cfg["audit_log"] = [x for x in cfg.get("audit_log", []) if isinstance(x, dict)][-AUDIT_MAX:] if isinstance(cfg.get("audit_log"), list) else []
     for key in ("monitor", "reminders", "backup"):
         sec = copy.deepcopy(DEFAULT_CFG[key])
         if isinstance(cfg.get(key), dict):
@@ -1106,38 +1109,68 @@ def set_rep_paid(rid: str, pid: str, username: str, paid: bool) -> bool:
 
 
 # ───────────────────────────── لاگ ممیزی ─────────────────────────────
-def audit_event(actor: str, action: str, target: str = "", details: str = "", amount: int | None = None, balance: int | None = None) -> None:
-    """ثبت تغییرات مدیریتی و فعالیت‌های مهم نماینده‌ها؛ آخرین ۱۰۰۰ رخداد نگه‌داری می‌شود."""
-    if actor == "ادمین وب‌پنل":
-        cfg_now = load_config()
-        actor = f"ادمین وب‌پنل ({cfg_now.get('web', {}).get('user', 'admin')})"
-    elif actor in ("نماینده", "عملیات نماینده"):
-        cfg_now = load_config()
-        rep = cfg_now.get("reps", {}).get(str(target), {})
-        actor = f"نماینده: {rep.get('name', target)}" if rep else actor
-    rec = {"ts": int(time.time()), "actor": str(actor or "نامشخص")[:80],
-           "action": str(action or "تغییر")[:120], "target": str(target or "")[:120],
-           "details": str(details or "")[:500]}
-    if amount is not None:                      # عملیات مالی: مبلغ (±) و موجودی بعد از آن جدا ذخیره می‌شود تا لاگ بتواند واضح نشان دهد
-        rec["amt"] = int(amount)
-    if balance is not None:
-        rec["bal"] = int(balance)
-    def mut(c):
-        c.setdefault("audit_log", []).append(rec)
-        c["audit_log"] = c["audit_log"][-1000:]
-    update_config(mut)
+def audit_event(actor: str, action: str, target: str = "", details: str = "", amount: int | None = None, balance: int | None = None,
+                cat: str | None = None) -> None:
+    """ثبت تغییرات مدیریتی و فعالیت‌های مهم؛ آخرین AUDIT_MAX رخداد نگه‌داری می‌شود.
+
+    cat (اختیاری): wallet | rep | user | del | sys. اگر ندهید از روی نام عملیات حدس زده می‌شود.
+    هیچ‌وقت خطا نمی‌دهد؛ شکست در ثبت لاگ نباید ساخت/تمدید/کیف پول را خراب کند.
+    """
+    try:
+        actor = str(actor or "نامشخص")
+        if actor == "ادمین وب‌پنل":
+            actor = f"ادمین وب‌پنل ({load_config().get('web', {}).get('user', 'admin')})"
+        elif actor in ("نماینده", "عملیات نماینده"):
+            rep = load_config().get("reps", {}).get(str(target), {})
+            if rep:
+                actor = f"نماینده: {rep.get('name', target)}"
+        rec = {"ts": int(time.time()), "actor": actor[:80], "action": str(action or "تغییر")[:120],
+               "target": str(target or "")[:120], "details": str(details or "")[:1500]}
+        if cat in AUDIT_CATS:
+            rec["cat"] = cat
+        if amount is not None:                  # عملیات مالی: مبلغ (±) و موجودی بعد از آن جدا ذخیره می‌شود
+            rec["amt"] = int(amount)
+        if balance is not None:
+            rec["bal"] = int(balance)
+
+        def mut(c):
+            c.setdefault("audit_log", []).append(rec)
+            c["audit_log"] = c["audit_log"][-AUDIT_MAX:]
+        update_config(mut)
+    except Exception:  # noqa: BLE001
+        log.exception("audit_event")
 
 
 def audit_category(x: dict) -> str:
-    """دسته‌ی رویداد لاگ برای فیلتر: wallet | rep | user | sys"""
+    """دسته‌ی رویداد برای فیلتر: wallet | rep | user | del | sys (اول مقدار ذخیره‌شده، برای رویدادهای قدیمی حدس از روی نام)."""
+    if x.get("cat") in AUDIT_CATS:
+        return x["cat"]
     a = str(x.get("action") or "")
     if "amt" in x or "کیف پول" in a or "موجودی" in a:
         return "wallet"
+    if "حذف کاربر" in a and "از نماینده" not in a:
+        return "del"
     if "نماینده" in a or "تمپلت" in a or "پنل نماینده" in a:
         return "rep"
     if "کاربر" in a or "اشتراک" in a or "یادداشت" in a or "پرداخت" in a:
         return "user"
     return "sys"
+
+
+def user_brief(u: dict) -> str:
+    """خلاصه‌ی کوتاه وضعیت کاربر برای لاگ (قبل از حذف و ...)."""
+    try:
+        st = str(u.get("status") or "؟")
+        used = float(u.get("used_traffic") or 0) / GB
+        lim = float(u.get("data_limit") or 0) / GB
+        exp = u.get("expire")
+        if isinstance(exp, (int, float)) and exp > 0:
+            exp = datetime.fromtimestamp(int(exp), timezone.utc).strftime("%Y-%m-%d")
+        elif not exp:
+            exp = "نامحدود"
+        return f"وضعیت: {st}؛ مصرف: {used:.1f}/{(str(round(lim, 1)) if lim else 'نامحدود')} گیگ؛ انقضا: {str(exp)[:10]}"
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 # ───────────────────────────── کیف پول نماینده ─────────────────────────────
@@ -2073,7 +2106,7 @@ async def set_note(api, username: str, note: str):
 
 BULK_ACTIONS = {
     "service": "🔀 تغییر سرویس", "renew": "⚡ تمدید با تمپلت", "reset": "🔄 صفر کردن مصرف",
-    "disable": "⛔ غیرفعال‌سازی", "enable": "✅ فعال‌سازی", "delete": "🗑 حذف",
+    "disable": "⛔ غیرفعال‌سازی", "enable": "✅ فعال‌سازی",   # حذف عمداً نیست: حذف کاربر فقط دستی و تکی
 }
 
 
@@ -2100,7 +2133,7 @@ async def bulk_apply(api, names, action: str, *, service_id=None, tpl=None, conc
                 elif action in ("disable", "enable"):
                     await api.request("PUT", p, json={"status": "disabled" if action == "disable" else "active"})
                 else:
-                    await api.request("DELETE", p)
+                    raise ValueError("عملیات ناشناخته")
                 ok.append(n)
             except RebeccaError as e:
                 bad[n] = "پیدا نشد" if e.status == 404 else str(e)
@@ -2116,23 +2149,6 @@ async def bulk_apply(api, names, action: str, *, service_id=None, tpl=None, conc
 
     await asyncio.gather(*(one(n) for n in names))
     return [n for n in names if n in ok], [(n, bad[n]) for n in names if n in bad]
-
-
-async def delete_users(api, usernames, concurrency=10):
-    sem = asyncio.Semaphore(concurrency)
-    n_ok = 0
-
-    async def d(u):
-        nonlocal n_ok
-        async with sem:
-            try:
-                await api.request("DELETE", api.upath(u))
-                n_ok += 1
-            except RebeccaError:
-                pass
-
-    await asyncio.gather(*(d(u) for u in usernames))
-    return n_ok
 
 
 # ───────────────────── ارسال نتایج به تلگرام (QR دسته‌ای) ─────────────────────
