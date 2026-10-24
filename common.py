@@ -323,7 +323,7 @@ def _normalize(data: dict) -> dict:
             reps[str(rid)] = {"name": str(r["name"]), "label": str(r.get("label") or "")[:60], "salt": str(r["salt"]), "hash": str(r["hash"]),
                               "blocked": bool(r.get("blocked")), "created": int(r.get("created") or 0),
                               "locked": bool(r.get("locked")), "fails": max(0, int(r.get("fails") or 0)), "locked_at": int(r.get("locked_at") or 0),
-                              "balance": int(r.get("balance") or 0), "panel": str(r.get("panel") or ""),
+                              "balance": int(r.get("balance") or 0), "panel": str(r.get("panel") or ""), "next_plan": bool(r.get("next_plan")),
                               "tpls": [str(x) for x in (r.get("tpls") if isinstance(r.get("tpls"), list) else []) if str(x) in tpls],
                               "log": [e for e in (r.get("log") if isinstance(r.get("log"), list) else []) if isinstance(e, dict)][-WALLET_LOG_MAX:]}
     cfg["reps"] = reps
@@ -365,7 +365,7 @@ def _normalize(data: dict) -> dict:
                 meta = x.get("meta")
                 if isinstance(meta, dict):
                     action = str(meta.get("action") or "new")
-                    if action not in ("new", "renew"):
+                    if action not in ("new", "renew", "next"):
                         action = "new"
                     try:
                         gb = max(0, int(meta.get("gb") or 0))
@@ -883,7 +883,7 @@ def create_rep(name: str, password: str = "", label: str = "") -> dict:
         rid = "r" + secrets.token_hex(4)
         c["reps"][rid] = {"name": name, "label": (label or "").strip()[:60], **hash_password(password), "blocked": False, "created": int(time.time()),
                           "locked": False, "fails": 0, "locked_at": 0,
-                          "balance": 0, "panel": "", "tpls": [], "log": []}
+                          "balance": 0, "panel": "", "next_plan": False, "tpls": [], "log": []}
         out.update(id=rid, name=name)
     update_config(mut)
     return {**out, "password": password}
@@ -1079,6 +1079,16 @@ def set_rep_note(rid: str, pid: str, username: str, note: str) -> str:
             m.pop(username, None)
     update_config(mut)
     return note
+
+
+def set_rep_next_plan(rid: str, enabled: bool) -> bool:
+    """اجازه‌ی «افزودن پلن بعدی» برای کاربرهای خود نماینده (با کسر از کیف پول)."""
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        c["reps"][rid]["next_plan"] = bool(enabled)
+    update_config(mut)
+    return bool(enabled)
 
 
 def set_rep_paid(rid: str, pid: str, username: str, paid: bool) -> bool:
