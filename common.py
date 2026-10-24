@@ -1661,8 +1661,9 @@ def drop_api(pid: str):
     return c
 
 
-async def create_users(api, names, tpl, service_id, *, concurrency=5, on_progress=None):
-    """ساخت هم‌زمان کنترل‌شده. خروجی: (موفق‌ها به ترتیب، [(نام، دلیل خطا)])."""
+async def create_users(api, names, tpl, service_id, *, concurrency=1, on_progress=None):
+    """ساخت کاربرها. پیش‌فرض یکی‌یکی و به ترتیب نام‌ها (concurrency=1) تا شماره‌ها در پنل پشت‌سرهم ساخته شوند؛
+    با concurrency بالاتر درخواست‌ها هم‌زمان می‌روند و ترتیب ساخت در پنل به‌هم می‌ریزد. خروجی: (موفق‌ها به ترتیب، [(نام، دلیل خطا)])."""
     sem = asyncio.Semaphore(concurrency)
     ok, failed, done = {}, {}, 0
 
