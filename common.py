@@ -83,7 +83,7 @@ DEFAULT_CFG = {
     "next_plan_mode": "chain",
     # برگشت تمدید/ریست اشتباهی: فقط یک فایل محلی کوچک (renew_undo.json)، بدون هیچ درخواست اضافه به پنل؛ ریست دسته‌ای بزرگ‌تر از bulk_max عکس‌برداری نمی‌شود
     "undo": {"enabled": True, "keep": 300, "days": 14, "bulk_max": 30},
-    "backup": {"enabled": True, "interval_min": 1440, "password": ""},   # interval_min: ۱۴۴۰ = روزانه ساعت ۱۲:۰۰؛ کمتر از آن = هر N دقیقه (فقط وقتی چیزی عوض شده)
+    "backup": {"enabled": True, "interval_min": 1440, "password": "", "live": False, "live_chat": "", "bot_token": ""},   # interval_min: ۱۴۴۰ = روزانه ساعت ۱۲:۰۰؛ کمتر از آن = هر N دقیقه (فقط وقتی چیزی عوض شده)
     "monitor": {"enabled": True, "interval": 300},
     "smart_alerts": {"low_rep_wallet": True, "panel_down": True, "backup_failed": True, "topup_request": True, "low_wallet_threshold": 100000},
     "audit_log": [],
