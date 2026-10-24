@@ -237,6 +237,15 @@ do_ssl() {
   esac
 }
 
+do_twofa() {
+  need_root
+  case "${1:-status}" in
+    off)    (cd "$DIR" && "$DIR/venv/bin/python" common.py twofa off) >/dev/null; systemctl restart rebecca-webapp; ok "ورود دومرحله‌ای خاموش شد." ;;
+    status) (cd "$DIR" && "$DIR/venv/bin/python" common.py twofa status) ;;
+    *)      echo "استفاده: $0 twofa {off|status}"; exit 1 ;;
+  esac
+}
+
 main() {
   local cmd="${1:-install}"; shift || true
   case "$cmd" in
@@ -250,7 +259,8 @@ main() {
     unlock)    do_unlock "$@" ;;      # rebecca-bot unlock --rep نام_نماینده
     info)      show_info ;;
     ssl)       do_ssl "$@" ;;
-    *)         echo "استفاده: $0 {install|update|uninstall [-y] [--keep-config]|restart|status|logs|passwd|unlock|info|ssl}"; exit 1 ;;
+    twofa)     do_twofa "$@" ;;       # rebecca-bot twofa off  (بازیابی اضطراری 2FA)
+    *)         echo "استفاده: $0 {install|update|uninstall [-y] [--keep-config]|restart|status|logs|passwd|unlock|info|ssl|twofa}"; exit 1 ;;
   esac
 }
 main "$@"
