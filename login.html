@@ -8,10 +8,11 @@
 <title>ورود | پنل ربکا</title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+<script>try{var t=localStorage.getItem("rb-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <style>
 :root{
-  --bg:#0a1016;--s1:#121b24;--s2:#1a2632;--line:#233241;--tx:#e9f0f6;--mu:#8497aa;
-  --ac:#f0b429;--ac2:#ff8a3d;--ac-ink:#1c1503;--bad:#f2706b;--ok:#3ecf8e;
+  --bg:#080c14;--s1:#0f1622;--s2:#182130;--line:#222d3d;--tx:#e9f0f6;--mu:#8497aa;
+  --ac:#8b7cff;--ac2:#4cc2ff;--ac-ink:#0b0b1f;--bad:#f2706b;--ok:#3ecf8e;
     --font:"Vazirmatn","Vazir","IRANSansX","Segoe UI",Tahoma,"Noto Sans Arabic","Noto Naskh Arabic",system-ui,sans-serif;
   --fs-xs:11.5px;--fs-sm:13px;--fs-md:14px;--fs-lg:16px;--fs-xl:21px;--fs-2xl:28px;--fs-3xl:32px;   /* مقیاس تایپوگرافی (موبایل) */
   --fw-regular:400;--fw-medium:500;--fw-semibold:600;--fw-bold:700;--fw-heavy:800;
@@ -22,7 +23,7 @@ button,input,select,textarea{font-family:inherit}
 html,body{min-height:100%}
 body{
   min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px 16px;color:var(--tx);font-size:var(--fs-md);line-height:1.7;
-  background:radial-gradient(800px 420px at 85% -120px,#f0b42926,transparent 60%),radial-gradient(700px 420px at -10% 100%,#5aa9ff1c,transparent 60%),var(--bg);
+  background:radial-gradient(800px 420px at 85% -120px,color-mix(in srgb,var(--ac) 15%,transparent),transparent 60%),radial-gradient(700px 420px at -10% 100%,#5aa9ff1c,transparent 60%),var(--bg);
   overflow-x:hidden;
 }
 .orb{position:fixed;border-radius:50%;filter:blur(70px);opacity:.22;pointer-events:none;z-index:0}
@@ -31,11 +32,11 @@ body{
 .wrap{position:relative;z-index:1;width:100%;max-width:400px}
 .brand{text-align:center;margin-bottom:22px}
 .logo{width:68px;height:68px;border-radius:22px;margin:0 auto 14px;display:grid;place-items:center;font-size:34px;font-weight:800;color:var(--ac-ink);
-  background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 10px 34px #f0b4293d,inset 0 1px 0 #fff5}
+  background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 10px 34px color-mix(in srgb,var(--ac) 24%,transparent),inset 0 1px 0 #fff5}
 .brand h1{font-size:var(--fs-xl);font-weight:800}
 .brand p{color:var(--mu);font-size:var(--fs-sm);margin-top:2px}
 .card{
-  background:linear-gradient(180deg,#121b24f2,#0f1821f2);border:1px solid var(--line);border-radius:22px;padding:24px 20px 20px;
+  background:linear-gradient(180deg,#121b24f2,var(--s0)f2);border:1px solid var(--line);border-radius:22px;padding:24px 20px 20px;
   box-shadow:0 18px 50px #0009;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
 }
 .f{position:relative;margin-bottom:14px}
@@ -47,7 +48,7 @@ input[type=text],input[type=password]{
   padding:10px 44px;direction:ltr;text-align:left;transition:border-color .15s,box-shadow .15s;
 }
 input::placeholder{color:#55677a}
-input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
+input:focus{border-color:var(--ac);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 15%,transparent);outline:0}
 .eye{position:absolute;inset-inline-end:6px;bottom:6px;width:38px;height:38px;border:0;background:none;border-radius:10px;cursor:pointer;display:grid;place-items:center;color:var(--mu)}
 .eye:hover{color:var(--tx);background:var(--s2)}
 .eye svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -59,7 +60,7 @@ input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
 .chk input:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 .btn{
   width:100%;min-height:50px;border:0;border-radius:14px;font:inherit;font-size:var(--fs-md);font-weight:800;cursor:pointer;color:var(--ac-ink);
-  background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 6px 22px #f0b42940;display:flex;align-items:center;justify-content:center;gap:10px;
+  background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 6px 22px color-mix(in srgb,var(--ac) 25%,transparent);display:flex;align-items:center;justify-content:center;gap:10px;
   transition:transform .08s,filter .15s,opacity .15s;
 }
 .btn:hover{filter:brightness(1.07)}.btn:active{transform:scale(.98)}
@@ -78,6 +79,16 @@ input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
 @media (prefers-reduced-motion:no-preference){.wrap{animation:in .45s ease-out both}@keyframes in{from{opacity:0;transform:translateY(14px)}}}
 @media (prefers-reduced-motion:reduce){.card.shake{animation:none}.spin{animation-duration:1.6s}}
 [hidden]{display:none!important}
+::selection{background:color-mix(in srgb,var(--ac) 33%,transparent)}
+
+/* ───────── قالب‌های قابل تعویض (انتخاب از بالای صفحه) ───────── */
+:root{--fg:#fff;--s0:#0c131e}
+html[data-theme=light]{--bg:#eef1f7;--s0:#f3f5fa;--s1:#fff;--s2:#eef1f8;--line:#d9dfeb;--tx:#151b2b;--mu:#5d6b82;--fg:#000;--ac:#6d5dfc;--ac2:#0ea5e9;--ac-ink:#fff;--shadow:0 8px 28px #1d2a4426;color-scheme:light}
+html[data-theme=ocean]{--bg:#06141a;--s0:#08181f;--s1:#0d222b;--s2:#143040;--line:#1c3a48;--ac:#22d3ee;--ac2:#3b82f6;--ac-ink:#031418}
+html[data-theme=emerald]{--bg:#07130e;--s0:#0a1812;--s1:#0f1f18;--s2:#173026;--line:#1f3a2e;--ac:#34d399;--ac2:#a3e635;--ac-ink:#04150c}
+html[data-theme=rose]{--bg:#140a10;--s0:#180d14;--s1:#1f121a;--s2:#2d1a26;--line:#3a2231;--ac:#fb7185;--ac2:#c084fc;--ac-ink:#1b0710}
+html[data-theme=sunset]{--bg:#0a1016;--s0:#0f1821;--s1:#121b24;--s2:#1a2632;--line:#233241;--ac:#f0b429;--ac2:#ff8a3d;--ac-ink:#1c1503}
+.themesel{cursor:pointer;font:inherit;font-size:var(--fs-xs);width:auto!important;min-height:0!important;padding:3px 8px!important;border-radius:99px!important}
 </style>
 </head>
 <body>
@@ -151,6 +162,16 @@ card.addEventListener('submit', async e => {
   } catch { fail('ارتباط با سرور برقرار نشد.'); }
   btn.disabled = false; btn.classList.remove('load'); $('#gt').textContent = pre ? 'تأیید و ورود' : 'ورود به پنل';
 });
+</script>
+<select id="themesel" class="pill themesel" aria-label="قالب" style="position:fixed;top:12px;inset-inline-start:12px"></select>
+<script>
+(function(){var T=[["violet","🟣 بنفش"],["light","☀️ روشن"],["ocean","🌊 اقیانوس"],["emerald","🌿 زمرد"],["rose","🌸 رز"],["sunset","🟠 کهربایی"]];
+function apply(t){var r=document.documentElement;if(t==="violet")delete r.dataset.theme;else r.dataset.theme=t;
+ var m=document.querySelector('meta[name=color-scheme]');if(m)m.content=t==="light"?"light":"dark"}
+var cur="violet";try{cur=localStorage.getItem("rb-theme")||"violet"}catch(e){}apply(cur);
+var s=document.getElementById("themesel");if(!s)return;
+T.forEach(function(x){var o=document.createElement("option");o.value=x[0];o.textContent=x[1];if(x[0]===cur)o.selected=true;s.appendChild(o)});
+s.onchange=function(){apply(s.value);try{localStorage.setItem("rb-theme",s.value)}catch(e){}}})();
 </script>
 </body>
 </html>
