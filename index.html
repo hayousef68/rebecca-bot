@@ -281,11 +281,11 @@ html[data-theme=sunset]{--bg:#0a1016;--s0:#0f1821;--s1:#121b24;--s2:#1a2632;--li
 /* ───────── پوسته‌ی «اورا» (شکل و آیکون؛ مستقل از رنگ قالب) — پیش‌فرض: کلاسیک ───────── */
 .logo svg{display:none}
 html[data-skin=aura]{--r:26px}
-html[data-skin=aura] body{background:radial-gradient(700px 320px at 50% -160px,color-mix(in srgb,var(--ac) 14%,transparent),transparent 70%),var(--bg);background-attachment:fixed}
+html[data-skin=aura] body{background:var(--bg)}
 html[data-skin=aura] header{background:var(--s0);backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:1px solid var(--line)}
 html[data-skin=aura] .logo{width:34px;height:34px;border-radius:50%;font-size:0;background:var(--ac);box-shadow:0 0 0 4px color-mix(in srgb,var(--ac) 18%,transparent)}
 html[data-skin=aura] .logo svg{display:block;width:20px;height:20px;fill:none;stroke:var(--ac-ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-html[data-skin=aura] .card,html[data-skin=aura] .stat div,html[data-skin=aura] .item,html[data-skin=aura] .hero{background:var(--s1);border:1px solid var(--line);border-radius:24px;box-shadow:0 2px 0 color-mix(in srgb,var(--fg) 3%,transparent),0 14px 30px -20px #000b}
+html[data-skin=aura] .card,html[data-skin=aura] .stat div,html[data-skin=aura] .item,html[data-skin=aura] .hero{background:var(--s1);border:1px solid var(--line);border-radius:24px;box-shadow:0 1px 0 color-mix(in srgb,var(--fg) 4%,transparent)}
 html[data-skin=aura] .card:hover,html[data-skin=aura] .stat div:hover{border-color:var(--ac);transform:none}
 html[data-skin=aura] .card h2::before,html[data-skin=aura] .sec h2::before{width:8px;height:8px;border-radius:50%}
 html[data-skin=aura] .btn,html[data-skin=aura] .pill,html[data-skin=aura] .chip,html[data-skin=aura] .seg,html[data-skin=aura] .seg button{border-radius:999px}
@@ -296,7 +296,7 @@ html[data-skin=aura] input,html[data-skin=aura] select,html[data-skin=aura] text
 html[data-skin=aura] input:focus,html[data-skin=aura] select:focus,html[data-skin=aura] textarea:focus{border-color:var(--ac);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 22%,transparent)}
 html[data-skin=aura] .bar,html[data-skin=aura] .bar i{border-radius:99px}
 /* نوار پایین: چسبیده به لبه، آیکون دو‌رنگ، نشانگر بالای تب فعال */
-html[data-skin=aura] nav{inset:auto 0 0 0;max-width:none;border-radius:26px 26px 0 0;border-width:1px 0 0;background:var(--s0);backdrop-filter:none;-webkit-backdrop-filter:none;padding:6px 8px calc(8px + env(safe-area-inset-bottom));box-shadow:0 -10px 30px -18px #000c}
+html[data-skin=aura] nav{inset:auto 0 0 0;max-width:none;border-radius:26px 26px 0 0;border-width:1px 0 0;background:var(--s0);backdrop-filter:none;-webkit-backdrop-filter:none;padding:6px 8px calc(8px + env(safe-area-inset-bottom));box-shadow:none}
 html[data-skin=aura] nav button{border-radius:18px;padding:6px 0 5px;gap:2px;background:none}
 html[data-skin=aura] nav button svg{width:24px;height:24px;stroke-width:1.6;padding:3px;box-sizing:content-box;border-radius:14px;transition:background .2s,transform .2s}
 html[data-skin=aura] nav button svg .f{fill:color-mix(in srgb,currentColor 14%,transparent)}
@@ -355,7 +355,7 @@ function h(tag, props = {}, ...kids) {
 // عملیات مالی: برای هر درخواست یک کلید یکتا فرستاده می‌شود. اگر شبکه قطع شد و کاربر دوباره زد، همان کلید دوباره می‌رود
 // و سرور پول را دوباره کم نمی‌کند. بعد از گرفتن هر پاسخ (موفق یا خطا) کلید پاک می‌شود تا خرید بعدی مستقل باشد.
 const _idem = {};
-const _moneyPath = /^\/(rep\/(buy|renew|topup)|reps\/[^/?]+\/wallet)(\?|$)/;
+const _moneyPath = /^\/(rep\/(buy|renew|topup|next-plan)|reps\/[^/?]+\/wallet)(\?|$)/;
 function _newKey() { try { return crypto.randomUUID().replace(/-/g, ''); } catch { return Date.now().toString(36) + Math.random().toString(36).slice(2, 12); } }
 async function api(path, method = 'GET', body) {
   let r;
@@ -866,7 +866,7 @@ async function repApp(me) {
     wallet.balance = w.balance;
     wallet.sales = w.sales || [];
     wallet.today = wallet.sales[0] ? wallet.sales[0].total : 0;
-    REP.tpls = w.templates;
+    REP.tpls = w.templates; REP.canNext = !!w.can_next_plan;
     balB.textContent = toman(w.balance);
     document.querySelectorAll('.balval').forEach(e => { e.textContent = toman(w.balance); });
     document.querySelectorAll('.todayval').forEach(e => { e.textContent = toman(wallet.today); });
@@ -903,6 +903,7 @@ async function repApp(me) {
       const row = h('label', { class: 'tplopt' + (t.name === pick ? ' on' : '') }, r, h('div', { class: 'tn' }, t.name, h('div', { class: 'tp' }, `${t.gb ? t.gb + ' GB' : 'نامحدود'} · ${t.days ? t.days + ' روز' : 'نامحدود'}`)), h('b', {}, toman(t.price)));
       r.onchange = () => { pick = t.name; opts.forEach(o => o.classList.toggle('on', o === row)); upd(); }; return row; });
     const note = h('input', { placeholder: 'اسم مشتری (اختیاری)', maxlength: 100 });
+    const paidNew = h('input', { type: 'checkbox', id: 'paidnew' });
     const uname = h('input', { value: '…', readonly: true, dir: 'ltr', style: 'opacity:.85;cursor:not-allowed' });
     const loadName = () => api('/rep/next-name').then(r => { uname.value = r.name; }).catch(() => { uname.value = 'خودکار'; });
     loadName();
@@ -912,17 +913,17 @@ async function repApp(me) {
     go.onclick = () => run(go, async () => {
       const t = w.templates.find(x => x.name === pick);
       if (!confirm(`اکانت «${t.name}» به مبلغ ${toman(t.price)} ساخته شود؟`)) return;
-      const r = await api('/rep/buy', 'POST', { template: pick, note: note.value.trim() });
+      const r = await api('/rep/buy', 'POST', { template: pick, note: note.value.trim(), paid: paidNew.checked });
       w.balance = r.balance; balB.textContent = toman(r.balance); head.lastChild.textContent = toman(r.balance); upd();
       const qb = h('div'), sub = r.sub;
-      out.replaceChildren(h('div', { class: 'card' }, h('h2', {}, '✅ اکانت ساخته شد'), h('p', { style: 'margin:0 0 6px' }, '👤 ', h('b', { dir: 'ltr' }, r.username)), h('code', { onclick: () => copy(sub) }, sub || '—'), qb,
+      out.replaceChildren(h('div', { class: 'card' }, h('h2', {}, '✅ اکانت ساخته شد'), h('p', { style: 'margin:0 0 6px' }, '👤 ', h('b', { dir: 'ltr' }, r.username), r.paid ? h('em', { class: 'tag paid', style: 'margin-inline-start:8px' }, '💰 پرداخت شد') : null), h('code', { onclick: () => copy(sub) }, sub || '—'), qb,
         h('div', { class: 'acts', style: 'grid-template-columns:repeat(3,1fr)' }, h('button', { class: 'btn sm', type: 'button', onclick: () => toggleQR(qb, sub, r.username, '/api/rep/qr') }, '🖼 QR'),
           h('button', { class: 'btn sm', type: 'button', onclick: () => copy(sub) }, '📋 کپی لینک'),
           h('button', { class: 'btn sm', type: 'button', onclick: () => copy(['👤 نام کاربری: ' + r.username, '🔗 لینک اشتراک:', sub].join('\n')) }, '📤 کپی پیام'))));
-      note.value = ''; loadName(); toast('✅ اکانت ساخته شد');
+      note.value = ''; paidNew.checked = false; loadName(); toast('✅ اکانت ساخته شد');
     });
     upd();
-    mount(head, h('div', { class: 'card' }, h('h2', {}, 'انتخاب تمپلت'), ...opts, field('نام کاربری (خودکار طبق شماره‌گذاری پنل)', uname), field('یادداشت', note), go), out);
+    mount(head, h('div', { class: 'card' }, h('h2', {}, 'انتخاب تمپلت'), ...opts, field('نام کاربری (خودکار طبق شماره‌گذاری پنل)', uname), field('یادداشت', note), h('label', { class: 'chk paidchk', for: 'paidnew' }, paidNew, '💰 پرداخت شد (مشتری پول را داده است)'), go), out);
   };
 
   views.wallet = async () => {
@@ -937,7 +938,7 @@ async function repApp(me) {
     const lgRow = e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('span', { style: 'text-align:end' }, h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))));
     const sl = w.sales || [], td = sl[0] || { total: 0, count: 0 };
     const fmtPlan = x => `${x.count} تا ${x.gb} گیگ${x.days ? ' · ' + (x.days % 30 === 0 ? (x.days / 30) + ' ماهه' : x.days + ' روزه') : ' · نامحدود زمانی'}`;
-    const todayBreakdown = (td.breakdown || []).map(x => h('div', { class: 'lg' }, h('span', {}, (x.action === 'renew' ? '🔄 تمدید: ' : '🆕 ساخت: ') + fmtPlan(x), x.template ? h('small', {}, x.template) : null)));
+    const todayBreakdown = (td.breakdown || []).map(x => h('div', { class: 'lg' }, h('span', {}, (x.action === 'renew' ? '🔄 تمدید: ' : x.action === 'next' ? '🔁 پلن بعدی: ' : '🆕 ساخت: ') + fmtPlan(x), x.template ? h('small', {}, x.template) : null)));
     mount(h('div', { class: 'card bigbal' }, h('span', {}, 'موجودی کیف پول'), h('b', {}, toman(w.balance))),
       h('div', { class: 'card bigbal' }, h('span', {}, '📈 مجموع فروش امروز' + (td.count ? ' (' + td.count + ' سفارش)' : '')), h('b', {}, toman(td.total)),
         h('small', { style: 'display:block;margin-top:7px;color:var(--mu)' }, `🆕 ساخت: ${td.new_count || 0} · 🔄 تمدید: ${td.renew_count || 0}`)),
@@ -1006,6 +1007,18 @@ function repItem(u) {
     if (!confirm(`«${u.username}» با تمپلت «${t.name}» به مبلغ ${toman(t.price)} تمدید شود؟ مصرف قبلی صفر می‌شود.`)) return;
     const r = await api('/rep/renew', 'POST', { username: u.username, pid: u.pid, template: t.name });
     if (REP.setBal) REP.setBal(r.balance); toast('✅ تمدید شد · موجودی: ' + toman(r.balance)); if (REP.reload) REP.reload(); });
+  const npSel = h('select', {}, REP.tpls.map(t => h('option', { value: t.name }, `${t.name} — ${toman(t.price)}`)));
+  const npList = h('div', { class: 'hint', style: 'margin:6px 0 0' });
+  const renderNp = () => { const l = u.next_plans || []; npList.textContent = l.length ? '🔁 در صف: ' + l.map(x => `${x.gb ? x.gb + ' گیگ' : 'نامحدود'} · ${x.days ? x.days + ' روز' : 'نامحدود'}`).join(' ← ') : '⚪ پلن بعدی ثبت نشده'; };
+  renderNp();
+  const npBtn = h('button', { class: 'btn sm pri', type: 'button' }, '🔁 افزودن پلن بعدی با کیف پول');
+  npBtn.onclick = () => run(npBtn, async () => {
+    const t = REP.tpls.find(x => x.name === npSel.value); if (!t) return;
+    if (!confirm(`برای «${u.username}» پلن بعدی «${t.name}» (${t.gb ? t.gb + ' گیگ' : 'نامحدود'} · ${t.days ? t.days + ' روز' : 'نامحدود'}) به مبلغ ${toman(t.price)} اضافه شود؟ بعد از تمام شدن حجم یا زمان فعلی خودکار شروع می‌شود و مبلغ از کیف پول کم می‌شود.`)) return;
+    const r = await api('/rep/next-plan', 'POST', { username: u.username, pid: u.pid, template: t.name });
+    u.next_plans = r.next_plans || u.next_plans; renderNp();
+    if (REP.setBal) REP.setBal(r.balance); toast('✅ پلن بعدی ثبت شد · موجودی: ' + toman(r.balance)); });
+  const nextBox = (REP.canNext && REP.tpls.length) ? h('div', { class: 'unpaid-opt' }, h('b', { style: 'font-size:var(--fs-sm)' }, '🔁 پلن بعدی (شارژ خودکار بعد از اتمام)'), h('div', { style: 'margin-top:6px' }, npSel), h('div', { class: 'btns', style: 'margin-top:6px' }, npBtn), npList) : null;
   const renewBox = REP.tpls.length ? h('div', { class: 'unpaid-opt' }, h('b', { style: 'font-size:var(--fs-sm)' }, '🔄 تمدید این کاربر'), h('div', { style: 'margin-top:6px' }, rnSel), h('div', { class: 'btns', style: 'margin-top:6px' }, rnBtn)) : null;
   noteIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveNote(); } });
   d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), u.username, stTag(u.status), paidTag, noteTxt), h('span', { class: 'sub' }, usage(u))),
@@ -1014,6 +1027,7 @@ function repItem(u) {
       h('div', { class: 'notebox' }, noteIn, noteBtn),
       h('label', { class: 'chk paidchk', for: 'pd' + u.username }, paidCb, '💰 پرداخت شد'),
       renewBox,
+      nextBox,
       h('div', { class: 'btns', style: 'margin:8px 0' }, stBtn, rvBtn),
       h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
       h('div', { class: 'tiles' }, tile('مصرف', gb(u.used)), tile('باقی‌مانده', left), tile('اعتبار', u.expire_text)),
@@ -1585,6 +1599,8 @@ async function vSet() {
         logBox,
         h('div', { class: 'psec' }, h('b', {}, '🧩 تمپلت‌های فعال این نماینده'), h('span', {}, 'فقط تمپلت‌های دارای قیمت قابل خرید است')),
         tplBox,
+        h('div', { class: 'psec' }, h('b', {}, '🔁 پلن بعدی'), h('span', {}, 'اجازه می‌دهد نماینده برای کاربرهای خودش پلن بعدی اضافه کند (قیمت تمپلت از کیف پولش کم می‌شود؛ حداکثر ۳ پلن در صف)')),
+        h('div', { class: 'btns' }, act(r.next_plan ? '✅ فعال است — غیرفعال کن' : '🔁 فعال‌سازی دسترسی پلن بعدی', r.next_plan ? '' : 'pri', async () => { await api(`/reps/${r.id}/next-plan-access`, 'POST', { enabled: !r.next_plan }); await done(r.next_plan ? 'دسترسی پلن بعدی غیرفعال شد' : 'دسترسی پلن بعدی برای نماینده فعال شد'); })),
         h('div', { class: 'btns' }, act('💾 ذخیره تمپلت‌ها', 'pri', async () => { await api(`/reps/${r.id}/templates`, 'POST', { names: [...tplBox.querySelectorAll('input:checked')].map(i => i.value) }); await done('تمپلت‌های نماینده ذخیره شد'); })),
         S.st && S.st.panels.length > 1 ? h('div', {}, field('پنلی که نماینده روی آن اکانت می‌سازد', panSel), h('div', { class: 'btns' }, act('💾 ذخیره پنل', '', async () => { await api(`/reps/${r.id}/panel`, 'POST', { panel: panSel.value }); await done('پنل نماینده ذخیره شد'); }))) : null,
         h('div', { class: 'psec' }, h('b', {}, 'حساب نماینده')),
