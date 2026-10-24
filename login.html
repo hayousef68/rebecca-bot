@@ -71,6 +71,7 @@ input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
 .foot.ok{color:var(--ok)}
 @media (prefers-reduced-motion:no-preference){.wrap{animation:in .45s ease-out both}@keyframes in{from{opacity:0;transform:translateY(14px)}}}
 @media (prefers-reduced-motion:reduce){.card.shake{animation:none}.spin{animation-duration:1.6s}}
+[hidden]{display:none!important}
 </style>
 </head>
 <body>
@@ -96,7 +97,12 @@ input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
         <svg viewBox="0 0 24 24" id="eyei"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>
       </button>
     </div>
-    <div class="opts">
+    <div class="f" id="codeBox" hidden>
+      <label for="c">کد ورود دومرحله‌ای</label>
+      <input id="c" name="otp" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="کد ۶ رقمی اپلیکیشن" dir="ltr" maxlength="20">
+      <p style="margin:8px 2px 0;font-size:12px;color:var(--mu)">کد ۶ رقمی را از اپلیکیشن Google Authenticator (یا مشابه) وارد کنید. اگر گوشی را ندارید، یکی از کدهای بازیابی (مثل <span dir="ltr">ab12cd-34ef56</span>) را بزنید.</p>
+    </div>
+    <div class="opts" id="optsBox">
       <label class="chk"><input type="checkbox" id="rem"> مرا ۳۰ روز به خاطر بسپار</label>
     </div>
     <button class="btn" id="go" type="submit"><span class="spin"></span><span id="gt">ورود به پنل</span></button>
@@ -106,7 +112,8 @@ input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
 <script>
 'use strict';
 const $ = s => document.querySelector(s);
-const card = $('#card'), err = $('#err'), btn = $('#go'), u = $('#u'), p = $('#p');
+const card = $('#card'), err = $('#err'), btn = $('#go'), u = $('#u'), p = $('#p'), cbox = $('#codeBox'), cin = $('#c');
+let pre = '';
 const OPEN = '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>';
 const SHUT = '<path d="M3 3l18 18M10.6 5.7A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-3.2 3.9M6.4 6.9C3.8 8.7 2.5 12 2.5 12S6 18.5 12 18.5c1.6 0 3-.4 4.3-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/>';
 $('#eye').onclick = () => { const show = p.type === 'password'; p.type = show ? 'text' : 'password'; $('#eyei').innerHTML = show ? SHUT : OPEN; p.focus(); };
@@ -115,19 +122,28 @@ function fail(msg) {
   $('#errt').textContent = msg; err.classList.add('show');
   card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
 }
-[u, p].forEach(x => x.addEventListener('input', () => err.classList.remove('show')));
+[u, p, cin].forEach(x => x.addEventListener('input', () => err.classList.remove('show')));
+function askCode() {
+  document.querySelectorAll('#card .f').forEach(f => { if (f.id !== 'codeBox') f.hidden = true; });
+  $('#optsBox').hidden = true; cbox.hidden = false; $('#gt').textContent = 'تأیید و ورود'; cin.value = ''; cin.focus();
+}
 card.addEventListener('submit', async e => {
   e.preventDefault();
-  if (!u.value.trim() || !p.value) return fail('نام کاربری و رمز عبور را وارد کنید.');
+  const step2 = !!pre;
+  if (!step2 && (!u.value.trim() || !p.value)) return fail('نام کاربری و رمز عبور را وارد کنید.');
+  if (step2 && !cin.value.trim()) return fail('کد را وارد کنید.');
   btn.disabled = true; btn.classList.add('load'); $('#gt').textContent = 'در حال ورود…';
   try {
-    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' }, body: JSON.stringify({ user: u.value.trim(), password: p.value, remember: $('#rem').checked }) });
+    const r = step2
+      ? await fetch('/api/login/2fa', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' }, body: JSON.stringify({ pre, code: cin.value.trim() }) })
+      : await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' }, body: JSON.stringify({ user: u.value.trim(), password: p.value, remember: $('#rem').checked }) });
     let d = {}; try { d = await r.json(); } catch {}
+    if (r.ok && d.need_code) { pre = d.pre; p.value = ''; btn.disabled = false; btn.classList.remove('load'); askCode(); return; }
     if (r.ok) { $('#gt').textContent = 'ورود موفق ✓'; location.replace('/'); return; }
     fail(typeof d.detail === 'string' ? d.detail : 'ورود ناموفق بود.');
-    p.select();
+    if (step2) { if (r.status === 401 && /زمان/.test(d.detail || '')) location.reload(); cin.select(); } else p.select();
   } catch { fail('ارتباط با سرور برقرار نشد.'); }
-  btn.disabled = false; btn.classList.remove('load'); $('#gt').textContent = 'ورود به پنل';
+  btn.disabled = false; btn.classList.remove('load'); $('#gt').textContent = pre ? 'تأیید و ورود' : 'ورود به پنل';
 });
 </script>
 </body>
