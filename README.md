@@ -33,7 +33,7 @@ rebecca-bot update
 ریستارت وب پنل در صورت عوض شدن پورت
 
 ```bash
-systemctl restart rebecca-webapp
+systemctl restart rebecca-webapp rebecca-bot
 ```
 
 
