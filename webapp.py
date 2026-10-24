@@ -1751,7 +1751,7 @@ async def settings_get():
                "has_password": bool(p["password"]), "verify_ssl": p["verify_ssl"]} for p in c["panels"]]
     return {"panels": panels, "active_panel": c["active_panel"], "bot_token": _mask(c["bot_token"]),
             "admin_ids": c["admin_ids"], "web_user": c["web"].get("user", "admin"), "web_port": c["web_port"],
-            "backup_enabled": c["backup"]["enabled"], "backup_interval": c["backup"]["interval_min"], "default_prefix": c["default_prefix"],
+            "backup_enabled": c["backup"]["enabled"], "backup_interval": c["backup"]["interval_min"], "backup_has_password": bool(c["backup"].get("password")), "default_prefix": c["default_prefix"],
             "unpaid_hours": c["unpaid"]["hours"], "unpaid_count": sum(len(m) for m in c["unpaid"]["pending"].values()),
             "smart_alerts": c.get("smart_alerts", {}), "audit_count": len(c.get("audit_log", [])), "totp": C.totp_enabled()}
 
@@ -2047,6 +2047,8 @@ async def ssl_save(r: SslReq, request: Request):
 class BackupSettingsReq(BaseModel):
     enabled: bool
     interval_min: int | None = Field(default=None, ge=5, le=1440)       # ۱۴۴۰ = روزانه؛ کمتر = هر N دقیقه (فقط در صورت تغییر)
+    password: str | None = Field(default=None, max_length=128)           # None = بدون تغییر؛ "" = حذف رمز؛ غیر خالی = رمز جدید (حداقل ۶ کاراکتر)
+    code: str = Field(default="", max_length=64)
 
 
 class RestoreReq(BaseModel):
@@ -2054,23 +2056,36 @@ class RestoreReq(BaseModel):
     wallet_mode: str = Field(default="keep", pattern="^(keep|restore)$")   # keep = موجودی/تراکنش‌های فعلی حفظ شود (امن)؛ restore = همه چیز از بکاپ
     confirm_wallet: bool = False
     code: str = Field(default="", max_length=64)
+    password: str = Field(default="", max_length=128)        # رمز بکاپ (فقط برای فایل‌های رمزنگاری‌شده)
 
 
-def _parse_restore(content: str) -> tuple[dict, dict]:
+def _parse_restore(content: str, password: str = "") -> tuple[dict, dict, dict | None]:
+    """فایل بکاپ (رمزنگاری‌شده یا ساده؛ کامل یا config.json) ← (داده‌ی خام، کانفیگ نرمال‌شده، {attach_log, sales_overrides} یا None)."""
     import json
+    if C.is_encrypted_backup(content):
+        if not password:
+            raise HTTPException(400, "این بکاپ رمزنگاری شده است؛ رمز بکاپ را وارد کنید.")
+        try:
+            content = C.decrypt_backup(content, password).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as e:
+            raise HTTPException(400, str(e))
     try:
         data = json.loads(content)
     except ValueError:
         raise HTTPException(400, "فایل JSON معتبر نیست.")
+    extra = None
+    if isinstance(data, dict) and data.get("format") == sales.BACKUP_FORMAT:       # بکاپ کامل (همانی که در تلگرام می‌آید)
+        extra = {"attach_log": data.get("attach_log"), "sales_overrides": data.get("sales_overrides")}
+        data = data.get("config")
     if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates"}):
         raise HTTPException(400, "این فایل شبیه بکاپ تنظیمات ربات نیست.")
-    return data, C._normalize(data)
+    return data, C._normalize(data), extra
 
 
 @app.post("/api/backup/restore/preview", dependencies=[Depends(guard)])
 async def backup_restore_preview(r: RestoreReq):
     """قبل از بازیابی: تفاوت موجودی نماینده‌ها و تراکنش‌هایی که از دست می‌رود (چیزی تغییر نمی‌کند)."""
-    data, new = _parse_restore(r.content)
+    data, new, _ = _parse_restore(r.content, r.password)
     cur = load_config()
     if "reps" not in data:
         return {"old_format": True, "needs_code": C.totp_enabled(), "diff": None}
@@ -2084,17 +2099,32 @@ async def backup_download():
         data = await asyncio.to_thread(C.config_backup_bytes)
     except OSError:
         raise HTTPException(404, "فایل تنظیمات پیدا نشد.")
-    return Response(data, media_type="application/json",
-                    headers={"Content-Disposition": f'attachment; filename="rebecca-config-{sales.tehran_day()}.json"'})
+    ext = "json"
+    pw = load_config()["backup"].get("password") or ""
+    if pw:                                                       # با رمز تنظیم‌شده، دانلود هم رمزنگاری می‌شود
+        data = await asyncio.to_thread(C.encrypt_backup, data, pw)
+        ext = "enc"
+    return Response(data, media_type="application/json" if ext == "json" else "application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="rebecca-config-{sales.tehran_day()}.{ext}"'})
 
 
 @app.post("/api/backup/settings", dependencies=[Depends(guard)])
-async def backup_settings(r: BackupSettingsReq):
+async def backup_settings(r: BackupSettingsReq, request: Request):
+    if r.password is not None:
+        if r.password and len(r.password) < 6:
+            raise HTTPException(400, "رمز بکاپ حداقل ۶ کاراکتر باشد.")
+        if r.password != (load_config()["backup"].get("password") or ""):
+            await _gate_code(request, r.code, None, "تغییر رمز بکاپ", always=True)
+
     def mut(c):
         c["backup"]["enabled"] = r.enabled
         if r.interval_min is not None:
             c["backup"]["interval_min"] = r.interval_min
+        if r.password is not None:
+            c["backup"]["password"] = r.password
     update_config(mut)
+    if r.password is not None:
+        C.audit_event("ادمین وب‌پنل", "رمز بکاپ", "", "تنظیم شد" if r.password else "حذف شد")
     return {"ok": True}
 
 
@@ -2112,38 +2142,4 @@ async def backup_send():
 @app.post("/api/backup/restore", dependencies=[Depends(guard)])
 async def backup_restore(r: RestoreReq, request: Request):
     """فایل بکاپ را اعتبارسنجی، از وضعیت فعلی نسخه‌ی پشتیبان می‌گیرد، اعمال می‌کند و ربات را ریستارت می‌کند.
-    پیش‌فرض (wallet_mode=keep): فقط تنظیمات برمی‌گردد و موجودی/تراکنش‌های فعلی حفظ می‌شود. ورود دومرحله‌ای هیچ‌وقت خاموش نمی‌شود."""
-    import shutil
-    data, new = _parse_restore(r.content)
-    await _gate_code(request, r.code, None, "بازیابی بکاپ", always=True)
-    cur = load_config()
-    if not (new.get("web") or {}).get("hash"):          # بکاپ بدون رمز وب: رمز فعلی حفظ شود
-        new["web"] = cur["web"]
-    has_reps = "reps" in data
-    if not has_reps:                                    # بکاپ قدیمی (قبل از نماینده‌ها): نماینده‌های فعلی پاک نشوند
-        new["reps"], new["rep_users"], new["rep_notes"], new["rep_paid"] = cur["reps"], cur["rep_users"], cur["rep_notes"], cur["rep_paid"]
-    keep = r.wallet_mode == "keep" or not has_reps
-    if not keep and not r.confirm_wallet:
-        raise HTTPException(400, "برای برگرداندنِ موجودی و تراکنش‌ها از بکاپ، تأیید صریح لازم است.")
-    C.preserve_security(new, cur)
-    if keep:
-        C.restore_keep_wallet(new, cur)
-    web_changed = (new["web"].get("hash"), new["web"].get("user")) != (cur["web"].get("hash"), cur["web"].get("user"))
-    safety = None
-    if os.path.exists(C.CONFIG_FILE):
-        safety = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
-        shutil.copy2(C.CONFIG_FILE, safety)
-        os.chmod(safety, 0o600)
-    C.save_config(new)
-    for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
-        C.drop_api(p)
-    _bot.update(token=None, obj=None)
-    C.audit_event("ادمین وب‌پنل", "بازیابی بکاپ", "", f"حالت کیف پول: {'حفظ وضعیت فعلی' if keep else 'برگردانده‌شده از بکاپ'}؛ نسخه‌ی پشتیبان: {os.path.basename(safety) if safety else '-'}")
-    _bg_notify(f"♻️ <b>بکاپ بازیابی شد</b>\nکیف پول: {'وضعیت فعلی حفظ شد' if keep else '⚠️ از بکاپ برگردانده شد'}\nIP: <code>{C.esc(_client_ip(request))}</code>")
-    try:
-        proc = await asyncio.create_subprocess_exec("systemctl", "restart", "rebecca-bot")
-        asyncio.create_task(proc.wait())
-    except Exception:  # noqa: BLE001
-        log.warning("ریستارت خودکار ربات ممکن نشد")
-    fresh = load_config()
-    re
+    پیش‌فرض (wallet_mode=keep): فقط تنظیمات برمی‌گردد و موجودی/تراکنش‌های فع
