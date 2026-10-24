@@ -609,7 +609,7 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
     if req.mode:
         tpl["mode"] = req.mode
     names = C.make_names(req.base, req.start, req.count, cfg["max_batch"])
-    results, failed = await C.create_users(api, names, tpl, req.service_id, concurrency=6)
+    results, failed = await C.create_users(api, names, tpl, req.service_id)
     if req.rep_id and results:
         if req.rep_id not in cfg["reps"]:
             raise HTTPException(404, "نماینده پیدا نشد.")
