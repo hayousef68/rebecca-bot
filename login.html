@@ -6,16 +6,22 @@
 <meta name="color-scheme" content="dark">
 <meta name="robots" content="noindex,nofollow">
 <title>ورود | پنل ربکا</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
 <style>
 :root{
   --bg:#0a1016;--s1:#121b24;--s2:#1a2632;--line:#233241;--tx:#e9f0f6;--mu:#8497aa;
   --ac:#f0b429;--ac2:#ff8a3d;--ac-ink:#1c1503;--bad:#f2706b;--ok:#3ecf8e;
-  font-family:"Vazirmatn","Vazir","IRANSansX","Segoe UI",Tahoma,system-ui,sans-serif;
+    --font:"Vazirmatn","Vazir","IRANSansX","Segoe UI",Tahoma,"Noto Sans Arabic","Noto Naskh Arabic",system-ui,sans-serif;
+  --fs-xs:11.5px;--fs-sm:13px;--fs-md:14px;--fs-lg:16px;--fs-xl:21px;--fs-2xl:28px;--fs-3xl:32px;   /* مقیاس تایپوگرافی (موبایل) */
+  --fw-regular:400;--fw-medium:500;--fw-semibold:600;--fw-bold:700;--fw-heavy:800;
+  font-family:var(--font);
 }
+button,input,select,textarea{font-family:inherit}
 *{box-sizing:border-box;margin:0}
 html,body{min-height:100%}
 body{
-  min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px 16px;color:var(--tx);font-size:14px;line-height:1.7;
+  min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px 16px;color:var(--tx);font-size:var(--fs-md);line-height:1.7;
   background:radial-gradient(800px 420px at 85% -120px,#f0b42926,transparent 60%),radial-gradient(700px 420px at -10% 100%,#5aa9ff1c,transparent 60%),var(--bg);
   overflow-x:hidden;
 }
@@ -24,20 +30,20 @@ body{
 .orb.b{width:240px;height:240px;background:#5aa9ff;bottom:-90px;inset-inline-end:-60px}
 .wrap{position:relative;z-index:1;width:100%;max-width:400px}
 .brand{text-align:center;margin-bottom:22px}
-.logo{width:68px;height:68px;border-radius:22px;margin:0 auto 14px;display:grid;place-items:center;font-size:34px;font-weight:900;color:var(--ac-ink);
+.logo{width:68px;height:68px;border-radius:22px;margin:0 auto 14px;display:grid;place-items:center;font-size:34px;font-weight:800;color:var(--ac-ink);
   background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 10px 34px #f0b4293d,inset 0 1px 0 #fff5}
-.brand h1{font-size:21px;font-weight:800}
-.brand p{color:var(--mu);font-size:13px;margin-top:2px}
+.brand h1{font-size:var(--fs-xl);font-weight:800}
+.brand p{color:var(--mu);font-size:var(--fs-sm);margin-top:2px}
 .card{
   background:linear-gradient(180deg,#121b24f2,#0f1821f2);border:1px solid var(--line);border-radius:22px;padding:24px 20px 20px;
   box-shadow:0 18px 50px #0009;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
 }
 .f{position:relative;margin-bottom:14px}
-.f label{display:block;font-size:12px;color:var(--mu);margin:0 2px 6px}
+.f label{display:block;font-size:var(--fs-sm);color:var(--mu);margin:0 2px 6px}
 .f .ic{position:absolute;inset-inline-start:14px;bottom:14px;width:20px;height:20px;stroke:var(--mu);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;pointer-events:none;transition:stroke .15s}
 .f:focus-within .ic{stroke:var(--ac)}
 input[type=text],input[type=password]{
-  width:100%;min-height:50px;background:var(--bg);border:1px solid var(--line);border-radius:14px;color:var(--tx);font:inherit;font-size:15px;
+  width:100%;min-height:50px;background:var(--bg);border:1px solid var(--line);border-radius:14px;color:var(--tx);font:inherit;font-size:var(--fs-md);
   padding:10px 44px;direction:ltr;text-align:left;transition:border-color .15s,box-shadow .15s;
 }
 input::placeholder{color:#55677a}
@@ -45,14 +51,14 @@ input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
 .eye{position:absolute;inset-inline-end:6px;bottom:6px;width:38px;height:38px;border:0;background:none;border-radius:10px;cursor:pointer;display:grid;place-items:center;color:var(--mu)}
 .eye:hover{color:var(--tx);background:var(--s2)}
 .eye svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.opts{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 16px;font-size:13px;color:var(--mu)}
+.opts{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 16px;font-size:var(--fs-sm);color:var(--mu)}
 .chk{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
 .chk input{appearance:none;-webkit-appearance:none;width:20px;height:20px;border-radius:7px;border:1px solid var(--line);background:var(--bg);display:grid;place-items:center;cursor:pointer;transition:all .15s;margin:0}
 .chk input:checked{background:linear-gradient(135deg,var(--ac),var(--ac2));border-color:transparent}
 .chk input:checked::after{content:"";width:5px;height:10px;border:solid var(--ac-ink);border-width:0 2.4px 2.4px 0;transform:rotate(45deg) translate(-1px,-1px)}
 .chk input:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 .btn{
-  width:100%;min-height:50px;border:0;border-radius:14px;font:inherit;font-size:15px;font-weight:800;cursor:pointer;color:var(--ac-ink);
+  width:100%;min-height:50px;border:0;border-radius:14px;font:inherit;font-size:var(--fs-md);font-weight:800;cursor:pointer;color:var(--ac-ink);
   background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 6px 22px #f0b42940;display:flex;align-items:center;justify-content:center;gap:10px;
   transition:transform .08s,filter .15s,opacity .15s;
 }
@@ -61,12 +67,12 @@ input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
 .spin{width:18px;height:18px;border-radius:50%;border:2.5px solid #1c150355;border-top-color:var(--ac-ink);animation:r .7s linear infinite;display:none}
 .btn.load .spin{display:block}
 @keyframes r{to{transform:rotate(360deg)}}
-.err{display:none;align-items:center;gap:8px;background:#f2706b14;border:1px solid #f2706b55;color:var(--bad);border-radius:12px;padding:9px 12px;font-size:13px;margin-bottom:14px}
+.err{display:none;align-items:center;gap:8px;background:#f2706b14;border:1px solid #f2706b55;color:var(--bad);border-radius:12px;padding:9px 12px;font-size:var(--fs-sm);margin-bottom:14px}
 .err.show{display:flex}
 .err svg{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .card.shake{animation:sh .38s}
 @keyframes sh{20%,60%{transform:translateX(-7px)}40%,80%{transform:translateX(7px)}}
-.foot{text-align:center;color:var(--mu);font-size:12px;margin-top:16px;display:flex;align-items:center;justify-content:center;gap:6px}
+.foot{text-align:center;color:var(--mu);font-size:var(--fs-sm);margin-top:16px;display:flex;align-items:center;justify-content:center;gap:6px}
 .foot svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .foot.ok{color:var(--ok)}
 @media (prefers-reduced-motion:no-preference){.wrap{animation:in .45s ease-out both}@keyframes in{from{opacity:0;transform:translateY(14px)}}}
@@ -100,7 +106,7 @@ input:focus{border-color:var(--ac);box-shadow:0 0 0 3px #f0b42926;outline:0}
     <div class="f" id="codeBox" hidden>
       <label for="c">کد ورود دومرحله‌ای</label>
       <input id="c" name="otp" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="کد ۶ رقمی اپلیکیشن" dir="ltr" maxlength="20">
-      <p style="margin:8px 2px 0;font-size:12px;color:var(--mu)">کد ۶ رقمی را از اپلیکیشن Google Authenticator (یا مشابه) وارد کنید. اگر گوشی را ندارید، یکی از کدهای بازیابی (مثل <span dir="ltr">ab12cd-34ef56</span>) را بزنید.</p>
+      <p style="margin:8px 2px 0;font-size:var(--fs-sm);color:var(--mu)">کد ۶ رقمی را از اپلیکیشن Google Authenticator (یا مشابه) وارد کنید. اگر گوشی را ندارید، یکی از کدهای بازیابی (مثل <span dir="ltr">ab12cd-34ef56</span>) را بزنید.</p>
     </div>
     <div class="opts" id="optsBox">
       <label class="chk"><input type="checkbox" id="rem"> مرا ۳۰ روز به خاطر بسپار</label>
