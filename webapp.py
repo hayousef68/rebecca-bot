@@ -9,6 +9,7 @@ import secrets
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -699,6 +700,20 @@ async def rep_users(offset: int = Query(0, ge=0, le=100000), limit: int = Query(
     return {"users": res, "total": len(items), "missing": len(page) - len(res)}
 
 
+@app.get("/api/rep/history")
+async def rep_history(username: str = Query(..., min_length=1, max_length=64), pid: str = Query("", max_length=20), rep=Depends(rep_guard)):
+    """تاریخچه‌ی ساخت و تمدیدِ یکی از کاربرهای خودِ نماینده (تاریخ شمسی)."""
+    rid = rep[0]
+    cfg = load_config()
+    pids = [p for p, m in cfg["rep_users"].items() if m.get(username) == rid and (not pid or p == pid)]
+    if not pids:
+        raise HTTPException(404, "این کاربر در لیست شما نیست.")
+    api = get_api(pids[0])
+    if not api.is_configured():
+        raise HTTPException(502, "پنل در دسترس نیست؛ به ادمین اطلاع دهید.")
+    return {"items": await _history_for(api, username)}
+
+
 class RepNoteReq(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     pid: str = Field(default="", max_length=20)
@@ -1243,6 +1258,7 @@ async def rep_next_plan(r: RepNextPlanReq, request: Request, rep=Depends(rep_gua
         else:
             await asyncio.to_thread(C.wallet_tx_mark, txid, "done", r.username)
         await _hide_from_sales(r.username, t_start)
+        await asyncio.to_thread(C.hist_add_many, [{"pid": getattr(api, "pid", ""), "u": r.username, "k": "next", "gb": gb, "days": days}])
         bal = load_config()["reps"][rid]["balance"]
         result = {"ok": True, "balance": bal, "next_plans": [{"gb": x["gb"], "days": x["days"]} for x in C.next_plans_view(res or {})]}
         _idem_put(txid, result)
@@ -1758,6 +1774,7 @@ async def user_next_plans(uname: str, r: NextPlansReq, api: RebeccaClient = Depe
                 await asyncio.to_thread(sales.record_attach, uname, res.get("service_id"), pl.gb, pl.days, None, "next")
             except Exception:  # noqa: BLE001
                 log.exception("record next plan")
+            await asyncio.to_thread(C.hist_add_many, [{"pid": api.pid, "u": uname, "k": "next", "gb": pl.gb, "days": pl.days}])
     return _slim(res, api)
 
 
@@ -1779,6 +1796,37 @@ async def user_undo(uname: str, api: RebeccaClient = Depends(P)):
         log.exception("undo sales span")
         warns.append("حذف از گزارش فروش انجام نشد؛ از «ویرایش فروش‌ها» دستی حذف کنید.")
     return {"user": _slim(after, api), "warnings": warns}
+
+
+def _created_ts(raw: dict) -> float:
+    """اگر پنل تاریخ ساخت را در خود کاربر برگرداند (created_at) آن را به timestamp تبدیل می‌کند؛ وگرنه ۰."""
+    v = (raw or {}).get("created_at")
+    try:
+        if isinstance(v, (int, float)) and v > 0:
+            return float(v)
+        if isinstance(v, str) and v.strip():
+            dt = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+    except (ValueError, OverflowError, OSError):
+        pass
+    return 0.0
+
+
+async def _history_for(api, uname: str) -> list[dict]:
+    raw = {}
+    try:
+        raw = await api.request("GET", api.upath(uname))
+    except Exception:  # noqa: BLE001
+        pass
+    return await asyncio.to_thread(sales.user_history, getattr(api, "pid", ""), uname, _created_ts(raw))
+
+
+@app.get("/api/user/{uname}/history", dependencies=[Depends(guard)])
+async def user_history(uname: str, api: RebeccaClient = Depends(P)):
+    """تاریخچه‌ی ساخت و تمدید یک کاربر (تاریخ شمسی)؛ فقط‌خواندنی."""
+    return {"items": await _history_for(api, uname)}
 
 
 @app.post("/api/user/{uname}/{action}", dependencies=[Depends(guard)])
@@ -1806,6 +1854,7 @@ async def user_action(uname: str, action: str, body: EditReq | None = None, api:
                 await asyncio.to_thread(sales.record_attach, uname, res.get("service_id"), b.add_gb, b.add_days or 0)
             except Exception:  # noqa: BLE001
                 log.exception("record_attach")
+            await asyncio.to_thread(C.hist_add_many, [{"pid": api.pid, "u": uname, "k": "attach", "gb": b.add_gb, "days": b.add_days or 0}])
         return _slim(res, api)
     if action == "delete":
         await api.request("DELETE", p)
