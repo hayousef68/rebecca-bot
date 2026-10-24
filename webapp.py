@@ -423,6 +423,7 @@ class OnePlanReq(BaseModel):
 async def sales_plan(r: OnePlanReq):
     """ثبت قیمت یک حجم خارج از لیست؛ از گزارش بعدی جزو فروش‌های لیست حساب می‌شود."""
     sales.set_plan(r.gb, r.months, r.price)
+    _aud("ثبت قیمت پلن", f"{r.gb} گیگ {r.months} ماهه", f"قیمت: {r.price:,} تومان", "sys")
     return {"ok": True}
 
 
@@ -476,6 +477,7 @@ async def report_event(r: SaleEventReq):
         if r.gb is None and r.months is None and r.type is None:
             raise HTTPException(400, "حداقل یکی از حجم، مدت یا نوع را مشخص کنید.")
         await asyncio.to_thread(sales.ovr_edit, r.eid, r.gb, r.months, r.type)
+    _aud("ویرایش گزارش فروش", str(r.eid)[:60], {"hide": "حذف از گزارش", "show": "برگرداندن به گزارش", "reset": "بازگردانی ویرایش"}.get(r.op, f"حجم: {r.gb}؛ مدت: {r.months}؛ نوع: {r.type}"), "sys")
     return {"ok": True}
 
 
@@ -525,6 +527,7 @@ async def sales_settings_save(r: SalesReq):
                           ignore_service_names=[n.strip().lower() for n in r.ignore_service_names.split(",") if n.strip()],
                           single_prices=plans)
     update_config(mut)
+    _aud("تغییر قیمت‌ها و تنظیمات فروش", "", f"قیمت هر گیگ همکاری: {r.hamkari_per_gb:,}؛ خرید هر ترابایت: {r.buy_per_tb:,}؛ تعداد پلن تکی: {len(plans)}", "sys")
     return {"ok": True}
 
 
@@ -635,6 +638,9 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
         value = price_for(svc_name, tpl["gb"], months)[0] * len(results) if tpl["gb"] else 0
     except Exception:  # noqa: BLE001
         pass
+    if results:
+        _aud("ساخت کاربر", results[0]["username"] if len(results) == 1 else f"{results[0]['username']} … {results[-1]['username']}",
+             f"تعداد: {len(results)}؛ پنل: {api.name}؛ تمپلت: {name}" + (f"؛ ناموفق: {len(failed)}" if failed else "") + (f"؛ نسبت‌داده‌شده به نماینده: {cfg['reps'][req.rep_id]['name']}" if req.rep_id in cfg["reps"] else ""))
     return {"ok": results, "failed": [{"username": n, "reason": r} for n, r in failed], "telegram": tg, "value": value}
 
 
@@ -1301,6 +1307,7 @@ async def rep_revoke(r: RepRevokeReq, rep=Depends(rep_guard)):
     if not api.is_configured():
         raise HTTPException(502, "پنل در دسترس نیست.")
     u = await api.request("POST", api.upath(r.username) + "/revoke_sub")
+    C.audit_event(f"نماینده: {cfg.get('reps', {}).get(rid, {}).get('name', rid)}", "تغییر لینک اشتراک کاربر", r.username, "لینک قبلی از کار افتاد", cat="user")
     return {"ok": True, "sub": _slim_rep(u, api)["sub"]}
 
 
@@ -1376,6 +1383,7 @@ async def reps_block(rid: str, r: RepBlockReq):
 @app.post("/api/reps/{rid}/unlock", dependencies=[Depends(guard)])
 async def reps_unlock(rid: str):
     await asyncio.to_thread(C.unlock_rep, rid)
+    _aud("فعال‌سازی مجدد حساب نماینده", rid, "", "rep")
     return {"ok": True}
 
 
@@ -1706,12 +1714,15 @@ class RenewReq(BaseModel):
 
 @app.post("/api/user/{uname}/service", dependencies=[Depends(guard)])
 async def user_service(uname: str, r: ServiceReq, api: RebeccaClient = Depends(P)):
-    return _slim(await C.set_service(api, uname, r.service_id), api)
+    res = await C.set_service(api, uname, r.service_id)
+    _aud("تغییر سرویس کاربر", uname, f"سرویس: {r.service_id}")
+    return _slim(res, api)
 
 
 @app.post("/api/user/{uname}/note", dependencies=[Depends(guard)])
 async def user_note(uname: str, r: NoteReq, api: RebeccaClient = Depends(P)):
     await C.set_note(api, uname, r.note.strip())
+    _aud("تغییر یادداشت کاربر", uname, r.note.strip()[:200])
     return _slim(await api.request("GET", api.upath(uname)), api)
 
 
@@ -1737,6 +1748,8 @@ async def user_renew(uname: str, r: RenewReq, api: RebeccaClient = Depends(P)):
             await asyncio.to_thread(sales.record_attach, uname, res.get("service_id"), tpl.get("gb"), int(tpl.get("days") or 0))
         except Exception:  # noqa: BLE001
             log.exception("record_attach")
+    _aud("تمدید کاربر", uname, f"پنل: {api.name}؛ حجم: {tpl.get('gb') or 'نامحدود'} گیگ؛ مدت: {tpl.get('days') or 'نامحدود'} روز؛ "
+         + ("با ریست مصرف" if r.reset_usage else "بدون ریست مصرف") + ("؛ واریز نشده" if r.unpaid else ""))
     return _slim(res, api)
 
 
@@ -1762,6 +1775,7 @@ class NextPlansReq(BaseModel):
 @app.post("/api/user/{uname}/save", dependencies=[Depends(guard)])
 async def user_save(uname: str, r: SaveReq, api: RebeccaClient = Depends(P)):
     await C.apply_user_save(api, uname, r.gb, r.days, r.service_id, r.note)
+    _aud("ویرایش کاربر", uname, f"حجم: {r.gb}؛ روز: {r.days}؛ سرویس: {r.service_id}؛ یادداشت: {'تغییر کرد' if r.note is not None else '-'}")
     return _slim(await api.request("GET", api.upath(uname)), api)
 
 
@@ -1775,6 +1789,7 @@ async def user_next_plans(uname: str, r: NextPlansReq, api: RebeccaClient = Depe
             except Exception:  # noqa: BLE001
                 log.exception("record next plan")
             await asyncio.to_thread(C.hist_add_many, [{"pid": api.pid, "u": uname, "k": "next", "gb": pl.gb, "days": pl.days}])
+    _aud("پلن بعدی کاربر", uname, f"تعداد پلن‌های صف: {len(r.plans)}")
     return _slim(res, api)
 
 
@@ -1782,6 +1797,7 @@ async def user_next_plans(uname: str, r: NextPlansReq, api: RebeccaClient = Depe
 async def user_paid(uname: str, api: RebeccaClient = Depends(P)):
     """«واریز شد»: شمارش معکوس غیرفعال‌سازی لغو می‌شود."""
     await asyncio.to_thread(C.unpaid_clear, api.pid, uname)
+    _aud("ثبت واریز مشتری", uname, "واریز شد")
     return _slim(await api.request("GET", api.upath(uname)), api)
 
 
@@ -1795,7 +1811,13 @@ async def user_undo(uname: str, api: RebeccaClient = Depends(P)):
     except Exception:  # noqa: BLE001
         log.exception("undo sales span")
         warns.append("حذف از گزارش فروش انجام نشد؛ از «ویرایش فروش‌ها» دستی حذف کنید.")
+    _aud("برگشت تمدید/ریست کاربر", uname, "به وضعیت قبل از آخرین تمدید/ریست برگشت")
     return {"user": _slim(after, api), "warnings": warns}
+
+
+def _aud(action: str, target: str = "", details: str = "", cat: str = "user") -> None:
+    """ثبت یک تغییر ادمین وب‌پنل در لاگ فعالیت (هیچ‌وقت خطا نمی‌دهد)."""
+    C.audit_event("ادمین وب‌پنل", action, target, details, cat=cat)
 
 
 def _created_ts(raw: dict) -> float:
@@ -1838,13 +1860,18 @@ async def user_action(uname: str, action: str, body: EditReq | None = None, api:
         except Exception:  # noqa: BLE001
             log.warning("undo snapshot before reset failed")
         await api.request("POST", p + "/reset")
+        _aud("ریست مصرف کاربر", uname)
         return {"ok": True}
     if action == "revoke":
-        return _slim(await api.request("POST", p + "/revoke_sub"), api)
+        res = await api.request("POST", p + "/revoke_sub")
+        _aud("تغییر لینک اشتراک کاربر", uname, "لینک قبلی از کار افتاد")
+        return _slim(res, api)
     if action == "toggle":
         cur = await api.request("GET", p)
         new = "active" if cur.get("status") == "disabled" else "disabled"
-        return _slim(await api.request("PUT", p, json={"status": new}), api)
+        res = await api.request("PUT", p, json={"status": new})
+        _aud("فعال‌سازی کاربر" if new == "active" else "غیرفعال‌سازی کاربر", uname)
+        return _slim(res, api)
     if action == "edit":
         b = body or EditReq()
         before = await api.request("GET", p) if b.add_gb else None
@@ -1855,20 +1882,27 @@ async def user_action(uname: str, action: str, body: EditReq | None = None, api:
             except Exception:  # noqa: BLE001
                 log.exception("record_attach")
             await asyncio.to_thread(C.hist_add_many, [{"pid": api.pid, "u": uname, "k": "attach", "gb": b.add_gb, "days": b.add_days or 0}])
+        _aud("ویرایش کاربر", uname, f"حجم جدید: {b.gb}؛ روز جدید: {b.days}؛ افزودن حجم: {b.add_gb}؛ افزودن روز: {b.add_days}")
         return _slim(res, api)
     if action == "delete":
+        # حذف کاربر فقط دستی و تکی توسط ادمین؛ قبل از حذف وضعیت کاربر در لاگ ثبت می‌شود
+        try:
+            before = await api.request("GET", p)
+        except Exception:  # noqa: BLE001
+            before = {}
         await api.request("DELETE", p)
         await asyncio.to_thread(C.unpaid_clear, api.pid, uname)
+        owner = (load_config().get("rep_users", {}).get(api.pid, {}) or {}).get(uname)
+        owner_name = load_config().get("reps", {}).get(owner, {}).get("name") if owner else ""
+        _aud("حذف کاربر (دستی)", uname, f"پنل: {api.name}؛ {C.user_brief(before)}" + (f"؛ نماینده: {owner_name}" if owner_name else ""), "del")
         return {"ok": True}
     raise HTTPException(404, "عملیات ناشناخته")
 
 
 @app.post("/api/cleanup", dependencies=[Depends(guard)])
 async def cleanup(dry: bool = True, api: RebeccaClient = Depends(P)):
-    targets = [u["username"] for u in await api.iter_users("expired") + await api.iter_users("limited")]
-    if dry:
-        return {"count": len(targets)}
-    return {"count": len(targets), "deleted": await C.delete_users(api, targets)}
+    """غیرفعال: پاکسازی/حذف دسته‌ای برداشته شد؛ حذف کاربر فقط دستی و تکی (از کارت کاربر) انجام می‌شود."""
+    raise HTTPException(410, "پاکسازی دسته‌ای حذف شده است؛ حذف کاربر فقط دستی و تکی از کارت کاربر ممکن است.")
 
 
 @app.post("/api/core/restart", dependencies=[Depends(guard)])
@@ -1910,6 +1944,7 @@ async def tpl_save(r: TplReq):
         if c.get("active_group_template") == old:
             c["active_group_template"] = r.name if r.kind == "group" else ""
     update_config(mut)
+    _aud("ذخیره تمپلت", r.name, f"حجم: {gb}؛ روز: {r.days}؛ حالت: {r.mode}؛ نوع: {r.kind}؛ قیمت: {r.price}", "sys")
     return {"ok": True}
 
 
@@ -1927,6 +1962,7 @@ async def tpl_active(r: NameReq):
         else:
             c["active_template"] = r.name
     update_config(mut)
+    _aud("فعال‌سازی تمپلت", r.name, "", "sys")
     return {"ok": True}
 
 
@@ -1937,6 +1973,7 @@ async def tpl_delete(r: NameReq):
             raise ValueError("حداقل یک تمپلت باید باقی بماند.")
         c["templates"].pop(r.name, None)
     update_config(mut)
+    _aud("حذف تمپلت", r.name, "", "sys")
     return {"ok": True}
 
 
@@ -2054,465 +2091,4 @@ async def audit_export(cat: str = Query("all", max_length=10), q: str = Query(""
         def safe(v):                                               # جلوگیری از تزریق فرمول در اکسل
             v = str(v if v is not None else "")
             return "'" + v if v[:1] in ("=", "+", "-", "@") else v
-        w.writerow([t, x["cat"], safe(x.get("action")), safe(x.get("target_name") or x.get("target")), safe(x.get("actor")), x.get("amt", ""), x.get("bal", ""), safe(x.get("details"))])
-    return Response(("\ufeff" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="rebecca-audit-{sales.tehran_day()}.csv"'})
-
-
-_STARTED = time.time()
-_LV = {"ok": 0, "warn": 1, "bad": 2}
-
-
-def _fmt_dur(sec: float) -> str:
-    sec = int(sec)
-    d, r = divmod(sec, 86400)
-    h, r = divmod(r, 3600)
-    m = r // 60
-    return (f"{d} روز " if d else "") + (f"{h} ساعت " if h else "") + f"{m} دقیقه"
-
-
-async def _service_active(name: str) -> str | None:
-    try:
-        proc = await asyncio.create_subprocess_exec("systemctl", "is-active", name, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await asyncio.wait_for(proc.communicate(), 4)
-        return out.decode().strip()
-    except Exception:  # noqa: BLE001
-        return None
-
-
-@app.get("/api/health", dependencies=[Depends(guard)])
-async def health(request: Request):
-    """وضعیت سلامت: پنل‌ها، دیتابیس، ربات، دیسک، بکاپ، کیف پول و امنیت ورود؛ هر مورد ok / warn / bad."""
-    import shutil
-    import stat
-    cfg = load_config()
-    items: list[dict] = []
-
-    def add(key: str, title: str, level: str, text: str):
-        items.append({"key": key, "title": title, "level": level, "text": text})
-
-    async def chk_panel(p: dict):
-        t0 = time.time()
-        try:
-            api = get_api(p["id"])
-            if not api.is_configured():
-                return p, "bad", "تنظیمات پنل ناقص است"
-            svcs = await asyncio.wait_for(api.list_services(True), 12)
-            ms = int((time.time() - t0) * 1000)
-            return p, ("ok" if svcs else "warn"), (f"متصل · {ms} میلی‌ثانیه" if svcs else "متصل شد ولی سرویسی برنگشت")
-        except Exception as e:  # noqa: BLE001
-            return p, "bad", f"قطع: {str(e)[:100] or type(e).__name__}"
-
-    async def chk_db():
-        if not (cfg["sales"].get("db") or {}).get("name"):
-            return "warn", "دیتابیس فروش تنظیم نشده"
-        try:
-            ms = await asyncio.wait_for(asyncio.to_thread(sales.db_ping), 12)
-            return "ok", f"متصل · {ms} میلی‌ثانیه"
-        except Exception as e:  # noqa: BLE001
-            return "bad", f"قطع: {str(e)[:100] or type(e).__name__}"
-
-    panel_res, db_res, bot_st = await asyncio.gather(
-        asyncio.gather(*[chk_panel(p) for p in cfg["panels"]]), chk_db(), _service_active("rebecca-bot"))
-    if not cfg["panels"]:
-        add("panel", "پنل ربکا", "bad", "هیچ پنلی تنظیم نشده")
-    for p, lv, tx in panel_res:
-        add("panel", f"پنل «{p.get('name') or p['id']}»", lv, tx)
-    add("db", "دیتابیس فروش", *db_res)
-    if bot_st is None:
-        add("bot", "سرویس ربات", "warn", "وضعیت قابل بررسی نیست (systemctl در دسترس نیست)")
-    else:
-        add("bot", "سرویس ربات تلگرام", "ok" if bot_st == "active" else "bad", "در حال اجرا" if bot_st == "active" else f"وضعیت: {bot_st} ← rebecca-bot restart")
-    add("tg", "اعلان تلگرام", "ok" if (cfg["bot_token"] and cfg["admin_ids"]) else "warn",
-        f"{len(cfg['admin_ids'])} ادمین دریافت‌کننده" if (cfg["bot_token"] and cfg["admin_ids"]) else "توکن یا شناسه‌ی ادمین تنظیم نشده؛ هشدارها نمی‌رسند")
-
-    try:
-        du = shutil.disk_usage(os.path.dirname(C.CONFIG_FILE) or ".")
-        pct = du.free * 100 // du.total
-        add("disk", "فضای دیسک", "ok" if pct >= 15 else ("warn" if pct >= 7 else "bad"), f"{du.free / 2**30:.1f} گیگ آزاد ({pct}٪)")
-    except OSError:
-        add("disk", "فضای دیسک", "warn", "قابل بررسی نیست")
-    try:
-        st = os.stat(C.CONFIG_FILE)
-        mode = stat.S_IMODE(st.st_mode)
-        add("cfgfile", "فایل تنظیمات", "ok" if mode & 0o077 == 0 else "warn",
-            f"{st.st_size / 1024:.0f} کیلوبایت · دسترسی {oct(mode)[2:]}" + ("" if mode & 0o077 == 0 else " ← باید 600 باشد: chmod 600 config.json"))
-    except OSError:
-        add("cfgfile", "فایل تنظیمات", "bad", "فایل پیدا نشد")
-
-    bk = cfg["backup"]
-    last = sales.backup_last_ok()
-    iv = int(bk.get("interval_min") or 1440)
-    if not bk.get("enabled"):
-        add("backup", "بکاپ خودکار", "warn", "خاموش است؛ بدون بکاپ، خرابیِ دیسک یعنی از دست رفتن موجودی‌ها")
-    elif not last:
-        add("backup", "بکاپ خودکار", "warn", "روشن است ولی هنوز بکاپ موفقی ثبت نشده")
-    else:
-        age = time.time() - last
-        lim = 26 * 3600
-        late = age > lim and (iv >= 1440)
-        add("backup", "آخرین بکاپ", "bad" if late else ("warn" if age > lim else "ok"),
-            f"{_fmt_dur(age)} پیش ارسال شد" + ("" if age <= lim else (" ← بکاپ روزانه عقب افتاده؛ تلگرام/ربات را بررسی کنید" if iv >= 1440 else " (در بازه‌های کوتاه فقط با تغییر تنظیمات بکاپ می‌آید؛ اگر تغییری نبوده طبیعی است)")))
-
-    pend = [t for t in cfg["wallet_tx"] if t["state"] == "pending" and t["kind"] == "purchase"]
-    stale = [t for t in pend if time.time() - t["ts"] > 600]
-    tops = sum(1 for t in cfg["topups"] if t.get("status") == "pending")
-    neg = [r for r in cfg["reps"].values() if r["balance"] < 0]
-    lv = "bad" if (stale or neg) else ("warn" if (pend or tops) else "ok")
-    bits = [f"موجودی کل نماینده‌ها {sum(r['balance'] for r in cfg['reps'].values()):,} تومان"]
-    if tops:
-        bits.append(f"{tops} درخواست افزایش موجودی منتظر تأیید")
-    if pend:
-        bits.append(f"{len(pend)} خرید در حال انجام" + (f" ({len(stale)} مورد بیش از ۱۰ دقیقه — بررسی کنید)" if stale else ""))
-    if neg:
-        bits.append("موجودی منفی دارد!")
-    add("wallet", "کیف پول نماینده‌ها", lv, " · ".join(bits))
-
-    try:
-        rc = ops.reconcile(cfg, ops.recon_load_state().get("snap"))
-        rs = ops.recon_summary(rc)
-        add("recon", "تطابق مالی کیف پول‌ها", rs["level"],
-            "موجودی همه‌ی نماینده‌ها با تراکنش‌ها می‌خواند" if rs["ok"] else f"{rs['count']} اختلاف پیدا شد: " + "؛ ".join(f"{i['name']} ({i['text']})" for i in rs["issues"][:3]))
-    except Exception:  # noqa: BLE001
-        log.exception("health recon")
-
-    now = time.time()
-    fails = sum(1 for x in cfg.get("login_log", []) if not x.get("ok") and now - float(x.get("ts") or 0) < 86400)
-    add("2fa", "ورود دومرحله‌ای", "ok" if C.totp_enabled() else "warn", "روشن است" if C.totp_enabled() else "خاموش است؛ برای محافظت از کیف پول در «امنیت ورود» روشنش کنید")
-    add("https", "اتصال امن", "ok" if request.url.scheme == "https" else "warn", "HTTPS فعال" if request.url.scheme == "https" else "HTTP ساده؛ رمز و کوکی بدون رمزنگاری می‌رود (SSL را فعال کنید)")
-    add("fails", "تلاش‌های ناموفق ورود (۲۴ ساعت)", "ok" if fails < 10 else ("warn" if fails < 30 else "bad"), f"{fails} مورد")
-
-    overall = max((i["level"] for i in items), key=lambda x: _LV[x])
-    return {"overall": overall, "items": items, "uptime": _fmt_dur(time.time() - _STARTED), "ts": time.time()}
-
-
-# ───────────────────────────── SSL و پورت وب‌پنل ─────────────────────────────
-def _panel_domain(cfg) -> str:
-    p = get_panel(cfg, cfg["active_panel"]) or (cfg["panels"][0] if cfg["panels"] else None)
-    return tlsutil._domain_of(p["panel_url"]) if p else ""
-
-
-def _web_url(scheme: str, host: str, port: int) -> str:
-    return f"{scheme}://{host}" + ("" if (scheme, port) in (("https", 443), ("http", 80)) else f":{port}")
-
-
-@app.get("/api/ssl", dependencies=[Depends(guard)])
-async def ssl_get(request: Request):
-    c = load_config()
-    ss = c["ssl"]
-    return {"enabled": ss["enabled"], "active": os.environ.get("REBECCA_SSL_ACTIVE") == "1", "cert": ss["cert"], "key": ss["key"],
-            "domain": ss["domain"] or _panel_domain(c), "error": ss["error"], "port": c["web_port"],
-            "info": tlsutil.cert_info(ss["cert"]) if ss["cert"] else {}, "scheme": request.url.scheme}
-
-
-@app.post("/api/ssl/detect", dependencies=[Depends(guard)])
-async def ssl_detect():
-    c = load_config()
-    items = await asyncio.to_thread(tlsutil.detect, (get_panel(c, c["active_panel"]) or {}).get("panel_url", ""))
-    return {"items": items}
-
-
-class SslReq(BaseModel):
-    enabled: bool
-    cert: str = Field(default="", max_length=500)
-    key: str = Field(default="", max_length=500)
-    domain: str = Field(default="", max_length=253)
-    port: int = Field(default=8686, ge=1, le=65535)
-
-
-@app.post("/api/ssl", dependencies=[Depends(guard)])
-async def ssl_save(r: SslReq, request: Request):
-    cert, key, domain = r.cert.strip(), r.key.strip(), r.domain.strip().lower()
-    if domain and not re.fullmatch(r"[a-z0-9.-]{1,253}", domain):
-        raise ValueError("دامنه نامعتبر است.")
-    if r.enabled:
-        err = await asyncio.to_thread(tlsutil.check_pair, cert, key)
-        if err:
-            raise ValueError(err)
-    old = load_config()
-    if r.port != old["web_port"]:
-        import socket
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
-            try:
-                sk.bind(("0.0.0.0", r.port))
-            except OSError:
-                raise ValueError(f"پورت {r.port} روی سرور در حال استفاده است؛ پورت دیگری بدهید.")
-    changed = (old["ssl"]["enabled"], old["ssl"]["cert"], old["ssl"]["key"], old["web_port"]) != (r.enabled, cert, key, r.port)
-
-    def mut(c):
-        c["ssl"].update(enabled=r.enabled, cert=cert, key=key, domain=domain, error="")
-        c["web_port"] = r.port
-    cfg = update_config(mut)
-    host = (domain or _panel_domain(cfg)) if r.enabled else (request.url.hostname or "")
-    url = _web_url("https" if r.enabled else "http", host or request.url.hostname or "", r.port)
-    if changed:
-        t = asyncio.create_task(_restart_self())
-        _bg.add(t)
-        t.add_done_callback(_bg.discard)
-    return {"ok": True, "restart": changed, "url": url}
-
-
-# ───────────────────────────── بکاپ و بازیابی ─────────────────────────────
-class BackupSettingsReq(BaseModel):
-    enabled: bool
-    interval_min: int | None = Field(default=None, ge=5, le=1440)       # ۱۴۴۰ = روزانه؛ کمتر = هر N دقیقه (فقط در صورت تغییر)
-    password: str | None = Field(default=None, max_length=128)           # None = بدون تغییر؛ "" = حذف رمز؛ غیر خالی = رمز جدید (حداقل ۶ کاراکتر)
-    live: bool | None = None                                             # بکاپ آنلاین: یک پیام که خودش به‌روز می‌شود
-    live_chat: str | None = Field(default=None, max_length=64)           # شناسه‌ی کانال/گروه خصوصی (خالی = پیام خصوصی ادمین‌ها)
-    bot_token: str | None = Field(default=None, max_length=128)          # توکن «ربات بکاپ» جدا (خالی = حذف و استفاده از ربات اصلی)
-    code: str = Field(default="", max_length=64)
-
-
-class RestoreReq(BaseModel):
-    content: str = Field(min_length=2, max_length=2_000_000)
-    wallet_mode: str = Field(default="keep", pattern="^(keep|restore)$")   # keep = موجودی/تراکنش‌های فعلی حفظ شود (امن)؛ restore = همه چیز از بکاپ
-    confirm_wallet: bool = False
-    code: str = Field(default="", max_length=64)
-    password: str = Field(default="", max_length=128)        # رمز بکاپ (فقط برای فایل‌های رمزنگاری‌شده)
-
-
-def _parse_restore(content: str, password: str = "") -> tuple[dict, dict, dict | None]:
-    """فایل بکاپ (رمزنگاری‌شده یا ساده؛ کامل یا config.json) ← (داده‌ی خام، کانفیگ نرمال‌شده، {attach_log, sales_overrides} یا None)."""
-    import json
-    if C.is_encrypted_backup(content):
-        if not password:
-            raise HTTPException(400, "این بکاپ رمزنگاری شده است؛ رمز بکاپ را وارد کنید.")
-        try:
-            content = C.decrypt_backup(content, password).decode("utf-8")
-        except (ValueError, UnicodeDecodeError) as e:
-            raise HTTPException(400, str(e))
-    try:
-        data = json.loads(content)
-    except ValueError:
-        raise HTTPException(400, "فایل JSON معتبر نیست.")
-    extra = None
-    if isinstance(data, dict) and data.get("format") == sales.BACKUP_FORMAT:       # بکاپ کامل (همانی که در تلگرام می‌آید)
-        extra = {"attach_log": data.get("attach_log"), "sales_overrides": data.get("sales_overrides")}
-        data = data.get("config")
-    if not isinstance(data, dict) or not (set(data) & {"panels", "panel_url", "bot_token", "sales", "templates"}):
-        raise HTTPException(400, "این فایل شبیه بکاپ تنظیمات ربات نیست.")
-    return data, C._normalize(data), extra
-
-
-@app.post("/api/backup/restore/preview", dependencies=[Depends(guard)])
-async def backup_restore_preview(r: RestoreReq):
-    """قبل از بازیابی: تفاوت موجودی نماینده‌ها و تراکنش‌هایی که از دست می‌رود (چیزی تغییر نمی‌کند)."""
-    data, new, _ = _parse_restore(r.content, r.password)
-    cur = load_config()
-    if "reps" not in data:
-        return {"old_format": True, "needs_code": C.totp_enabled(), "diff": None}
-    d = C.restore_diff(cur, new)
-    return {"old_format": False, "needs_code": C.totp_enabled(), "diff": d}
-
-
-@app.get("/api/backup", dependencies=[Depends(guard)])
-async def backup_download():
-    try:
-        data = await asyncio.to_thread(C.config_backup_bytes)
-    except OSError:
-        raise HTTPException(404, "فایل تنظیمات پیدا نشد.")
-    ext = "json"
-    pw = load_config()["backup"].get("password") or ""
-    if pw:                                                       # با رمز تنظیم‌شده، دانلود هم رمزنگاری می‌شود
-        data = await asyncio.to_thread(C.encrypt_backup, data, pw)
-        ext = "enc"
-    return Response(data, media_type="application/json" if ext == "json" else "application/octet-stream",
-                    headers={"Content-Disposition": f'attachment; filename="rebecca-config-{sales.tehran_day()}.{ext}"'})
-
-
-@app.post("/api/backup/settings", dependencies=[Depends(guard)])
-async def backup_settings(r: BackupSettingsReq, request: Request):
-    if r.password is not None:
-        if r.password and len(r.password) < 6:
-            raise HTTPException(400, "رمز بکاپ حداقل ۶ کاراکتر باشد.")
-        if r.password != (load_config()["backup"].get("password") or ""):
-            await _gate_code(request, r.code, None, "تغییر رمز بکاپ", always=True)
-
-    cur_bk = load_config()["backup"]
-    need_gate, bot_user = False, None
-    if r.live_chat is not None:
-        r.live_chat = r.live_chat.strip()
-        if r.live_chat and not re.fullmatch(r"-?\d{5,20}|@[A-Za-z0-9_]{5,32}", r.live_chat):
-            raise HTTPException(400, "شناسه‌ی کانال/گروه باید عددی (مثل -1001234567890) یا @username باشد.")
-        need_gate = need_gate or r.live_chat != (cur_bk.get("live_chat") or "")
-    if r.bot_token is not None:
-        r.bot_token = r.bot_token.strip()
-        if r.bot_token:
-            if not re.fullmatch(r"\d{6,14}:[A-Za-z0-9_-]{30,60}", r.bot_token):
-                raise HTTPException(400, "فرمت توکن ربات درست نیست (مثل 123456789:AAH...).")
-            try:                                                    # قبل از ذخیره مطمئن شو توکن واقعاً کار می‌کند
-                from telegram import Bot
-                me = await asyncio.wait_for(Bot(r.bot_token).get_me(), 20)
-                bot_user = "@" + (me.username or str(me.id))
-            except Exception:  # noqa: BLE001
-                raise HTTPException(400, "تلگرام این توکن را قبول نکرد؛ توکن را از @BotFather دوباره کپی کنید.")
-        need_gate = need_gate or r.bot_token != (cur_bk.get("bot_token") or "")
-    if need_gate:                                                   # مقصد/فرستنده‌ی بکاپ = دسترسی به توکن‌ها و رمزها
-        await _gate_code(request, r.code, None, "تغییر مقصد یا ربات بکاپ", always=True)
-
-    def mut(c):
-        c["backup"]["enabled"] = r.enabled
-        if r.interval_min is not None:
-            c["backup"]["interval_min"] = r.interval_min
-        if r.live is not None:
-            c["backup"]["live"] = r.live
-        if r.live_chat is not None:
-            c["backup"]["live_chat"] = r.live_chat
-        if r.bot_token is not None:
-            c["backup"]["bot_token"] = r.bot_token
-        if r.password is not None:
-            c["backup"]["password"] = r.password
-    update_config(mut)
-    if r.password is not None:
-        C.audit_event("ادمین وب‌پنل", "رمز بکاپ", "", "تنظیم شد" if r.password else "حذف شد")
-    if r.bot_token is not None:
-        C.audit_event("ادمین وب‌پنل", "ربات بکاپ", "", f"تنظیم شد ({bot_user})" if r.bot_token else "حذف شد")
-    return {"ok": True, "bot": bot_user}
-
-
-@app.post("/api/backup/send", dependencies=[Depends(guard)])
-async def backup_send():
-    cfg = load_config()
-    if not (cfg["bot_token"] and cfg["admin_ids"]):
-        raise HTTPException(400, "توکن ربات یا ادمین تنظیم نشده")
-    n = await sales.send_backup(sales.backup_bot(_tg_bot(cfg["bot_token"]), cfg), cfg["admin_ids"], "💾 بکاپ تنظیمات — جای امن نگه دارید.")
-    if not n:
-        raise HTTPException(502, "ارسال به تلگرام ناموفق بود (ربات را در تلگرام Start کرده‌اید؟)")
-    return {"sent": n}
-
-
-@app.post("/api/backup/restore", dependencies=[Depends(guard)])
-async def backup_restore(r: RestoreReq, request: Request):
-    """فایل بکاپ را اعتبارسنجی، از وضعیت فعلی نسخه‌ی پشتیبان می‌گیرد، اعمال می‌کند و ربات را ریستارت می‌کند.
-    پیش‌فرض (wallet_mode=keep): فقط تنظیمات برمی‌گردد و موجودی/تراکنش‌های فعلی حفظ می‌شود. ورود دومرحله‌ای هیچ‌وقت خاموش نمی‌شود."""
-    import shutil
-    data, new, extra = _parse_restore(r.content, r.password)
-    await _gate_code(request, r.code, None, "بازیابی بکاپ", always=True)
-    cur = load_config()
-    if not (new.get("web") or {}).get("hash"):          # بکاپ بدون رمز وب: رمز فعلی حفظ شود
-        new["web"] = cur["web"]
-    has_reps = "reps" in data
-    if not has_reps:                                    # بکاپ قدیمی (قبل از نماینده‌ها): نماینده‌های فعلی پاک نشوند
-        new["reps"], new["rep_users"], new["rep_notes"], new["rep_paid"] = cur["reps"], cur["rep_users"], cur["rep_notes"], cur["rep_paid"]
-    # سرور خالی/تازه (بدون موجودی و تراکنش): کیف پول همیشه از بکاپ برگردد
-    fresh_srv = not any(x["balance"] for x in cur["reps"].values()) and not cur["wallet_tx"]
-    keep = (r.wallet_mode == "keep" and not fresh_srv) or not has_reps
-    if not keep and not r.confirm_wallet and not fresh_srv:
-        raise HTTPException(400, "برای برگرداندنِ موجودی و تراکنش‌ها از بکاپ، تأیید صریح لازم است.")
-    C.preserve_security(new, cur)
-    if keep:
-        C.restore_keep_wallet(new, cur)
-    web_changed = (new["web"].get("hash"), new["web"].get("user")) != (cur["web"].get("hash"), cur["web"].get("user"))
-    safety = None
-    if os.path.exists(C.CONFIG_FILE):
-        safety = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
-        shutil.copy2(C.CONFIG_FILE, safety)
-        os.chmod(safety, 0o600)
-    C.save_config(new)
-    if extra:                                                   # لاگ فروش و ویرایش‌های گزارش (فقط در بکاپ کامل هست)
-        if isinstance(extra.get("attach_log"), list):
-            sales.attach_import(extra["attach_log"])
-        ov = extra.get("sales_overrides")
-        if isinstance(ov, dict):
-            base = {"hide": {}, "edit": {}, "spans": []}
-            base.update({k: ov[k] for k in base if isinstance(ov.get(k), type(base[k]))})
-            sales._save_ovr(base)
-    for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
-        C.drop_api(p)
-    _bot.update(token=None, obj=None)
-    C.audit_event("ادمین وب‌پنل", "بازیابی بکاپ", "", f"حالت کیف پول: {'حفظ وضعیت فعلی' if keep else 'برگردانده‌شده از بکاپ'}؛ نسخه‌ی پشتیبان: {os.path.basename(safety) if safety else '-'}")
-    _bg_notify(f"♻️ <b>بکاپ بازیابی شد</b>\nکیف پول: {'وضعیت فعلی حفظ شد' if keep else '⚠️ از بکاپ برگردانده شد'}\nIP: <code>{C.esc(_client_ip(request))}</code>")
-    try:
-        proc = await asyncio.create_subprocess_exec("systemctl", "restart", "rebecca-bot")
-        asyncio.create_task(proc.wait())
-    except Exception:  # noqa: BLE001
-        log.warning("ریستارت خودکار ربات ممکن نشد")
-    fresh = load_config()
-    return {"ok": True, "panels": len(fresh["panels"]), "reps": len(fresh["reps"]),
-            "balance": sum(x["balance"] for x in fresh["reps"].values()),
-            "wallet_kept": keep, "web_changed": web_changed,
-            "recon": ops.recon_summary(ops.reconcile(fresh, None), 8)}
-
-
-@app.get("/api/reconcile", dependencies=[Depends(guard)])
-async def reconcile_api():
-    """بررسی تطابق مالی: موجودی هر نماینده با زنجیره‌ی تراکنش‌هایش و با وضعیت بررسی قبلی (چیزی تغییر نمی‌کند)."""
-    return await asyncio.to_thread(ops.reconcile_now, False)
-
-
-@app.post("/api/backup/verify", dependencies=[Depends(guard)])
-async def backup_verify(r: RestoreReq):
-    """فقط بررسی فایل بکاپ (رمزگشایی + اعتبارسنجی + خلاصه‌ی محتوا)؛ هیچ چیزی تغییر نمی‌کند."""
-    data, new, extra = _parse_restore(r.content, r.password)
-    s = C.backup_summary(new)
-    return {"ok": True, "encrypted": C.is_encrypted_backup(r.content), "full": extra is not None,
-            "old_format": "reps" not in data, "panels": s["panels"], "reps": s["reps"], "rep_users": s["rep_users"],
-            "balance": sum(x["balance"] for x in new["reps"].values()),
-            "attach_log": len((extra or {}).get("attach_log") or [])}
-
-
-# ───────────────────────────── پنل‌های ربکا و تست اتصال ─────────────────────────────
-class PanelReq(BaseModel):
-    id: str | None = None
-    name: str = Field(min_length=1, max_length=40)
-    panel_url: str
-    sub_url: str = ""
-    username: str = Field(min_length=1, max_length=100)
-    password: str | None = None
-    verify_ssl: bool = False
-
-
-@app.post("/api/panels", dependencies=[Depends(guard)])
-async def panel_save(r: PanelReq):
-    url = r.panel_url.strip().rstrip("/")
-    if not url.startswith(("http://", "https://")):
-        raise ValueError("آدرس پنل باید با http:// یا https:// شروع شود.")
-    out = {}
-
-    def mut(c):
-        pn = get_panel(c, r.id) if r.id else None
-        if r.id and not pn:
-            raise ValueError("پنل پیدا نشد.")
-        if not pn:
-            if not r.password:
-                raise ValueError("رمز عبور پنل الزامی است.")
-            pn = {"id": new_panel_id(c), "services": [], "password": ""}
-            c["panels"].append(pn)
-            if not c["active_panel"]:
-                c["active_panel"] = pn["id"]
-        pn.update(name=r.name.strip(), panel_url=url, sub_url=r.sub_url.strip().rstrip("/"), username=r.username.strip(), verify_ssl=r.verify_ssl)
-        if r.password:
-            pn["password"] = r.password
-        out["id"] = pn["id"]
-    update_config(mut)
-    C.drop_api(out["id"])                      # اطلاعات ورود/آدرس عوض شده؛ نشست قدیمی دور ریخته شود
-    return {"ok": True, "id": out["id"]}
-
-
-@app.post("/api/panels/delete", dependencies=[Depends(guard)])
-async def panel_delete(r: NameReq):  # name = panel id
-    def mut(c):
-        c["panels"] = [p for p in c["panels"] if p["id"] != r.name]
-        if c["active_panel"] == r.name:        # پنل فعالِ حذف‌شده: به اولین پنل باقی‌مانده برگرد
-            c["active_panel"] = c["panels"][0]["id"] if c["panels"] else ""
-    update_config(mut)
-    C.drop_api(r.name)
-    return {"ok": True}
-
-
-@app.post("/api/panels/active", dependencies=[Depends(guard)])
-async def panel_active(r: NameReq):
-    def mut(c):
-        if not get_panel(c, r.name):
-            raise ValueError("پنل پیدا نشد.")
-        c["active_panel"] = r.name
-    update_config(mut)
-    return {"ok": True}
-
-
-@app.post("/api/settings/test", dependencies=[Depends(guard)])
-async def settings_test(api: RebeccaClient = Depends(P)):
-    await api.login()
-    s = await api.request("GET", "/api/system")
-    svc = await api.list_services(force=True)
-    return {"ok": True, "total_user": s.get("total_user", 0), "services": len(svc)}
+        w.writerow([t, {"wallet": "کیف پول", "rep": "نماینده", "user": "کاربر", "del": "حذف", "sys": "سیستم"}.get(x["cat"], x["cat"]), safe(x.get("action")), safe(x.get("target_name") or x.get("target")), safe(x.get("actor")), x.
