@@ -4,4 +4,4 @@ qrcode[pil]>=7.4
 fastapi>=0.110
 uvicorn>=0.29
 pymysql>=1.1
-cryptography>=42.0\n
+cryptography>=42.0
