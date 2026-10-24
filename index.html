@@ -230,6 +230,9 @@ mark{background:color-mix(in srgb,var(--ac) 25%,transparent);color:var(--ac);bor
 .ev .x{border:0;background:var(--s2);color:var(--tx);width:32px;height:32px;border-radius:9px;cursor:pointer;flex:none}.ev .x.d{background:#f2706b1a;color:var(--bad)}
 .evf{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:-2px 0 8px;padding:8px;border:1px dashed var(--line);border-radius:12px}.evf .btns{grid-column:1/-1;margin:0}
 .undo-box{margin:10px 0 0;padding:10px 12px;border:1px solid #5aa9ff88;background:#5aa9ff1a;border-radius:12px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-size:var(--fs-sm);color:var(--info)}
+.hist{margin:8px 0 2px}.hist>summary{cursor:pointer;font-size:var(--fs-sm);color:var(--mu);padding:4px 2px;width:fit-content}
+.hist .hr{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:7px 2px;border-bottom:1px dashed var(--line);font-size:var(--fs-sm)}.hist .hr:last-child{border-bottom:0}
+.hist .hr small{display:block;color:var(--mu);font-size:var(--fs-xs);margin-top:2px}.hist .hr .dt{flex:none;text-align:left;color:var(--mu);font-size:var(--fs-xs);line-height:1.6}
 .tech{margin-top:10px}.tech summary{font-size:var(--fs-xs);color:var(--mu);cursor:pointer}.tech code{font-size:var(--fs-xs);margin:6px 0 0;white-space:pre-wrap}
 
 .acts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:2px}.acts .btn{width:100%;padding:0 4px;white-space:nowrap}
@@ -626,6 +629,24 @@ async function vUsers() {
   mount(h('div', { class: 'sbox' }, search, clear), chips, info, list, pg); load(true);
 }
 
+/* ───────── تاریخچه‌ی کاربر (ساخت / تمدید، تاریخ شمسی) — با باز شدن بارگذاری می‌شود ───────── */
+function histBox(path) {
+  const body = h('div', {}, h('p', { class: 'hint' }, 'در حال بارگذاری…'));
+  const d = h('details', { class: 'hist' }, h('summary', {}, '📜 تاریخچه'), body);
+  let loaded = false;
+  d.addEventListener('toggle', async () => {
+    if (!d.open || loaded) return;
+    try {
+      const r = await api(path), fa = n => (+n || 0).toLocaleString('fa-IR');
+      loaded = true;
+      body.replaceChildren(...((r.items || []).length ? r.items.map(x => h('div', { class: 'hr' },
+        h('span', {}, x.kind_fa, x.info ? h('small', {}, `${x.gb ? fa(x.gb) + ' گیگ' : 'حجم نامحدود'} · ${x.days ? fa(x.days) + ' روز' : 'زمان نامحدود'}`) : null),
+        h('span', { class: 'dt' }, x.date))) : [h('p', { class: 'hint' }, 'هنوز رویدادی ثبت نشده است.')]));
+    } catch (e) { body.replaceChildren(h('p', { class: 'hint' }, '⚠️ ' + e.message)); }
+  });
+  return d;
+}
+
 function userItem(u, parent, tab) {
   let curTab = tab || 'renew';
   const d = h('details', { class: 'item s-' + u.status });
@@ -797,6 +818,7 @@ function userItem(u, parent, tab) {
       h('button', { class: 'btn sm', onclick: () => copy(u.sub) }, '📋 لینک'),
       h('button', { class: 'btn sm', onclick: () => copy(msg()) }, '💬 پیام'),
       (() => { const b = h('button', { class: 'btn sm bad', type: 'button' }, '🔄 ریست'); b.onclick = () => { if (!confirm(`مصرف «${u.username}» صفر شود؟`)) return; run(b, async () => { const r = await api(P + 'reset', 'POST'); toast('مصرف صفر شد'); swap(r.username ? r : { ...u, used: 0 }, curTab); }); }; return b; })()),
+    histBox(P + 'history'),
     tabBar, paneRenew, paneEdit, paneNext, paneMore);
   showTab(curTab); updR(); updE();
   const hq = (S.users && S.users.q || '').toLowerCase(), ix = hq ? u.username.toLowerCase().indexOf(hq) : -1;
@@ -1029,6 +1051,7 @@ function repItem(u) {
       renewBox,
       nextBox,
       h('div', { class: 'btns', style: 'margin:8px 0' }, stBtn, rvBtn),
+      histBox(`/rep/history?username=${encodeURIComponent(u.username)}&pid=${encodeURIComponent(u.pid || '')}`),
       h('div', { class: 'bar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` })),
       h('div', { class: 'tiles' }, tile('مصرف', gb(u.used)), tile('باقی‌مانده', left), tile('اعتبار', u.expire_text)),
       subCode, q,
