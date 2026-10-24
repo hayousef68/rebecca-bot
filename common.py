@@ -83,7 +83,7 @@ DEFAULT_CFG = {
     "next_plan_mode": "chain",
     # برگشت تمدید/ریست اشتباهی: فقط یک فایل محلی کوچک (renew_undo.json)، بدون هیچ درخواست اضافه به پنل؛ ریست دسته‌ای بزرگ‌تر از bulk_max عکس‌برداری نمی‌شود
     "undo": {"enabled": True, "keep": 300, "days": 14, "bulk_max": 30},
-    "backup": {"enabled": True, "interval_min": 1440},   # interval_min: ۱۴۴۰ = روزانه ساعت ۱۲:۰۰؛ کمتر از آن = هر N دقیقه (فقط وقتی چیزی عوض شده)
+    "backup": {"enabled": True, "interval_min": 1440, "password": ""},   # interval_min: ۱۴۴۰ = روزانه ساعت ۱۲:۰۰؛ کمتر از آن = هر N دقیقه (فقط وقتی چیزی عوض شده)
     "monitor": {"enabled": True, "interval": 300},
     "smart_alerts": {"low_rep_wallet": True, "panel_down": True, "backup_failed": True, "topup_request": True, "low_wallet_threshold": 100000},
     "audit_log": [],
@@ -280,6 +280,8 @@ def _normalize(data: dict) -> dict:
         for k, dv in DEFAULT_CFG[key].items():
             if isinstance(dv, bool):
                 sec[k] = bool(sec[k])
+            elif isinstance(dv, str):
+                sec[k] = str(sec[k] or "")[:128]
             else:
                 try:
                     sec[k] = max(1, int(sec[k]))
@@ -456,6 +458,56 @@ def config_backup_bytes() -> bytes:
     """محتوای فعلی config.json برای بکاپ."""
     with open(CONFIG_FILE, "rb") as f:
         return f.read()
+
+
+# ───────────────────────────── رمزنگاری بکاپ ─────────────────────────────
+ENC_BACKUP_FORMAT = "rebecca-encrypted-backup"
+_ENC_SCRYPT = {"n": 2 ** 15, "r": 8, "p": 1}
+
+
+def _enc_key(password: str, salt: bytes, n: int, r: int, p: int) -> bytes:
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    return Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(password.encode("utf-8"))
+
+
+def encrypt_backup(data: bytes, password: str) -> bytes:
+    """بکاپ را با رمز رمزنگاری می‌کند (AES-256-GCM + کلید مشتق‌شده با scrypt). خروجی یک JSON کوچک است."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    salt, nonce = os.urandom(16), os.urandom(12)
+    key = _enc_key(password, salt, **_ENC_SCRYPT)
+    ct = AESGCM(key).encrypt(nonce, data, ENC_BACKUP_FORMAT.encode())
+    env = {"format": ENC_BACKUP_FORMAT, "version": 1, "kdf": "scrypt", **_ENC_SCRYPT,
+           "salt": base64.b64encode(salt).decode(), "nonce": base64.b64encode(nonce).decode(),
+           "data": base64.b64encode(ct).decode()}
+    return json.dumps(env).encode("utf-8")
+
+
+def is_encrypted_backup(text: str) -> bool:
+    try:
+        d = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(d, dict) and d.get("format") == ENC_BACKUP_FORMAT
+
+
+def decrypt_backup(text: str, password: str) -> bytes:
+    """بکاپ رمزنگاری‌شده ← محتوای اصلی. رمز اشتباه یا فایل خراب: ValueError."""
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    try:
+        env = json.loads(text)
+        if env.get("format") != ENC_BACKUP_FORMAT or env.get("kdf") != "scrypt":
+            raise ValueError
+        n, r, p = int(env["n"]), int(env["r"]), int(env["p"])
+        if not (2 ** 10 <= n <= 2 ** 20 and n & (n - 1) == 0 and 1 <= r <= 16 and 1 <= p <= 4):
+            raise ValueError
+        salt, nonce, ct = (base64.b64decode(env[k]) for k in ("salt", "nonce", "data"))
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ValueError("فایل بکاپ رمزنگاری‌شده خراب یا ناقص است.")
+    try:
+        return AESGCM(_enc_key(password, salt, n, r, p)).decrypt(nonce, ct, ENC_BACKUP_FORMAT.encode())
+    except InvalidTag:
+        raise ValueError("رمز بکاپ اشتباه است (یا فایل دستکاری شده).")
 
 
 def update_config(mutator) -> dict:

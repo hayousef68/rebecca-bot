@@ -21,7 +21,7 @@ try:
 except Exception:  # noqa: BLE001
     TEHRAN = timezone(timedelta(hours=3, minutes=30))
 
-from common import load_config, esc, config_backup_bytes, backup_summary
+from common import load_config, esc, config_backup_bytes, backup_summary, encrypt_backup
 
 log = logging.getLogger("rebecca.sales")
 
@@ -997,6 +997,15 @@ async def send_backup(bot, admin_ids, caption: str) -> int:
         log.warning("backup read: %s", e)
         return 0
     name = f"rebecca-full-backup-{tehran_day()}.json"
+    pw = load_config()["backup"].get("password") or ""
+    if pw:                                                     # رمز تنظیم شده: فایل رمزنگاری‌شده فرستاده می‌شود
+        try:
+            data = await asyncio.to_thread(encrypt_backup, data, pw)
+        except Exception as e:  # noqa: BLE001
+            log.warning("backup encrypt: %s", e)               # هرگز بکاپ بدون رمز نمی‌فرستیم
+            return 0
+        name = name[:-5] + ".enc"
+        caption += "\n🔐 این فایل رمزنگاری شده است؛ برای ریستور رمز بکاپ را لازم دارید."
     try:
         b = backup_summary()
         caption += f"\n👥 {b['reps']} نماینده · {b['rep_users']} کاربر تخصیص‌یافته در این بکاپ است."
