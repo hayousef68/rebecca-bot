@@ -1193,7 +1193,7 @@ async function vHome() {
         del.onclick = () => { if (!confirm(`این فروش از گزارش حذف شود؟\n\n${e.kind_fa} · ${e.username} · ${e.gb} گیگ\n(به اکانت دست نمی‌خورد؛ هر وقت خواستید برمی‌گردد)`)) return; run(del, () => sendEv({ eid: e.eid, op: 'hide' }, '🗑 از گزارش حذف شد')); };
         return [ed, del]; })();
     const info = h('div', { class: 'evi' }, h('div', {}, h('b', { dir: 'ltr' }, e.username), h('span', { class: 'sub' }, `  ${e.kind_fa} · ${e.day} ${e.time}`)),
-      h('div', { class: 'sub' }, `${e.gb} گیگ · ${e.months === 1 ? 'یک' : 'دو'}ماهه · ${TYPE_FA[e.type] || e.type} · `, h('b', {}, e.hidden ? 'حذف‌شده' : fa(e.price) + ' تومان'), e.edited ? ' · ✏️ ویرایش‌شده' : ''));
+      h('div', { class: 'sub' }, `${e.gb} گیگ · ${e.months === 1 ? 'یک' : 'دو'}ماهه · ${TYPE_FA[e.type] || e.type} · `, h('b', {}, e.hidden ? 'حذف‌شده' + ({ manual: ' — حذف دستی', rep: ' — خرید با کیف پول نماینده', undo: ' — برگشت تمدید' }[e.why] || '') : fa(e.price) + ' تومان'), e.edited ? ' · ✏️ ویرایش‌شده' : ''));
     return h('div', {}, h('div', { class: 'ev' + (e.hidden ? ' off' : '') }, info, ...act), form);
   };
   const loadEd = async () => {
@@ -1459,10 +1459,11 @@ async function vSet() {
     const head = h('div', { class: 'sub', style: 'display:grid;grid-template-columns:1fr 0.7fr 1.4fr auto auto;gap:6px;margin:6px 0' }, h('span', {}, 'حجم GB'), h('span', {}, 'ماه'), h('span', {}, 'قیمت (تومان)'), h('span', { style: 'min-width:64px;text-align:center' }, 'گیگی'), h('span', { style: 'width:36px' }));
     sc.single_prices.forEach(addRow);
     const addB = h('button', { class: 'btn sm', type: 'button' }, '➕ پلن جدید'); addB.onclick = () => addRow({ gb: '', months: 1, price: '' });
+    const exm = h('select', {}, h('option', { value: 'skip' }, 'حساب نشود (پیش‌فرض)'), h('option', { value: 'count' }, 'به‌نرخ گیگی حساب شود و برای قیمت‌گذاری بیاید')); exm.value = sc.attach_extra_mode || 'skip';
     const saveS = h('button', { class: 'btn pri' }, 'ذخیره قیمت‌ها');
     saveS.onclick = () => run(saveS, async () => {
       const single_prices = [...rows.children].map(r => ({ gb: +r._f.g.value, months: +r._f.m.value, price: +r._f.pr.value })).filter(p => p.gb > 0 && p.months > 0);
-      await api('/sales/settings', 'POST', { hamkari_per_gb: +ham.value, buy_per_tb: +buy.value, hamkari_usage_multiplier: +mul.value || 1.5, hamkari_multiplier_enabled: mulOn.checked, hamkari_service_names: svc.value, ignore_service_names: ign.value, single_prices });
+      await api('/sales/settings', 'POST', { hamkari_per_gb: +ham.value, buy_per_tb: +buy.value, hamkari_usage_multiplier: +mul.value || 1.5, hamkari_multiplier_enabled: mulOn.checked, hamkari_service_names: svc.value, ignore_service_names: ign.value, single_prices, attach_extra_mode: exm.value });
       toast('✅ قیمت‌ها ذخیره شد (از گزارش بعدی اعمال می‌شود)'); vSet();
     });
     priceCard = h('div', { class: 'card' }, h('h2', {}, '💰 قیمت‌ها و لیست فروش'),
@@ -1470,6 +1471,8 @@ async function vSet() {
       h('h2', { style: 'font-size:var(--fs-sm);margin:12px 0 0' }, '👤 لیست فروش تکی (MS)'), head, rows,
       h('p', { class: 'hint' }, `حجم‌های خارج از لیست روی سرویس MS به‌نرخ گیگی ${fa(sc.fallback_rate)} تومان (از پلن ۳۰ گیگ یک‌ماهه) حساب می‌شود.`),
       h('div', { class: 'btns', style: 'margin-top:6px' }, addB),
+      field('افزودن حجم / پلن بعدیِ خارج از لیست', exm),
+      h('p', { class: 'hint' }, 'اگر «حساب نشود» باشد، افزودن حجم یا پلن بعدیِ خارج از لیست نه فروش حساب می‌شود و نه در کارت «📐 حجم‌های خارج از لیست» برای قیمت‌گذاری می‌آید. با «به‌نرخ گیگی» حساب می‌شود و می‌توانید برایش قیمت ثبت کنید.'),
       h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 6px' }, '🧾 هزینه و سرویس‌ها'),
       h('div', { class: 'row' }, field('خرید هر ترابایت', buy), field('ضریب مصرف همکاری', mul)), mulBox,
       field('سرویس‌های نادیده (تست؛ با کاما)', ign), h('div', { class: 'btns' }, saveS));
