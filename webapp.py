@@ -495,6 +495,7 @@ class SalesReq(BaseModel):
     hamkari_service_names: str = Field(default="hamkari", max_length=200)
     ignore_service_names: str = Field(default="", max_length=200)
     single_prices: list[PlanReq] = Field(max_length=50)
+    attach_extra_mode: str = Field(default="skip", pattern="^(skip|count)$")
 
 
 @app.get("/api/sales/settings", dependencies=[Depends(guard)])
@@ -505,7 +506,7 @@ async def sales_settings_get():
             "hamkari_multiplier_enabled": sc.get("hamkari_multiplier_enabled", True),
             "hamkari_service_names": ", ".join(sc.get("hamkari_service_names", [])),
             "ignore_service_names": ", ".join(sc.get("ignore_service_names", [])),
-            "fallback_rate": round(sales.fallback_rate(sc)),
+            "fallback_rate": round(sales.fallback_rate(sc)), "attach_extra_mode": sc.get("attach_extra_mode", "skip"),
             "single_prices": sorted(sc["single_prices"], key=lambda x: (x["months"], x["gb"]))}
 
 
@@ -525,9 +526,9 @@ async def sales_settings_save(r: SalesReq):
                           hamkari_multiplier_enabled=r.hamkari_multiplier_enabled,
                           hamkari_service_names=names or ["hamkari"],
                           ignore_service_names=[n.strip().lower() for n in r.ignore_service_names.split(",") if n.strip()],
-                          single_prices=plans)
+                          single_prices=plans, attach_extra_mode=r.attach_extra_mode)
     update_config(mut)
-    _aud("تغییر قیمت‌ها و تنظیمات فروش", "", f"قیمت هر گیگ همکاری: {r.hamkari_per_gb:,}؛ خرید هر ترابایت: {r.buy_per_tb:,}؛ تعداد پلن تکی: {len(plans)}", "sys")
+    _aud("تغییر قیمت‌ها و تنظیمات فروش", "", f"قیمت هر گیگ همکاری: {r.hamkari_per_gb:,}؛ خرید هر ترابایت: {r.buy_per_tb:,}؛ تعداد پلن تکی: {len(plans)}؛ پیوست/پلن بعدی خارج از لیست: {'حساب نمی‌شود' if r.attach_extra_mode == 'skip' else 'به‌نرخ گیگی'}", "sys")
     return {"ok": True}
 
 
