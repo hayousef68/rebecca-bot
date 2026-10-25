@@ -286,10 +286,14 @@ def _apply_overrides(rows: list[dict], off: int, include_hidden: bool) -> list[d
         ts = _ts_of(r, off)
         r["ts"] = ts
         h = hide.get(eid)
+        why = ""                                   # دلیل حذف از گزارش: manual (حذف دستی) | rep (خرید با کیف پول نماینده) | undo (برگشت تمدید)
         if isinstance(h, dict):
             hidden = bool(h.get("v"))
+            why = "manual" if hidden else ""
         else:
-            hidden = any(s["u"] == r["username"] and float(s["from"]) <= ts <= float(s["to"]) and (s.get("any") or r["kind"] != "new") for s in spans)
+            sp = next((s for s in spans if s["u"] == r["username"] and float(s["from"]) <= ts <= float(s["to"]) and (s.get("any") or r["kind"] != "new")), None)
+            hidden = sp is not None
+            why = ("rep" if sp.get("any") else "undo") if sp else ""
         e = edit.get(eid)
         if isinstance(e, dict):
             r["orig"] = {"gb": round((r.get("data_limit") or 0) / GB), "months": int(r["months"]) if r.get("months") else _months(r), "ham": _is_hamkari(r, cfg)}
@@ -304,6 +308,7 @@ def _apply_overrides(rows: list[dict], off: int, include_hidden: bool) -> list[d
             if not include_hidden:
                 continue
             r["hidden"] = True
+            r["hide_why"] = why
         out.append(r)
     return out
 
@@ -882,7 +887,7 @@ def events_list(d1: str, d2: str, limit: int = 300) -> list[dict]:
             "eid": r["eid"], "kind": r["kind"], "kind_fa": _KIND_FA.get(r["kind"], r["kind"]), "username": r["username"],
             "gb": gb, "months": m, "type": typ, "service": r.get("service_name") or "", "price": price if gb > 0 else 0,
             "time": local.strftime("%H:%M") if local else "", "day": jdate(local.strftime("%Y-%m-%d"), False) if local else "",
-            "hidden": bool(r.get("hidden")), "edited": bool(r.get("edited")), "orig": r.get("orig"),
+            "hidden": bool(r.get("hidden")), "why": r.get("hide_why", ""), "edited": bool(r.get("edited")), "orig": r.get("orig"),
         })
     return out
 
