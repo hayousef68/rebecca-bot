@@ -1359,6 +1359,15 @@ async def reps_list():
             "topups": [{**t, "rep": cfg["reps"][t["rid"]]["label"] or cfg["reps"][t["rid"]]["name"]} for t in cfg["topups"] if t["status"] == "pending"]}
 
 
+@app.get("/api/topups/pending", dependencies=[Depends(guard)])
+async def topups_pending():
+    """درخواست‌های افزایش موجودی در انتظار؛ سبک و مناسب polling برای اعلان بالای صفحه و عدد تب تنظیمات."""
+    cfg = load_config()
+    items = [{"id": t["id"], "rid": t["rid"], "rep": (cfg["reps"].get(t["rid"], {}).get("label") or cfg["reps"].get(t["rid"], {}).get("name") or t["rid"]),
+              "amount": t.get("amount", 0), "ts": t.get("ts", 0)} for t in cfg["topups"] if t.get("status") == "pending"]
+    return {"count": len(items), "items": items[-20:]}
+
+
 @app.post("/api/reps", dependencies=[Depends(guard)])
 async def reps_create(r: RepCreateReq):
     result = await asyncio.to_thread(C.create_rep, r.name, r.password, r.label)
@@ -1628,7 +1637,7 @@ def _slim(u: dict, api, pend: dict | None = None) -> dict:
         "expire_text": C.fmt_expire(u.get("expire"), st, u.get("on_hold_expire_duration")),
         "sub": api.full_sub(u.get("subscription_url", "")),
         "service_id": u.get("service_id"), "note": u.get("note") or "",
-        "created_by_rep": rep_owner_label,
+        "created_by_rep": rep_owner_label, "rep_id": rid or "",
         "next_plans": C.next_plans_view(u),
         "np_raw": json.dumps(C._raw_plans(u), ensure_ascii=False)[:1500] if C._raw_plans(u) else "",
         "unpaid_due": int(rec["due"]) if rec and st != "disabled" else 0,      # زمان غیرفعال‌سازی خودکار (timestamp)؛ ۰ = ندارد
