@@ -230,6 +230,10 @@ mark{background:color-mix(in srgb,var(--ac) 25%,transparent);color:var(--ac);bor
 .ev .x{border:0;background:var(--s2);color:var(--tx);width:32px;height:32px;border-radius:9px;cursor:pointer;flex:none}.ev .x.d{background:#f2706b1a;color:var(--bad)}
 .evf{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:-2px 0 8px;padding:8px;border:1px dashed var(--line);border-radius:12px}.evf .btns{grid-column:1/-1;margin:0}
 .undo-box{margin:10px 0 0;padding:10px 12px;border:1px solid #5aa9ff88;background:#5aa9ff1a;border-radius:12px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-size:var(--fs-sm);color:var(--info)}
+#alertbar{max-width:600px;margin:0 auto;padding:10px 14px 0}#alertbar:empty{display:none}html.desk #alertbar{max-width:1040px;padding:14px 24px 0}
+#alertbar .abar{display:flex;align-items:center;gap:10px;border:1px solid color-mix(in srgb,var(--warn) 55%,transparent);background:color-mix(in srgb,var(--warn) 12%,var(--s1));border-radius:14px;padding:10px 12px;font-size:var(--fs-sm)}
+#alertbar .abar b{flex:1;min-width:0}#alertbar .abar small{display:block;color:var(--mu);font-size:var(--fs-xs);font-weight:500;margin-top:2px}
+#alertbar .abar button{flex:none}.nbadge{position:absolute;top:2px;left:calc(50% + 6px);min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bad);color:#fff;font-size:11px;font-weight:800;line-height:18px;text-align:center;box-shadow:0 0 0 2px var(--s1)}
 .hist{margin:8px 0 2px}.hist>summary{cursor:pointer;font-size:var(--fs-sm);color:var(--mu);padding:4px 2px;width:fit-content}
 .hist .hr{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:7px 2px;border-bottom:1px dashed var(--line);font-size:var(--fs-sm)}.hist .hr:last-child{border-bottom:0}
 .hist .hr small{display:block;color:var(--mu);font-size:var(--fs-xs);margin-top:2px}.hist .hr .dt{flex:none;text-align:left;color:var(--mu);font-size:var(--fs-xs);line-height:1.6}
@@ -316,6 +320,7 @@ code,.code{overflow-x:auto}
 </head>
 <body>
 <header><h1><span class="logo">R</span><span class="ttl">پنل مدیریت ربکا</span></h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:var(--fs-sm)"></select><span id="conn" class="pill">…</span><select id="themesel" class="pill themesel" aria-label="قالب"></select><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="خروج">خروج</button></div></header>
+<div id="alertbar"></div>
 <main id="view"></main>
 <nav id="nav"></nav>
 <script>
@@ -425,7 +430,27 @@ const TABS = [['create', 'create', 'ساخت'], ['users', 'users', 'کاربرا
 
 function renderNav() {
   const nav = $('#nav'); nav.replaceChildren(...TABS.map(([k, ic, t]) =>
-    h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k), 'aria-label': t }, svgIcon(ic), t)));
+    h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k), 'aria-label': t + (k === 'set' && S.pend ? ` (${S.pend} درخواست)` : '') }, svgIcon(ic), t,
+      k === 'set' && S.pend ? h('i', { class: 'nbadge' }, S.pend > 99 ? '99+' : String(S.pend)) : null)));
+}
+/* درخواست‌های افزایش موجودی نماینده: اعلان بالای صفحه + عدد روی «تنظیمات» (هر ۳۰ ثانیه و بعد از هر تأیید/رد) */
+S.pend = 0; S.pendItems = []; S.pendHide = '';
+function renderAlert() {
+  const bar = $('#alertbar'); if (!bar) return;
+  const key = S.pendItems.map(x => x.id).join(',');
+  if (!S.pend || S.pendHide === key) return bar.replaceChildren();
+  const first = S.pendItems[S.pendItems.length - 1] || {};
+  const more = S.pend > 1 ? ` و ${S.pend - 1} درخواست دیگر` : '';
+  const view = h('button', { class: 'btn sm pri', type: 'button' }, 'بررسی');
+  view.onclick = () => { S.setOpen = 'reps'; go('set'); };
+  const x = h('button', { class: 'btn sm', type: 'button', 'aria-label': 'بستن' }, '✕');
+  x.onclick = () => { S.pendHide = key; renderAlert(); };
+  bar.replaceChildren(h('div', { class: 'abar' }, h('span', {}, '💰'),
+    h('b', {}, `${S.pend} درخواست افزایش موجودی`, h('small', {}, `${first.rep || ''} — ${(+first.amount || 0).toLocaleString('fa-IR')} تومان${more}`)), view, x));
+}
+async function pollTopups() {
+  try { const r = await api('/topups/pending'); S.pend = r.count; S.pendItems = r.items; } catch { return; }
+  renderNav(); renderAlert();
 }
 async function go(tab) { S.tab = tab; renderNav(); await ({ create: vCreate, users: vUsers, home: vHome, tpl: vTpl, set: vSet })[tab](); window.scrollTo(0, 0); }
 const hasPanel = () => S.st.panels.some(p => p.ok);
@@ -772,10 +797,36 @@ function userItem(u, parent, tab) {
   /* ─── تب بیشتر ─── */
   const del = h('button', { class: 'btn sm bad' }, '🗑 حذف کاربر');
   del.onclick = () => { if (!confirm(`کاربر ${u.username} برای همیشه حذف شود؟ این کار قابل برگشت نیست.`)) return; run(del, async () => { await api(P + 'delete', 'POST'); toast('حذف شد'); d.remove(); }); };
+  /* تخصیص به نماینده (لیست نماینده‌ها فقط با باز شدن کارت، یک‌بار برای همه کارت‌ها گرفته می‌شود) */
+  const repSel = h('select', { 'aria-label': 'نماینده' }, h('option', { value: '' }, 'در حال بارگذاری…'));
+  const repOk = h('button', { class: 'btn sm pri', type: 'button' }, u.rep_id ? '🔁 انتقال' : '✅ تخصیص');
+  const repRm = h('button', { class: 'btn sm', type: 'button' }, '➖ حذف از نماینده');
+  const repNote = h('p', { class: 'hint', style: 'margin:6px 0 0' }, u.created_by_rep ? `نماینده فعلی: ${u.created_by_rep}` : 'این کاربر به هیچ نماینده‌ای نسبت داده نشده.');
+  const repDone = (rid, label) => { toast(rid ? `✅ به ${label} نسبت داده شد` : 'از نماینده حذف شد'); swap({ ...u, rep_id: rid, created_by_rep: rid ? label : '' }, 'more'); };
+  repOk.onclick = () => { const rid = repSel.value; if (!rid) return toast('نماینده را انتخاب کنید', true);
+    const label = repSel.selectedOptions[0].textContent;
+    if (u.rep_id && u.rep_id !== rid && !confirm(`«${u.username}» از «${u.created_by_rep}» به «${label}» منتقل شود؟ یادداشت و وضعیت «پرداخت شد» قبلی نماینده پاک می‌شود.`)) return;
+    run(repOk, async () => { await api(`/reps/${rid}/assign`, 'POST', { names: u.username }); repDone(rid, label); }); };
+  repRm.onclick = () => { if (!u.rep_id || !confirm(`«${u.username}» از لیست «${u.created_by_rep}» حذف شود؟ (خود کاربر در پنل می‌ماند)`)) return;
+    run(repRm, async () => { await api(`/reps/${u.rep_id}/unassign`, 'POST', { names: u.username }); repDone('', ''); }); };
+  let repLoaded = false;
+  const loadReps = async () => {
+    if (repLoaded) return; repLoaded = true;
+    try {
+      S.repsP = S.repsP || api('/reps').then(r => r.reps).catch(e => { S.repsP = null; throw e; });
+      const list = await S.repsP;
+      repSel.replaceChildren(h('option', { value: '' }, list.length ? '— انتخاب نماینده —' : 'نماینده‌ای ندارید'),
+        ...list.map(r => h('option', { value: r.id, selected: r.id === u.rep_id }, (r.label || r.name) + (r.blocked ? ' (مسدود)' : ''))));
+    } catch (e) { repLoaded = false; repSel.replaceChildren(h('option', { value: '' }, 'خطا در دریافت نمایندگان')); }
+  };
+  d.addEventListener('toggle', () => { if (d.open) loadReps(); });
   const paneMore = h('div', {}, h('div', { class: 'btns', style: 'margin-top:0' },
     act('🔗 لینک جدید', P + 'revoke', 'لینک جدید ساخته شد'),
     act(u.status === 'disabled' ? '✅ فعال‌سازی' : '⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد'), del),
-    h('p', { class: 'hint' }, '«لینک جدید» لینک اشتراک قبلی را از کار می‌اندازد.'));
+    h('p', { class: 'hint' }, '«لینک جدید» لینک اشتراک قبلی را از کار می‌اندازد.'),
+    h('div', { class: 'psec', style: 'margin-top:12px' }, h('b', {}, '👤 تخصیص به نماینده')),
+    h('div', { class: 'btns', style: 'margin-top:6px;align-items:stretch' }, repSel, repOk, u.rep_id ? repRm : null),
+    repNote);
 
   /* ─── برگشت تمدید/ریست اشتباهی (از نقطه‌ی ذخیره‌شده‌ی محلی؛ بدون بار اضافه روی پنل) ─── */
   const undoBox = () => {
@@ -1455,7 +1506,7 @@ async function vSet() {
     sslCard = h('div', { class: 'card' }, h('h2', {}, '🔒 SSL و پورت وب‌پنل'),
       h('p', { class: 'hint', style: 'margin:0 0 6px' }, state + exp),
       sc2.error ? h('p', { class: 'err' }, 'آخرین خطا: ' + sc2.error) : null,
-      sc2.launcher !== 'run_web' ? h('div', { class: 'banner', style: 'margin:8px 0;border-color:var(--warn)' }, h('b', {}, '⚠️ وب‌پنل با راه‌انداز SSL اجرا نشده است'),
+      !sc2.active && sc2.launcher !== 'run_web' ? h('div', { class: 'banner', style: 'margin:8px 0;border-color:var(--warn)' }, h('b', {}, '⚠️ وب‌پنل با راه‌انداز SSL اجرا نشده است'),
         h('p', { class: 'hint', style: 'margin:4px 0' }, 'سرویس باید با run_web.py بالا بیاید وگرنه SSL هرگز اعمال نمی‌شود. روی سرور بزنید:'),
         h('code', { style: 'white-space:pre-wrap;margin:6px 0' }, "sed -i 's#^ExecStart=.*#ExecStart=/opt/rebecca-bot/venv/bin/python /opt/rebecca-bot/run_web.py#' /etc/systemd/system/rebecca-webapp.service\nsystemctl daemon-reload && systemctl restart rebecca-webapp")) : null,
       sc2.enabled && !sc2.active && !sc2.error && sc2.launcher === 'run_web' ? h('p', { class: 'hint' }, 'SSL ذخیره شده ولی هنوز اعمال نشده؛ یک بار بزنید: systemctl restart rebecca-webapp') : null,
@@ -1565,7 +1616,7 @@ async function vSet() {
     h('p', { class: 'hint' }, 'بکاپ شامل نماینده‌ها (با رمز هش‌شده)، لیست کاربرهای هر نماینده و وضعیت مسدود/قفل آن‌هاست؛ بعد از بازیابی روی سرور جدید هر کاربر دوباره زیر نماینده‌ی خودش نمایش داده می‌شود. فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
     h('div', { class: 'btns' }, vfB, rsB, rcB));
   // ─── نماینده‌ها ───
-  let reps = [], topups = []; try { const rr = await api('/reps'); reps = rr.reps; topups = rr.topups || []; } catch { /* خطا: لیست خالی */ }
+  let reps = [], topups = []; try { const rr = await api('/reps'); reps = rr.reps; topups = rr.topups || []; S.repsP = Promise.resolve(reps); S.pend = topups.length; S.pendItems = topups; renderNav(); renderAlert(); } catch { /* خطا: لیست خالی */ }
   const TYPE_FA = { charge: '➕ شارژ ادمین', deduct: '➖ کسر ادمین', topup: '✅ افزایش موجودی', purchase: '🛒 خرید اکانت', refund: '↩️ بازگشت وجه' };
   const repMsg = (name, pw) => `🔐 پنل نماینده\nآدرس: ${location.origin}/login\nنام کاربری: ${name}\nرمز: ${pw}`;
   const rName = h('input', { placeholder: 'نام کاربری (انگلیسی)', dir: 'ltr', maxlength: 32, autocapitalize: 'off', autocomplete: 'off' });
@@ -1631,7 +1682,7 @@ async function vSet() {
   };
   const tuBox = (topups.length ? h('div', { class: 'banner', style: 'margin-bottom:10px' }, h('b', {}, `💰 ${topups.length} درخواست افزایش موجودی`),
     ...topups.map(t => { const amt = moneyIn(t.amount, 'مبلغ', { style: 'margin-top:6px' });
-      const bt = (label, cls, ap) => { const b = h('button', { class: 'btn sm ' + cls, type: 'button' }, label); b.onclick = () => run(b, async () => { await withCode(code => api('/topups/' + t.id, 'POST', { approve: ap, amount: ap ? mv(amt) : null, code })); S.setOpen = 'reps'; toast(ap ? '✅ تأیید و شارژ شد' : 'رد شد'); await vSet(); }); return b; };
+      const bt = (label, cls, ap) => { const b = h('button', { class: 'btn sm ' + cls, type: 'button' }, label); b.onclick = () => run(b, async () => { await withCode(code => api('/topups/' + t.id, 'POST', { approve: ap, amount: ap ? mv(amt) : null, code })); S.setOpen = 'reps'; toast(ap ? '✅ تأیید و شارژ شد' : 'رد شد'); await pollTopups(); await vSet(); }); return b; };
       return h('div', { style: 'margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)' }, h('div', {}, `${t.rep} — ${toman(t.amount)}`), t.note ? h('div', { class: 'hint', style: 'margin:2px 0' }, '📝 ' + t.note) : null,
         h('div', { class: 'hint', style: 'margin:2px 0' }, new Date(t.ts * 1000).toLocaleString('fa-IR')), amt, h('div', { class: 'btns', style: 'margin-top:6px' }, bt('✅ تأیید و شارژ', 'pri', true), bt('✖ رد', 'bad', false))); })) : null);
   const repBody = h('div', { class: 'acc-in' },
@@ -1678,7 +1729,8 @@ async function vSet() {
 (async () => {
   let me; try { me = await api('/me'); } catch { return; }
   if (me.role === 'rep') return repApp(me);
-  renderNav();
+  renderNav(); pollTopups(); setInterval(() => { if (!document.hidden) pollTopups(); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pollTopups(); });
   try { await refreshState(); await go(hasPanel() ? 'create' : 'set'); }
   catch (e) { mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
 })();
