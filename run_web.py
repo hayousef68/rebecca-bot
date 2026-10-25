@@ -19,6 +19,7 @@ log = logging.getLogger("rebecca.run")
 
 def main():
     logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
+    os.environ["REBECCA_LAUNCHER"] = "run_web"      # webapp می‌فهمد با این راه‌انداز (و پشتیبانی SSL) بالا آمده، نه مستقیم با uvicorn
     cfg = C.load_config()
     port = int(cfg.get("web_port") or 8686)
     ss = cfg.get("ssl") or {}
