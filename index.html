@@ -107,16 +107,7 @@ code,.code{display:block;direction:ltr;text-align:left;font-family:ui-monospace,
 .shareapps{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px}.shareapps .btn{text-align:center;text-decoration:none}
 img.qr{display:block;margin:10px auto;width:220px;max-width:100%;border-radius:14px;background:#fff;padding:8px}
 .err{color:var(--bad);font-size:var(--fs-sm);margin-top:6px}
-.menubtn{background:none;border:1px solid var(--line);color:var(--tx);border-radius:12px;width:38px;height:38px;display:grid;place-items:center;cursor:pointer;flex:none;padding:0}
-.menubtn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
-.scrim{position:fixed;inset:0;background:#000a;z-index:20;opacity:0;pointer-events:none;transition:opacity .2s}.scrim.on{opacity:1;pointer-events:auto}
-.drawer{position:fixed;top:0;bottom:0;inset-inline-start:0;width:min(300px,84vw);z-index:21;background:linear-gradient(180deg,var(--s1),#0c141c);border-inline-end:1px solid var(--line);box-shadow:var(--shadow);
   transform:translateX(105%);transition:transform .25s;padding:calc(18px + env(safe-area-inset-top)) 14px calc(18px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:6px;overflow:auto}
-.drawer.on{transform:none}
-.drawer .who{font-weight:800;font-size:var(--fs-md)}.drawer .bal{margin:10px 0 8px;padding:12px;border-radius:14px;border:1px solid color-mix(in srgb,var(--ac) 33%,transparent);background:color-mix(in srgb,var(--ac) 10%,transparent)}
-.drawer .bal span{display:block;font-size:var(--fs-xs);color:var(--mu)}.drawer .bal b{font-size:var(--fs-xl);color:var(--ac)}
-.drawer .mi{display:flex;align-items:center;gap:10px;width:100%;text-align:start;background:none;border:0;color:var(--tx);font:inherit;font-size:var(--fs-md);font-weight:600;padding:12px;border-radius:12px;cursor:pointer}
-.drawer .mi:hover,.drawer .mi.on{background:var(--s2)}.drawer .mi.on{color:var(--ac)}.drawer .sp{flex:1}
 .bigbal{text-align:center;padding:18px 12px}.bigbal span{font-size:var(--fs-sm);color:var(--mu)}.bigbal b{display:block;font-size:var(--fs-2xl);color:var(--ac);margin-top:2px}
 .tplopt{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:14px;margin-bottom:8px;cursor:pointer;background:var(--bg)}
 .tplopt.on{border-color:var(--ac);background:color-mix(in srgb,var(--ac) 10%,transparent)}.tplopt input{width:auto;min-height:0}.tplopt .tn{flex:1;min-width:0;font-weight:700}.tplopt .tp{font-size:var(--fs-sm);color:var(--mu)}.tplopt b{color:var(--ac);white-space:nowrap}
@@ -164,8 +155,6 @@ html.desk .btns .btn{flex:0 1 auto}
 html.desk .row>*,html.desk .cols>div{min-width:0}
 html.desk .item>summary,html.desk .item>.head{padding:14px 18px}
 html.desk .item .body{padding:0 18px 18px}
-html.desk .drawer{width:340px}
-html.desk .scrim.on{cursor:pointer}
 html.desk img.qr{width:260px}
 html.desk .item:hover{border-color:#4a6479}
 html.desk body:has(nav[hidden]){padding-inline-start:0}
@@ -419,6 +408,7 @@ async function run(btn, fn) {
 
 const S = { st: null, panel: null, tab: 'create', users: { q: '', status: '', off: 0 }, last: null };
 const ICONS = {   // آیکون‌های خطی (ثابت و داخلی)
+  wallet: '<rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16 14.5h2"/>',
   create: '<path d="M12 5v14M5 12h14"/>',
   users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.8c1.8.7 3 2.4 3 5.2"/>',
   home: '<path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/>',
@@ -872,8 +862,126 @@ function userItem(u, parent, tab) {
 }
 
 /* ───────── رابط نماینده: فقط جستجو + مشاهده‌ی کاربرهای خودش + لینک و QR ───────── */
+/* ───────── نمودارهای SVG سبک برای داشبورد نماینده ───────── */
+const _esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function _chartColors() {
+    const cs = getComputedStyle(document.documentElement);
+    const g = k => cs.getPropertyValue(k).trim();
+    return {
+        ac: g('--ac') || '#8b7cff', ac2: g('--ac2') || '#4cc2ff',
+        ok: g('--ok') || '#3ecf8e', bad: g('--bad') || '#f2706b',
+        warn: g('--warn') || '#f5a524', info: g('--info') || '#5aa9ff',
+        mu: g('--mu') || '#8497aa', tx: g('--tx') || '#e9f0f6',
+        line: g('--line') || '#222d3d', bg: g('--bg') || '#080c14',
+        s1: g('--s1') || '#0f1622',
+    };
+}
+
+function svgBarChart(data) {
+    const C = _chartColors();
+    const W = 340, H = 150, padTop = 22, padBot = 26, padL = 6, padR = 6;
+    const chartW = W - padL - padR, chartH = H - padTop - padBot;
+    const maxV = Math.max(...data.map(d => d.value), 1);
+    const barW = Math.max(6, chartW / data.length - 8);
+    let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" xmlns="http://www.w3.org/2000/svg">`;
+    svg += `<defs><linearGradient id="bg-bar" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${C.ac}"/><stop offset="100%" stop-color="${C.ac2}"/></linearGradient></defs>`;
+    for (let i = 0; i <= 3; i++) {
+        const y = padTop + (chartH * i / 3);
+        svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="${C.line}" stroke-dasharray="3 3" opacity="0.4"/>`;
+    }
+    data.forEach((d, i) => {
+        const x = padL + i * (chartW / data.length) + 4;
+        const barH = d.value > 0 ? (d.value / maxV) * chartH : 0;
+        const y = padTop + chartH - barH;
+        svg += `<rect x="${x}" y="${y}" width="${barW}" height="${Math.max(2, barH)}" rx="4" fill="url(#bg-bar)" opacity="${d.value ? 1 : 0.25}"><title>${_esc(d.title || d.label)}: ${d.value}</title></rect>`;
+        if (d.value > 0 && data.length <= 10) {
+            svg += `<text x="${x + barW / 2}" y="${y - 6}" text-anchor="middle" fill="${C.tx}" font-size="9" font-weight="700">${d.shortValue || ''}</text>`;
+        }
+        svg += `<text x="${x + barW / 2}" y="${H - 8}" text-anchor="middle" fill="${C.mu}" font-size="9">${_esc(d.label)}</text>`;
+    });
+    svg += `</svg>`;
+    return svg;
+}
+
+function svgLineChart(data) {
+    const C = _chartColors();
+    const W = 340, H = 140, padTop = 18, padBot = 24, padL = 6, padR = 6;
+    const chartW = W - padL - padR, chartH = H - padTop - padBot;
+    const maxV = Math.max(...data.map(d => d.value), 1);
+    const pts = data.map((d, i) => ({ x: padL + (i / Math.max(1, data.length - 1)) * chartW, y: padTop + chartH - (d.value / maxV) * chartH }));
+    let linePath = '';
+    if (pts.length === 1) {
+        linePath = `M ${pts[0].x} ${pts[0].y} L ${pts[0].x} ${pts[0].y}`;
+    } else {
+        linePath = `M ${pts[0].x} ${pts[0].y}`;
+        for (let i = 1; i < pts.length; i++) {
+            const p = pts[i - 1], c = pts[i], cx = (p.x + c.x) / 2;
+            linePath += ` C ${cx} ${p.y}, ${cx} ${c.y}, ${c.x} ${c.y}`;
+        }
+    }
+    const areaPath = linePath + ` L ${pts[pts.length - 1].x} ${padTop + chartH} L ${pts[0].x} ${padTop + chartH} Z`;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" xmlns="http://www.w3.org/2000/svg">`;
+    svg += `<defs><linearGradient id="lg-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${C.ac}" stop-opacity="0.35"/><stop offset="100%" stop-color="${C.ac}" stop-opacity="0"/></linearGradient><linearGradient id="lg-line" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="${C.ac}"/><stop offset="100%" stop-color="${C.ac2}"/></linearGradient></defs>`;
+    for (let i = 0; i <= 3; i++) {
+        const y = padTop + (chartH * i / 3);
+        svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="${C.line}" stroke-dasharray="3 3" opacity="0.4"/>`;
+    }
+    svg += `<path d="${areaPath}" fill="url(#lg-area)"/>`;
+    svg += `<path d="${linePath}" fill="none" stroke="url(#lg-line)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+    if (pts.length) {
+        const last = pts[pts.length - 1];
+        svg += `<circle cx="${last.x}" cy="${last.y}" r="4" fill="${C.ac}" stroke="${C.s1}" stroke-width="2"/>`;
+    }
+    const step = Math.max(1, Math.ceil(data.length / 6));
+    data.forEach((d, i) => {
+        if (i % step === 0 || i === data.length - 1) {
+            svg += `<text x="${pts[i].x}" y="${H - 6}" text-anchor="middle" fill="${C.mu}" font-size="9">${_esc(d.label)}</text>`;
+        }
+    });
+    svg += `</svg>`;
+    return svg;
+}
+
+function svgDonut(items, opts) {
+    opts = opts || {};
+    const C = _chartColors();
+    const size = opts.size || 140, cx = size / 2, cy = size / 2, r = size * 0.36, sw = size * 0.13;
+    const total = items.reduce((s, x) => s + x.value, 0) || 1;
+    const Ccirc = 2 * Math.PI * r;
+    let svg = `<svg viewBox="0 0 ${size} ${size}" style="width:${size}px;height:${size}px;flex:none" xmlns="http://www.w3.org/2000/svg">`;
+    let offset = 0;
+    items.forEach(item => {
+        const dash = (item.value / total) * Ccirc;
+        svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${item.color}" stroke-width="${sw}" stroke-dasharray="${dash} ${Ccirc}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})"><title>${_esc(item.label)}: ${item.value}</title></circle>`;
+        offset += dash;
+    });
+    svg += `<text x="${cx}" y="${cy - 2}" text-anchor="middle" fill="${C.mu}" font-size="10">${opts.sublabel || 'کل'}</text>`;
+    svg += `<text x="${cx}" y="${cy + 16}" text-anchor="middle" fill="${C.tx}" font-size="${opts.centerSize || 18}" font-weight="800">${opts.centerLabel || total}</text>`;
+    svg += `</svg>`;
+    return svg;
+}
+
+function svgStatusBars(items) {
+    const C = _chartColors();
+    const W = 340, rowH = 32, labelW = 90, valueW = 50;
+    const H = items.length * rowH + 6;
+    const barX = labelW, barMaxW = W - labelW - valueW - 4;
+    const total = items.reduce((s, x) => s + x.value, 0) || 1;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" xmlns="http://www.w3.org/2000/svg">`;
+    items.forEach((s, i) => {
+        const y = i * rowH + 6;
+        const barW = Math.max(2, (s.value / total) * barMaxW);
+        svg += `<text x="${labelW / 2}" y="${y + 16}" text-anchor="middle" fill="${C.tx}" font-size="10.5" font-weight="600">${_esc(s.label)}</text>`;
+        svg += `<rect x="${barX}" y="${y + 6}" width="${barMaxW}" height="14" rx="7" fill="${C.bg}" stroke="${C.line}" stroke-width="0.6"/>`;
+        svg += `<rect x="${barX}" y="${y + 6}" width="${barW}" height="14" rx="7" fill="${s.color}"><title>${_esc(s.label)}: ${s.value}</title></rect>`;
+        svg += `<text x="${W - valueW / 2}" y="${y + 16}" text-anchor="middle" fill="${C.tx}" font-size="11" font-weight="700">${s.value}</text>`;
+    });
+    svg += `</svg>`;
+    return svg;
+}
+
 async function repApp(me) {
-  $('#nav').hidden = true; $('#psel').hidden = true;
+  $('#nav').hidden = false; $('#psel').hidden = true;
   const conn = $('#conn'); conn.textContent = me.label || me.name; conn.className = 'pill ok';
   const hd = $('header h1'); if (hd) hd.lastChild.textContent = 'پنل نماینده';
   document.body.style.paddingBottom = 'calc(24px + env(safe-area-inset-bottom))';
@@ -941,21 +1049,13 @@ async function repApp(me) {
     document.querySelectorAll('.todaydetails').forEach(e => { e.textContent = summary.details || 'جزئیات برای تراکنش‌های جدید ثبت می‌شود.'; });
     return w;
   } catch (e) { balB.textContent = '—'; throw e; } };
-  const scrim = h('div', { class: 'scrim' }), drawer = h('aside', { class: 'drawer', 'aria-label': 'منو' });
-  const closeMenu = () => { drawer.classList.remove('on'); scrim.classList.remove('on'); };
-  const openMenu = () => { drawer.classList.add('on'); scrim.classList.add('on'); refreshBal().catch(() => {}); };
-  scrim.onclick = closeMenu;
+  /* منوی ثابت پایین (مثل پنل ادمین): ساخت · کاربران · داشبورد · کیف پول؛ هنگام باز شدن خودکار روی «کاربران» */
+  const RTABS = [['buy', 'create', 'ساخت'], ['users', 'users', 'کاربران'], ['dash', 'home', 'داشبورد'], ['wallet', 'wallet', 'کیف پول']];
   let cur = 'users';
   const views = {};
-  const items = [['buy', '➕', 'ساخت اکانت'], ['users', '👥', 'کاربران من'], ['wallet', '💳', 'کیف پول و افزایش موجودی']];
-  const menuBtns = items.map(([k, ic, t]) => { const b = h('button', { class: 'mi', type: 'button', 'data-k': k }, h('span', {}, ic), t); b.onclick = () => { closeMenu(); show(k); }; return b; });
-  const outB = h('button', { class: 'mi', type: 'button', style: 'color:var(--bad)' }, h('span', {}, '🚪'), 'خروج'); outB.onclick = () => $('#out').click();
-  drawer.append(h('div', { class: 'who' }, '👤 ' + (me.label || me.name)), h('div', { class: 'bal' }, h('span', {}, 'موجودی کیف پول'), balB), ...menuBtns, h('div', { class: 'sp' }), outB);
-  const show = k => { cur = k; menuBtns.forEach(b => b.classList.toggle('on', b.dataset.k === k)); window.scrollTo(0, 0); return views[k](); };
-  const menuBtn = h('button', { class: 'menubtn', type: 'button', 'aria-label': 'منو' });
-  menuBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>'; menuBtn.onclick = openMenu;
-  if (hd) hd.prepend(menuBtn);
-  document.body.append(scrim, drawer);
+  const drawNav = () => $('#nav').replaceChildren(...RTABS.map(([k, ic, t]) =>
+    h('button', { class: cur === k ? 'on' : '', type: 'button', onclick: () => show(k), 'aria-label': t }, svgIcon(ic), t)));
+  const show = k => { cur = k; drawNav(); window.scrollTo(0, 0); return views[k](); };
 
   views.users = showUsers; REP.setBal = b => { wallet.balance = b; balB.textContent = toman(b); document.querySelectorAll('.balval').forEach(e => { e.textContent = toman(b); }); refreshBal().catch(() => {}); }; REP.reload = () => load(false);
 
@@ -992,6 +1092,100 @@ async function repApp(me) {
     mount(head, h('div', { class: 'card' }, h('h2', {}, 'انتخاب تمپلت'), ...opts, field('نام کاربری (خودکار طبق شماره‌گذاری پنل)', uname), field('یادداشت', note), h('label', { class: 'chk paidchk', for: 'paidnew' }, paidNew, '💰 پرداخت شد (مشتری پول را داده است)'), go), out);
   };
 
+  views.dash = async () => {
+        mount(h('p', { class: 'hint' }, 'در حال بارگذاری داشبورد…'));
+        let d;
+        try { d = await api('/rep/dashboard'); }
+        catch (e) { return mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
+
+        const fa = n => (+n || 0).toLocaleString('fa-IR');
+        const toman = n => (+n || 0).toLocaleString('en-US') + ' تومان';
+        const shortToman = n => {
+            const v = +n || 0;
+            if (v >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+            if (v >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+            if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+            return String(v);
+        };
+        const persianDay = s => {
+            const p = String(s).split(' ');
+            return p.length >= 2 ? p[1].split('/')[2].replace(/^۰/, '') : String(s);
+        };
+
+        const kpiGrid = h('div', { class: 'stat', style: 'grid-template-columns:repeat(2,1fr);margin-bottom:12px' },
+            h('div', { style: '--c:var(--ac)' }, h('span', {}, '💳 موجودی'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:var(--fs-lg)' }, toman(d.balance))),
+            h('div', { style: '--c:var(--ok)' }, h('span', {}, '📈 فروش امروز'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:var(--fs-lg)' }, toman(d.today.total)), h('span', {}, fa(d.today.count) + ' سفارش')),
+            h('div', { style: '--c:var(--info)' }, h('span', {}, '📅 فروش ۳۰ روز'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:var(--fs-lg)' }, toman(d.month.total)), h('span', {}, fa(d.month.count) + ' سفارش')),
+            h('div', { style: '--c:var(--warn)' }, h('span', {}, '👥 کاربران'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:var(--fs-lg)' }, fa(d.total_users)))
+        );
+
+        const chart7Data = d.sales_7d.map(x => ({ label: String(x.date).split(' ')[0], value: x.total, shortValue: x.total > 0 ? shortToman(x.total) : '', title: x.date }));
+        const chart7Div = h('div', { style: 'margin:6px 0 2px' });
+        chart7Div.innerHTML = svgBarChart(chart7Data);
+        const card7 = h('div', { class: 'card' }, h('h2', {}, '📊 فروش ۷ روز اخیر'), chart7Div);
+
+        const chart30Data = d.sales_30d.map(x => ({ label: persianDay(x.date), value: x.total, title: x.date }));
+        const chart30Div = h('div', { style: 'margin:6px 0 2px' });
+        chart30Div.innerHTML = svgLineChart(chart30Data);
+        const card30 = h('div', { class: 'card' }, h('h2', {}, '📈 روند فروش ۳۰ روز'), chart30Div);
+
+        const COLORS = ['#8b7cff', '#4cc2ff', '#3ecf8e', '#f5a524', '#5aa9ff', '#f2706b', '#a3e635', '#fb7185'];
+        const tplTotal = d.templates.reduce((s, x) => s + x.count, 0);
+        const tplItems = d.templates.map((t, i) => Object.assign({}, t, { value: t.count, label: t.name, color: COLORS[i % COLORS.length] }));
+        let cardTpl;
+        if (tplItems.length) {
+            const donutWrap = h('div', { style: 'display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:8px' });
+            const donutDiv = h('div');
+            donutDiv.innerHTML = svgDonut(tplItems, { centerLabel: fa(tplTotal), sublabel: 'فروش' });
+            donutWrap.appendChild(donutDiv);
+            const legend = h('div', { style: 'flex:1;min-width:140px;font-size:var(--fs-sm)' });
+            tplItems.forEach(t => {
+                legend.appendChild(h('div', { style: 'display:flex;align-items:center;gap:6px;margin-bottom:6px' },
+                    h('span', { style: 'width:10px;height:10px;border-radius:3px;background:' + t.color + ';flex:none' }),
+                    h('span', { style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: t.name }, t.name),
+                    h('b', { style: 'color:var(--mu);flex:none' }, fa(t.count))
+                ));
+            });
+            donutWrap.appendChild(legend);
+            cardTpl = h('div', { class: 'card' }, h('h2', {}, '🎯 تمپلت‌های پرکاربرد (۳۰ روز)'), donutWrap);
+        } else {
+            cardTpl = h('div', { class: 'card' }, h('h2', {}, '🎯 تمپلت‌های پرکاربرد'), h('p', { class: 'hint' }, 'هنوز فروشی با جزئیات ثبت نشده.'));
+        }
+
+        const statusBody = h('div', {}, h('p', { class: 'hint' }, 'در حال بارگذاری وضعیت کاربران…'));
+        const cardStatus = h('div', { class: 'card' }, h('h2', {}, '👥 وضعیت کاربران'), statusBody);
+
+        const actions = h('div', { class: 'btns', style: 'margin-bottom:12px' },
+            h('button', { class: 'btn pri', type: 'button', onclick: () => show('buy') }, '➕ ساخت اکانت'),
+            h('button', { class: 'btn', type: 'button', onclick: () => show('users') }, '👥 کاربران'),
+            h('button', { class: 'btn', type: 'button', onclick: () => show('wallet') }, '💳 کیف پول')
+        );
+
+        mount(kpiGrid, card7, card30, cardTpl, cardStatus, actions);
+
+        try {
+            const s = await api('/rep/dashboard/user-stats');
+            const C2 = _chartColors();
+            const statusList = [
+                { label: 'فعال', value: s.status_stats.active, color: C2.ok },
+                { label: 'خام', value: s.status_stats.on_hold, color: C2.info },
+                { label: 'منقضی', value: s.status_stats.expired, color: C2.bad },
+                { label: 'محدود', value: s.status_stats.limited, color: C2.warn },
+                { label: 'غیرفعال', value: s.status_stats.disabled, color: C2.mu },
+            ].filter(x => x.value > 0);
+            if (statusList.length) {
+                const barsDiv = h('div', { style: 'margin-top:8px' });
+                barsDiv.innerHTML = svgStatusBars(statusList);
+                statusBody.replaceChildren(barsDiv);
+                if (s.sampled) statusBody.appendChild(h('p', { class: 'hint', style: 'margin-top:6px;font-size:var(--fs-xs)' }, 'تخمینی از ' + fa(s.total) + ' کاربر'));
+            } else {
+                statusBody.replaceChildren(h('p', { class: 'hint' }, 'هنوز کاربری به شما تخصیص داده نشده.'));
+            }
+        } catch (e) {
+            statusBody.replaceChildren(h('p', { class: 'hint' }, 'بارگذاری ممکن نشد.'));
+        }
+  };
+
   views.wallet = async () => {
     mount(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
     let w; try { w = await refreshBal(); } catch (e) { return mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
@@ -1002,14 +1196,7 @@ async function repApp(me) {
     const sendB = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' }, '📨 ارسال درخواست به ادمین');
     sendB.onclick = () => run(sendB, async () => { const v = mv(amt); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.'); await api('/rep/topup', 'POST', { amount: v, note: nt.value.trim() }); toast('✅ درخواست برای ادمین ارسال شد'); await views.wallet(); });
     const lgRow = e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('span', { style: 'text-align:end' }, h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))));
-    const sl = w.sales || [], td = sl[0] || { total: 0, count: 0 };
-    const fmtPlan = x => `${x.count} تا ${x.gb} گیگ${x.days ? ' · ' + (x.days % 30 === 0 ? (x.days / 30) + ' ماهه' : x.days + ' روزه') : ' · نامحدود زمانی'}`;
-    const todayBreakdown = (td.breakdown || []).map(x => h('div', { class: 'lg' }, h('span', {}, (x.action === 'renew' ? '🔄 تمدید: ' : x.action === 'next' ? '🔁 پلن بعدی: ' : '🆕 ساخت: ') + fmtPlan(x), x.template ? h('small', {}, x.template) : null)));
     mount(h('div', { class: 'card bigbal' }, h('span', {}, 'موجودی کیف پول'), h('b', {}, toman(w.balance))),
-      h('div', { class: 'card bigbal' }, h('span', {}, '📈 مجموع فروش امروز' + (td.count ? ' (' + td.count + ' سفارش)' : '')), h('b', {}, toman(td.total)),
-        h('small', { style: 'display:block;margin-top:7px;color:var(--mu)' }, `🆕 ساخت: ${td.new_count || 0} · 🔄 تمدید: ${td.renew_count || 0}`)),
-      todayBreakdown.length ? h('div', { class: 'card' }, h('h2', {}, 'جزئیات فروش امروز'), ...todayBreakdown) : null,
-      sl.length ? h('div', { class: 'card' }, h('h2', {}, 'فروش روزانه (۷ روز اخیر)'), ...sl.map(x => h('div', { class: 'lg' }, h('span', {}, x.date, h('small', {}, x.count + ' سفارش')), h('b', { dir: 'ltr' }, x.total.toLocaleString('en-US'))))) : null,
       h('div', { class: 'card' }, h('h2', {}, 'درخواست افزایش موجودی'), field('مبلغ', amt), field('توضیح', nt), sendB, h('p', { class: 'hint' }, 'بعد از واریز، درخواست را ثبت کنید؛ ادمین بررسی و کیف پول شما را شارژ می‌کند.')),
       w.topups.length ? h('div', { class: 'card' }, h('h2', {}, 'درخواست‌های من'), ...w.topups.map(t => h('div', { class: 'lg' }, h('span', {}, ST_FA[t.status], h('small', {}, new Date(t.ts * 1000).toLocaleString('fa-IR'))), h('b', { dir: 'ltr' }, t.amount.toLocaleString('en-US'))))) : null,
       w.log.length ? h('div', { class: 'card' }, h('h2', {}, 'تراکنش‌های اخیر'), ...w.log.map(lgRow)) : null);
