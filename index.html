@@ -32,7 +32,7 @@ header h1{font-size:var(--fs-md);font-weight:800;display:flex;align-items:center
 main{max-width:600px;margin:0 auto;padding:14px 14px 24px}
 nav{position:fixed;inset:auto 10px calc(10px + env(safe-area-inset-bottom)) 10px;z-index:6;max-width:580px;margin:0 auto;background:color-mix(in srgb,var(--s1) 88%,transparent);
   backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);
-  display:grid;grid-template-columns:repeat(5,1fr);gap:2px;padding:6px}
+  display:grid;grid-template-columns:repeat(var(--n,5),minmax(0,1fr));gap:2px;padding:6px}
 nav button{position:relative;background:none;border:0;color:var(--mu);font:inherit;font-size:var(--fs-xs);font-weight:600;padding:7px 0 6px;border-radius:16px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;transition:color .15s,background .15s}
 nav button svg{width:22px;height:22px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:transform .2s}
 nav button.on{color:var(--ac);background:linear-gradient(180deg,color-mix(in srgb,var(--ac) 17%,transparent),color-mix(in srgb,var(--ac) 6%,transparent))}
@@ -275,7 +275,9 @@ html[data-theme=sunset]{--bg:#0a1016;--s0:#0f1821;--s1:#121b24;--s2:#1a2632;--li
 .themesel{cursor:pointer;font:inherit;font-size:var(--fs-xs);width:auto!important;min-height:0!important;padding:3px 8px!important;border-radius:99px!important}
 
 /* ───────── استانداردسازی موبایل ───────── */
-html,body{max-width:100%;overflow-x:hidden}
+html,body{max-width:100%}body{overflow-x:clip}
+html:not(.desk) body{padding-bottom:env(safe-area-inset-bottom)}
+html:not(.desk) main::after{content:"";display:block;height:calc(104px + env(safe-area-inset-bottom))}
 img,svg,video{max-width:100%}
 header h1{min-width:0}.ttl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 code,.code{overflow-x:auto}
@@ -419,7 +421,7 @@ const svgIcon = k => { const w = document.createElement('span'); w.innerHTML = `
 const TABS = [['create', 'create', 'ساخت'], ['users', 'users', 'کاربران'], ['home', 'home', 'خانه'], ['tpl', 'tpl', 'تمپلت'], ['set', 'set', 'تنظیمات']];
 
 function renderNav() {
-  const nav = $('#nav'); nav.replaceChildren(...TABS.map(([k, ic, t]) =>
+  const nav = $('#nav'); nav.style.setProperty('--n', TABS.length); nav.replaceChildren(...TABS.map(([k, ic, t]) =>
     h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k), 'aria-label': t + (k === 'set' && S.pend ? ` (${S.pend} درخواست)` : '') }, svgIcon(ic), t,
       k === 'set' && S.pend ? h('i', { class: 'nbadge' }, S.pend > 99 ? '99+' : String(S.pend)) : null)));
 }
@@ -1053,8 +1055,8 @@ async function repApp(me) {
   const RTABS = [['buy', 'create', 'ساخت'], ['users', 'users', 'کاربران'], ['dash', 'home', 'داشبورد'], ['wallet', 'wallet', 'کیف پول']];
   let cur = 'users';
   const views = {};
-  const drawNav = () => $('#nav').replaceChildren(...RTABS.map(([k, ic, t]) =>
-    h('button', { class: cur === k ? 'on' : '', type: 'button', onclick: () => show(k), 'aria-label': t }, svgIcon(ic), t)));
+  const drawNav = () => { $('#nav').style.setProperty('--n', RTABS.length); $('#nav').replaceChildren(...RTABS.map(([k, ic, t]) =>
+    h('button', { class: cur === k ? 'on' : '', type: 'button', onclick: () => show(k), 'aria-label': t }, svgIcon(ic), t))); };
   const show = k => { cur = k; drawNav(); window.scrollTo(0, 0); return views[k](); };
 
   views.users = showUsers; REP.setBal = b => { wallet.balance = b; balB.textContent = toman(b); document.querySelectorAll('.balval').forEach(e => { e.textContent = toman(b); }); refreshBal().catch(() => {}); }; REP.reload = () => load(false);
@@ -1113,10 +1115,10 @@ async function repApp(me) {
         };
 
         const kpiGrid = h('div', { class: 'stat', style: 'grid-template-columns:repeat(2,1fr);margin-bottom:12px' },
-            h('div', { style: '--c:var(--ac)' }, h('span', {}, '💳 موجودی'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:var(--fs-lg)' }, toman(d.balance))),
-            h('div', { style: '--c:var(--ok)' }, h('span', {}, '📈 فروش امروز'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:var(--fs-lg)' }, toman(d.today.total)), h('span', {}, fa(d.today.count) + ' سفارش')),
-            h('div', { style: '--c:var(--info)' }, h('span', {}, '📅 فروش ۳۰ روز'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:var(--fs-lg)' }, toman(d.month.total)), h('span', {}, fa(d.month.count) + ' سفارش')),
-            h('div', { style: '--c:var(--warn)' }, h('span', {}, '👥 کاربران'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:var(--fs-lg)' }, fa(d.total_users)))
+            h('div', { style: '--c:var(--ac)' }, h('span', {}, '💳 موجودی'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:clamp(13px,4vw,17px);overflow-wrap:anywhere' }, toman(d.balance))),
+            h('div', { style: '--c:var(--ok)' }, h('span', {}, '📈 فروش امروز'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:clamp(13px,4vw,17px);overflow-wrap:anywhere' }, toman(d.today.total)), h('span', {}, fa(d.today.count) + ' سفارش')),
+            h('div', { style: '--c:var(--info)' }, h('span', {}, '📅 فروش ۳۰ روز'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:clamp(13px,4vw,17px);overflow-wrap:anywhere' }, toman(d.month.total)), h('span', {}, fa(d.month.count) + ' سفارش')),
+            h('div', { style: '--c:var(--warn)' }, h('span', {}, '👥 کاربران'), h('strong', { dir: 'ltr', style: 'text-align:right;font-size:clamp(13px,4vw,17px);overflow-wrap:anywhere' }, fa(d.total_users)))
         );
 
         const chart7Data = d.sales_7d.map(x => ({ label: String(x.date).split(' ')[0], value: x.total, shortValue: x.total > 0 ? shortToman(x.total) : '', title: x.date }));
@@ -1155,13 +1157,7 @@ async function repApp(me) {
         const statusBody = h('div', {}, h('p', { class: 'hint' }, 'در حال بارگذاری وضعیت کاربران…'));
         const cardStatus = h('div', { class: 'card' }, h('h2', {}, '👥 وضعیت کاربران'), statusBody);
 
-        const actions = h('div', { class: 'btns', style: 'margin-bottom:12px' },
-            h('button', { class: 'btn pri', type: 'button', onclick: () => show('buy') }, '➕ ساخت اکانت'),
-            h('button', { class: 'btn', type: 'button', onclick: () => show('users') }, '👥 کاربران'),
-            h('button', { class: 'btn', type: 'button', onclick: () => show('wallet') }, '💳 کیف پول')
-        );
-
-        mount(kpiGrid, card7, card30, cardTpl, cardStatus, actions);
+        mount(kpiGrid, card7, card30, cardTpl, cardStatus);
 
         try {
             const s = await api('/rep/dashboard/user-stats');
