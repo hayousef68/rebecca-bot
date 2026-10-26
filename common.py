@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import os
+import pickle
 import re
 import secrets
 import sys
@@ -418,8 +419,23 @@ def _normalize(data: dict) -> dict:
     return cfg
 
 
-def load_config() -> dict:
-    """کانفیگ را می‌خواند؛ تا وقتی فایل تغییر نکرده از کش استفاده می‌کند (بدون I/O اضافه)."""
+# لیست‌های سنگینِ فقط‌افزودنی: عنصرهایشان هیچ‌جا درجا تغییر نمی‌کند (فقط append یا جایگزینی کل لیست)، پس در کپی فقط خودِ لیست
+# کپی می‌شود. کپی عمیقِ ده‌ها هزار رکورد در هر درخواست باعث می‌شد وب‌پنل (به‌خصوص صفحه‌ی تنظیمات و لیست کاربران) کند شود.
+_HEAVY_LISTS = ("rep_sales", "wallet_income", "audit_log", "login_log")
+
+
+def _copy_cfg(d: dict) -> dict:
+    out = {}
+    for k, v in d.items():
+        if k in _HEAVY_LISTS and isinstance(v, list):
+            out[k] = list(v)
+        else:
+            out[k] = pickle.loads(pickle.dumps(v, pickle.HIGHEST_PROTOCOL))      # چندین برابر سریع‌تر از copy.deepcopy روی داده‌ی JSON
+    return out
+
+
+def _cached_cfg() -> dict:
+    """کش را (در صورت تغییر فایل) تازه می‌کند و خودِ شیء کش را برمی‌گرداند (بدون کپی)."""
     with _lock:
         try:
             st = os.stat(CONFIG_FILE)
@@ -436,7 +452,18 @@ def load_config() -> dict:
                     log.error("config.json قابل خواندن نیست: %s", e)
             _cache["data"] = _normalize(data)
             _cache["sig"] = sig
-        return copy.deepcopy(_cache["data"])
+        return _cache["data"]
+
+
+def load_config_ro() -> dict:
+    """نسخه‌ی فقط‌خواندنی (بدون کپی). نتیجه (و زیرمجموعه‌هایش) را هرگز تغییر ندهید؛ فقط برای خواندن یا ساختن پاسخ."""
+    return _cached_cfg()
+
+
+def load_config() -> dict:
+    """کانفیگ را می‌خواند؛ تا وقتی فایل تغییر نکرده از کش استفاده می‌کند (بدون I/O اضافه). خروجی کپیِ قابل‌تغییر است."""
+    with _lock:
+        return _copy_cfg(_cached_cfg())
 
 
 def save_config(cfg: dict) -> None:
@@ -446,7 +473,7 @@ def save_config(cfg: dict) -> None:
         fd, tmp = tempfile.mkstemp(dir=d, prefix=".cfg-")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=2, ensure_ascii=False)
+                f.write(json.dumps(cfg, ensure_ascii=False, separators=(",", ":")))     # فشرده و یک‌جا: چندین برابر سریع‌تر از json.dump با indent
                 f.flush()
                 os.fsync(f.fileno())          # قبل از جایگزینی روی دیسک بنشیند (قطع برق وسط تراکنش مالی)
             os.chmod(tmp, 0o600)
@@ -518,7 +545,7 @@ def update_config(mutator) -> dict:
         cfg = load_config()
         mutator(cfg)
         save_config(cfg)
-        return load_config()
+        return cfg          # همان نسخه‌ی تغییرداده‌شده؛ خواندن دوباره‌ی کل فایل (و نرمال‌سازی آن) لازم نیست
 
 
 # ───────────────────────────── تمدید «واریز نشده» ─────────────────────────────
@@ -560,7 +587,7 @@ def unpaid_map(pid: str) -> dict:
 
 
 def is_admin(uid: int) -> bool:
-    return uid in load_config()["admin_ids"]
+    return uid in load_config_ro()["admin_ids"]
 
 
 # ─────────────────────── رمز وب‌پنل (PBKDF2 + کش) ───────────────────────
@@ -574,11 +601,11 @@ _auth_ok: dict[str, float] = {}
 
 
 def web_configured() -> bool:
-    return bool(load_config()["web"].get("hash"))
+    return bool(load_config_ro()["web"].get("hash"))
 
 
 def check_web_login(user: str, pw: str) -> bool:
-    w = load_config()["web"]
+    w = load_config_ro()["web"]
     if not w.get("hash"):
         return False
     key = hashlib.sha256(f"{user}\0{pw}\0{w['hash']}".encode()).hexdigest()
@@ -633,7 +660,7 @@ def _rec_hash(code: str) -> str:
 
 
 def totp_enabled() -> bool:
-    return bool(load_config()["web"].get("totp"))
+    return bool(load_config_ro()["web"].get("totp"))
 
 
 def totp_verify_use(code: str) -> bool:
@@ -722,7 +749,7 @@ def check_pre_token(tok: str) -> tuple[str, bool] | None:
 
 
 def wallet_code_threshold() -> int:
-    return int(load_config()["security"].get("wallet_code_threshold", 2000000))
+    return int(load_config_ro()["security"].get("wallet_code_threshold", 2000000))
 
 
 def code_needed_for(amount: int) -> bool:
@@ -819,7 +846,7 @@ SESSION_LONG = 30 * 86400
 
 def _session_key() -> bytes | None:
     """کلید امضا = راز تصادفی + هش رمز؛ با عوض شدن رمز همه‌ی نشست‌های قبلی باطل می‌شوند."""
-    cfg = load_config()
+    cfg = load_config_ro()
     w = cfg["web"]
     if not w.get("hash"):
         return None
@@ -853,7 +880,7 @@ def check_session(token: str) -> str | None:
         if key is None or int(exp) < time.time():
             return None
         good = hmac.new(key, f"{user}|{exp}".encode(), hashlib.sha256).hexdigest()
-        if hmac.compare_digest(sig, good) and secrets.compare_digest(user.encode(), str(load_config()["web"].get("user", "admin")).encode()):
+        if hmac.compare_digest(sig, good) and secrets.compare_digest(user.encode(), str(load_config_ro()["web"].get("user", "admin")).encode()):
             return user
     except (ValueError, AttributeError):
         pass
@@ -1119,9 +1146,9 @@ def audit_event(actor: str, action: str, target: str = "", details: str = "", am
     try:
         actor = str(actor or "نامشخص")
         if actor == "ادمین وب‌پنل":
-            actor = f"ادمین وب‌پنل ({load_config().get('web', {}).get('user', 'admin')})"
+            actor = f"ادمین وب‌پنل ({load_config_ro().get('web', {}).get('user', 'admin')})"
         elif actor in ("نماینده", "عملیات نماینده"):
-            rep = load_config().get("reps", {}).get(str(target), {})
+            rep = load_config_ro().get("reps", {}).get(str(target), {})
             if rep:
                 actor = f"نماینده: {rep.get('name', target)}"
         rec = {"ts": int(time.time()), "actor": actor[:80], "action": str(action or "تغییر")[:120],
@@ -1253,7 +1280,7 @@ def wallet_adjust(rid: str, amount: int, kind: str = "charge", note: str = "", s
 
 
 def wallet_tx_get(txid: str) -> dict | None:
-    t = _tx_find(load_config(), txid)
+    t = _tx_find(load_config_ro(), txid)
     return dict(t) if t else None
 
 
@@ -1367,7 +1394,7 @@ def fmt_bw(size) -> str:
 
 def pick_default_service(services: list[dict], group: bool) -> int | None:
     """سرویس پیش‌فرض: ساخت تکی ← «ms» ، ساخت گروهی ← «hamkari». اگر پیدا نشد None."""
-    cfg = load_config().get("sales", {})
+    cfg = load_config_ro().get("sales", {})
     ham_ids = {int(x) for x in cfg.get("hamkari_service_ids", []) if str(x).lstrip("-").isdigit()}
     ham_names = [str(n).lower() for n in cfg.get("hamkari_service_names", ["hamkari"]) if n] or ["hamkari"]
 
@@ -1682,7 +1709,7 @@ _clients: dict[str, RebeccaClient] = {}
 
 def get_api(pid: str | None = None) -> RebeccaClient:
     """کلاینت مخصوص هر پنل (توکن و نشست جدا). بدون pid یعنی پنل فعال."""
-    pid = pid or load_config()["active_panel"]
+    pid = pid or load_config_ro()["active_panel"]
     if pid not in _clients:
         _clients[pid] = RebeccaClient(pid)
     _clients[pid]._sync()  # نام و آدرس‌ها همیشه با config هماهنگ باشند
@@ -1825,7 +1852,7 @@ def next_plans_view(u: dict, mode: str | None = None) -> list[dict]:
     """پلن‌های بعدی برای نمایش: [{idx, gb, days, add_remaining}] به ترتیب اجرا.
     در ربکا، expire پلن یک «تاریخ مطلق» است و خودِ پنل «روز» را برابر (expire − همین الان) نشان می‌دهد.
     mode=duration (پیش‌فرض): روز = فاصله‌ی expire تا همین الان (دقیقاً مثل پنل) | chain: فاصله تا پلن قبلی / انقضای فعلی."""
-    mode = mode if mode in ("duration", "chain") else load_config()["next_plan_mode"]
+    mode = mode if mode in ("duration", "chain") else load_config_ro()["next_plan_mode"]
     legacy = "next_plans" not in u
     now, base, out = time.time(), _plan_base(u), []
     for i, p in enumerate(_raw_plans(u)):
@@ -1848,7 +1875,7 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
     بعد از نوشتن دوباره می‌خواند تا مطمئن شود پنل واقعاً پذیرفته است."""
     ph = api.upath(username)
     u = await api.request("GET", ph)
-    mode = mode if mode in ("duration", "chain") else load_config()["next_plan_mode"]
+    mode = mode if mode in ("duration", "chain") else load_config_ro()["next_plan_mode"]
     # ربکا هنگام اجرای پلن، expire را مستقیماً روی کاربر می‌نویسد (تاریخ مطلق) و start_on_first_connect فقط شرط اجراست، نه «مدت».
     # پس duration = «از همین الان + N روز» (پنل هم همان N را نشان می‌دهد) | chain = بعد از پایان اشتراک فعلی + N روز
     raw, view = _raw_plans(u), next_plans_view(u, mode)
@@ -1895,7 +1922,7 @@ async def rebase_plans(api, username: str, before: dict):
     تا بعد از تمدید/تغییر، پلن بعدی عقب‌تر از انقضای جدید نیفتد. اگر چیزی عوض نشد None برمی‌گرداند."""
     raw = _raw_plans(before)
     legacy = "next_plans" not in before
-    if load_config()["next_plan_mode"] != "chain":      # duration: پلن «از همین الان + N روز» است و با تمدید جابه‌جا نمی‌شود
+    if load_config_ro()["next_plan_mode"] != "chain":      # duration: پلن «از همین الان + N روز» است و با تمدید جابه‌جا نمی‌شود
         return None
     if legacy or not any(not _is_dur(p) and int(p.get("expire") or 0) >= 10 ** 9 for p in raw):
         return None
@@ -1966,7 +1993,7 @@ def _undo_write(items: list[dict]) -> None:
 def undo_snapshot(pid: str, username: str, before: dict, action: str = "renew") -> None:
     """وضعیت کاربر را «قبل از» تمدید/ریست در فایل محلی نگه می‌دارد. هیچ درخواستی به پنل نمی‌زند و هیچ‌وقت خطا نمی‌دهد."""
     try:
-        uc = load_config()["undo"]
+        uc = load_config_ro()["undo"]
         if not uc["enabled"] or not isinstance(before, dict):
             return
         now = time.time()
@@ -1988,7 +2015,7 @@ def undo_snapshot(pid: str, username: str, before: dict, action: str = "renew") 
 def undo_latest(pid: str, username: str) -> dict | None:
     """آخرین نقطه‌ی برگشت این کاربر (یا None)."""
     try:
-        cut = time.time() - load_config()["undo"]["days"] * 86400
+        cut = time.time() - load_config_ro()["undo"]["days"] * 86400
         for x in reversed(_undo_read()):
             if x.get("u") == username and str(x.get("pid", "")) == str(pid or "") and float(x.get("ts", 0)) >= cut:
                 return x
@@ -2127,7 +2154,7 @@ async def bulk_apply(api, names, action: str, *, service_id=None, tpl=None, conc
                 elif action == "renew":
                     await renew_user(api, n, tpl)
                 elif action == "reset":
-                    if len(names) <= load_config()["undo"]["bulk_max"]:      # ریست دسته‌ای بزرگ: عکس‌برداری نمی‌کنیم تا پنل سنگین نشود
+                    if len(names) <= load_config_ro()["undo"]["bulk_max"]:      # ریست دسته‌ای بزرگ: عکس‌برداری نمی‌کنیم تا پنل سنگین نشود
                         await asyncio.to_thread(undo_snapshot, getattr(api, "pid", ""), n, await api.request("GET", p), "reset")
                     await api.request("POST", p + "/reset")
                 elif action in ("disable", "enable"):
@@ -2267,28 +2294,4 @@ def _cli(argv):
             cfg["web_port"] = a.port
         if a.user:
             if not re.fullmatch(r"[A-Za-z0-9_.@-]{3,32}", a.user):
-                sys.exit("نام کاربری فقط حروف انگلیسی/عدد/_.-@ و ۳ تا ۳۲ کاراکتر.")
-            cfg["web"]["user"] = a.user
-        if env_pw or not cfg["web"].get("hash"):
-            if env_pw and len(env_pw) < 8:
-                sys.exit("رمز باید حداقل ۸ کاراکتر باشد.")
-            pw = env_pw or secrets.token_urlsafe(12)
-            cfg["web"].update(hash_password(pw))
-            cfg["web"]["secret"] = secrets.token_hex(32)
-            if not cfg["web"].get("user"):
-                cfg["web"]["user"] = "admin"
-            if not env_pw:
-                out["WEB_PASSWORD"] = pw
-    else:
-        pw = a.password or env_pw or secrets.token_urlsafe(12)
-        cfg["web"].update(hash_password(pw))
-        cfg["web"]["secret"] = secrets.token_hex(32)
-        out["WEB_PASSWORD"] = pw
-    save_config(cfg)
-    out.update(WEB_USER=cfg["web"].get("user", "admin"), WEB_PORT=cfg["web_port"])
-    for k, v in out.items():
-        print(f"{k}={v}")
-
-
-if __name__ == "__main__":
-    _cli(sys.argv[1:])
+                sys.exit("نام کاربری فقط حروف انگلیسی/عدد/_.-@ و ۳
