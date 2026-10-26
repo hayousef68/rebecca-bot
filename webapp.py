@@ -33,6 +33,18 @@ _login_cache = {"mtime": 0.0, "data": ""}
 COOKIE = "rb_session"
 COOKIE_REP = "rb_rep"
 _bg: set = set()
+
+
+def _audit(*a, **k) -> None:
+    """ثبت لاگ فعالیت بدون بلوکه‌کردن وب‌پنل: ذخیره‌ی config (کپی + نوشتن + fsync) در یک نخ جدا انجام می‌شود. خارج از حلقه‌ی رویداد مستقیم ثبت می‌شود."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        C.audit_event(*a, **k)
+        return
+    t = loop.create_task(asyncio.to_thread(C.audit_event, *a, **k))
+    _bg.add(t)
+    t.add_done_callback(_bg.discard)
 _bot = {"token": None, "obj": None}
 
 
@@ -174,7 +186,7 @@ async def value_error(_req, exc: ValueError):
 
 def P(panel: str | None = Query(None, max_length=20)) -> RebeccaClient:
     """کلاینت پنل انتخاب‌شده (?panel=p2)؛ بدون آن پنل فعال."""
-    cfg = load_config()
+    cfg = C.load_config_ro()
     pid = panel or cfg["active_panel"]
     if not get_panel(cfg, pid):
         raise HTTPException(404, "پنل پیدا نشد؛ از تب تنظیمات یک پنل اضافه کنید.")
@@ -368,7 +380,7 @@ def _panels_view(cfg):
 
 @app.get("/api/state", dependencies=[Depends(guard)])
 async def state():
-    cfg = load_config()
+    cfg = C.load_config_ro()
     return {
         "panels": _panels_view(cfg), "active_panel": cfg["active_panel"],
         "bot": bool(cfg["bot_token"] and cfg["admin_ids"]),
@@ -500,7 +512,7 @@ class SalesReq(BaseModel):
 
 @app.get("/api/sales/settings", dependencies=[Depends(guard)])
 async def sales_settings_get():
-    sc = load_config()["sales"]
+    sc = C.load_config_ro()["sales"]
     return {"hamkari_per_gb": sc["hamkari_per_gb"], "buy_per_tb": sc.get("buy_per_tb", 750000),
             "hamkari_usage_multiplier": sc.get("hamkari_usage_multiplier", 1.5),
             "hamkari_multiplier_enabled": sc.get("hamkari_multiplier_enabled", True),
@@ -740,7 +752,7 @@ async def rep_note(r: RepNoteReq, rep=Depends(rep_guard)):
     except ValueError as e:
         raise HTTPException(400, str(e))
     rep_name = cfg.get("reps", {}).get(rid, {}).get("name", rid)
-    C.audit_event(f"نماینده: {rep_name}", "تغییر یادداشت کاربر", r.username, note)
+    _audit(f"نماینده: {rep_name}", "تغییر یادداشت کاربر", r.username, note)
     return {"ok": True, "note": note}
 
 
@@ -763,7 +775,7 @@ async def rep_paid(r: RepPaidReq, rep=Depends(rep_guard)):
     except ValueError as e:
         raise HTTPException(400, str(e))
     rep_name = cfg.get("reps", {}).get(rid, {}).get("name", rid)
-    C.audit_event(f"نماینده: {rep_name}", "تغییر وضعیت پرداخت مشتری", r.username, "پرداخت شد" if paid else "پرداخت نشده")
+    _audit(f"نماینده: {rep_name}", "تغییر وضعیت پرداخت مشتری", r.username, "پرداخت شد" if paid else "پرداخت نشده")
     return {"ok": True, "paid": paid}
 
 
@@ -789,7 +801,7 @@ async def rep_status(r: RepStatusReq, rep=Depends(rep_guard)):
     if r.enabled:                                                  # فعال‌سازی دستی ← شمارش معکوس «واریز نشده»ی قبلی لغو شود
         await asyncio.to_thread(C.unpaid_clear, pid, r.username)
     rep_name = cfg.get("reps", {}).get(rid, {}).get("name", rid)
-    C.audit_event(f"نماینده: {rep_name}", "تغییر وضعیت اشتراک", r.username, "فعال" if r.enabled else "غیرفعال")
+    _audit(f"نماینده: {rep_name}", "تغییر وضعیت اشتراک", r.username, "فعال" if r.enabled else "غیرفعال")
     return {"ok": True, "status": _slim_rep(u, api)["status"]}
 
 
@@ -1042,10 +1054,10 @@ async def _rep_buy(r: RepBuyReq, rid: str, txid: str):
     if r.paid:
         try:
             paid = await asyncio.to_thread(C.set_rep_paid, rid, pid, uname, True)
-            C.audit_event(f"نماینده: {rp['label'] or rp['name']}", "تغییر وضعیت پرداخت مشتری", uname, "پرداخت شد (هنگام ساخت)")
+            _audit(f"نماینده: {rp['label'] or rp['name']}", "تغییر وضعیت پرداخت مشتری", uname, "پرداخت شد (هنگام ساخت)")
         except Exception:  # noqa: BLE001
             log.exception("set paid on buy (%s)", uname)
-    bal = load_config()["reps"][rid]["balance"]
+    bal = C.load_config_ro()["reps"][rid]["balance"]
     result = {"ok": True, "username": uname, "sub": results[0]["sub"], "balance": bal, "gb": tpl["gb"], "days": tpl["days"], "paid": paid}
     _idem_put(txid, result)
     try:                                                               # اعلان‌ها بعد از ثبت نتیجه؛ خطایشان نباید جواب موفق را خراب کند
@@ -1160,7 +1172,7 @@ async def rep_renew(r: RepRenewReq, request: Request, rep=Depends(rep_guard)):
             await asyncio.to_thread(C.unpaid_clear, pid, r.username)
         except Exception:  # noqa: BLE001
             log.exception("unpaid_clear")
-        bal = load_config()["reps"][rid]["balance"]
+        bal = C.load_config_ro()["reps"][rid]["balance"]
         result = {"ok": True, "balance": bal, "user": _slim_rep(res, api)}
         _idem_put(txid, result)
         try:
@@ -1266,7 +1278,7 @@ async def rep_next_plan(r: RepNextPlanReq, request: Request, rep=Depends(rep_gua
             await asyncio.to_thread(C.wallet_tx_mark, txid, "done", r.username)
         await _hide_from_sales(r.username, t_start)
         await asyncio.to_thread(C.hist_add_many, [{"pid": getattr(api, "pid", ""), "u": r.username, "k": "next", "gb": gb, "days": days}])
-        bal = load_config()["reps"][rid]["balance"]
+        bal = C.load_config_ro()["reps"][rid]["balance"]
         result = {"ok": True, "balance": bal, "next_plans": [{"gb": x["gb"], "days": x["days"]} for x in C.next_plans_view(res or {})]}
         _idem_put(txid, result)
         try:
@@ -1287,7 +1299,7 @@ async def reps_next_plan_access(rid: str, r: RepNextAccessReq):
         v = await asyncio.to_thread(C.set_rep_next_plan, rid, r.enabled)
     except ValueError as e:
         raise HTTPException(404, str(e))
-    C.audit_event("ادمین وب‌پنل", "دسترسی پلن بعدی نماینده", rid, "فعال شد" if v else "غیرفعال شد")
+    _audit("ادمین وب‌پنل", "دسترسی پلن بعدی نماینده", rid, "فعال شد" if v else "غیرفعال شد")
     return {"ok": True, "next_plan": v}
 
 
@@ -1308,7 +1320,7 @@ async def rep_revoke(r: RepRevokeReq, rep=Depends(rep_guard)):
     if not api.is_configured():
         raise HTTPException(502, "پنل در دسترس نیست.")
     u = await api.request("POST", api.upath(r.username) + "/revoke_sub")
-    C.audit_event(f"نماینده: {cfg.get('reps', {}).get(rid, {}).get('name', rid)}", "تغییر لینک اشتراک کاربر", r.username, "لینک قبلی از کار افتاد", cat="user")
+    _audit(f"نماینده: {cfg.get('reps', {}).get(rid, {}).get('name', rid)}", "تغییر لینک اشتراک کاربر", r.username, "لینک قبلی از کار افتاد", cat="user")
     return {"ok": True, "sub": _slim_rep(u, api)["sub"]}
 
 
@@ -1349,7 +1361,7 @@ def _rep_pid(panel: str | None) -> str:
 
 @app.get("/api/reps", dependencies=[Depends(guard)])
 async def reps_list():
-    cfg = load_config()
+    cfg = C.load_config_ro()
     cnt: dict[str, int] = {}
     for m in cfg["rep_users"].values():
         for r in m.values():
@@ -1363,7 +1375,7 @@ async def reps_list():
 @app.get("/api/topups/pending", dependencies=[Depends(guard)])
 async def topups_pending():
     """درخواست‌های افزایش موجودی در انتظار؛ سبک و مناسب polling برای اعلان بالای صفحه و عدد تب تنظیمات."""
-    cfg = load_config()
+    cfg = C.load_config_ro()
     items = [{"id": t["id"], "rid": t["rid"], "rep": (cfg["reps"].get(t["rid"], {}).get("label") or cfg["reps"].get(t["rid"], {}).get("name") or t["rid"]),
               "amount": t.get("amount", 0), "ts": t.get("ts", 0)} for t in cfg["topups"] if t.get("status") == "pending"]
     return {"count": len(items), "items": items[-20:]}
@@ -1372,14 +1384,14 @@ async def topups_pending():
 @app.post("/api/reps", dependencies=[Depends(guard)])
 async def reps_create(r: RepCreateReq):
     result = await asyncio.to_thread(C.create_rep, r.name, r.password, r.label)
-    C.audit_event("ادمین وب‌پنل", "ساخت نماینده", r.name, f"نام نمایشی: {r.label}")
+    _audit("ادمین وب‌پنل", "ساخت نماینده", r.name, f"نام نمایشی: {r.label}")
     return result
 
 
 @app.post("/api/reps/{rid}/password", dependencies=[Depends(guard)])
 async def reps_password(rid: str, r: RepPwReq):
     result = await asyncio.to_thread(C.reset_rep_password, rid, r.password)
-    C.audit_event("ادمین وب‌پنل", "تغییر رمز نماینده", rid, "رمز بازنشانی شد؛ مقدار رمز ثبت نمی‌شود")
+    _audit("ادمین وب‌پنل", "تغییر رمز نماینده", rid, "رمز بازنشانی شد؛ مقدار رمز ثبت نمی‌شود")
     _bg_notify(f"🔑 رمز نماینده <code>{C.esc(rid)}</code> توسط ادمین بازنشانی شد.")
     return {"password": result}
 
@@ -1387,7 +1399,7 @@ async def reps_password(rid: str, r: RepPwReq):
 @app.post("/api/reps/{rid}/block", dependencies=[Depends(guard)])
 async def reps_block(rid: str, r: RepBlockReq):
     await asyncio.to_thread(C.set_rep_blocked, rid, r.blocked)
-    C.audit_event("ادمین وب‌پنل", "تغییر وضعیت نماینده", rid, "مسدود" if r.blocked else "رفع مسدودی")
+    _audit("ادمین وب‌پنل", "تغییر وضعیت نماینده", rid, "مسدود" if r.blocked else "رفع مسدودی")
     return {"ok": True}
 
 
@@ -1402,7 +1414,7 @@ async def reps_unlock(rid: str):
 async def reps_delete(rid: str):
     cfg_before = load_config(); rep_name = cfg_before.get("reps", {}).get(rid, {}).get("name", rid)
     await asyncio.to_thread(C.delete_rep, rid)
-    C.audit_event("ادمین وب‌پنل", "حذف نماینده", rep_name, "نماینده و ارتباط‌های ثبت‌شده حذف شدند")
+    _audit("ادمین وب‌پنل", "حذف نماینده", rep_name, "نماینده و ارتباط‌های ثبت‌شده حذف شدند")
     return {"ok": True}
 
 
@@ -1431,7 +1443,7 @@ async def _pw_gate(request: Request, password: str) -> str:
     recent = [t for t in _fails.get(ip, []) if now - t < 300]
     if len(recent) >= 5:
         raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
-    user = str(load_config()["web"].get("user", "admin"))
+    user = str(C.load_config_ro()["web"].get("user", "admin"))
     if not C.check_web_login(user, password):
         _fail_hit(ip, recent, now, user)
         await _log_login(ip, user, False, "bad-password-op")
@@ -1460,7 +1472,7 @@ class SecuritySettingsReq(BaseModel):
 
 @app.get("/api/security", dependencies=[Depends(guard)])
 async def security_get(request: Request):
-    cfg = load_config()
+    cfg = C.load_config_ro()
     now = time.time()
     lg = cfg.get("login_log", [])
     return {"totp": C.totp_enabled(), "threshold": C.wallet_code_threshold(), "https": request.url.scheme == "https",
@@ -1483,9 +1495,9 @@ async def twofa_confirm(r: TwoFaConfirmReq, request: Request):
         codes = await asyncio.to_thread(C.totp_confirm, r.code)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    C.audit_event("ادمین وب‌پنل", "فعال‌سازی ورود دومرحله‌ای", "", "کدهای بازیابی صادر شد")
+    _audit("ادمین وب‌پنل", "فعال‌سازی ورود دومرحله‌ای", "", "کدهای بازیابی صادر شد")
     _bg_notify("🛡 ورود دومرحله‌ای (2FA) برای وب‌پنل فعال شد.")
-    user = str(load_config()["web"].get("user", "admin"))
+    user = str(C.load_config_ro()["web"].get("user", "admin"))
     tok, ttl = C.make_session(user)                       # کلید نشست عوض شده؛ همین مرورگر وارد بماند
     return _admin_cookie(JSONResponse({"ok": True, "codes": codes}), tok, ttl, request.url.scheme == "https")
 
@@ -1495,7 +1507,7 @@ async def twofa_disable(r: TwoFaDisableReq, request: Request):
     await _pw_gate(request, r.password)
     await _gate_code(request, r.code, None, "خاموش کردن ورود دومرحله‌ای", always=True)
     await asyncio.to_thread(C.totp_disable)
-    C.audit_event("ادمین وب‌پنل", "خاموش‌کردن ورود دومرحله‌ای", "", "")
+    _audit("ادمین وب‌پنل", "خاموش‌کردن ورود دومرحله‌ای", "", "")
     _bg_notify("⚠️ ورود دومرحله‌ای (2FA) وب‌پنل <b>خاموش</b> شد.")
     return {"ok": True}
 
@@ -1504,7 +1516,7 @@ async def twofa_disable(r: TwoFaDisableReq, request: Request):
 async def security_settings(r: SecuritySettingsReq, request: Request):
     await _gate_code(request, r.code, None, "تغییر آستانه‌ی کد برای عملیات مالی", always=True)
     await asyncio.to_thread(lambda: update_config(lambda c: c["security"].__setitem__("wallet_code_threshold", int(r.wallet_code_threshold))))
-    C.audit_event("ادمین وب‌پنل", "تغییر آستانه‌ی کد 2FA", "", f"{r.wallet_code_threshold:,} تومان")
+    _audit("ادمین وب‌پنل", "تغییر آستانه‌ی کد 2FA", "", f"{r.wallet_code_threshold:,} تومان")
     return {"ok": True}
 
 
@@ -1531,7 +1543,7 @@ async def reps_wallet(rid: str, r: WalletReq, request: Request):
     b = w["balance"]
     if not w.get("dup"):
         try:                                                     # هر شارژ/کسر دستی ادمین ← هشدار تلگرام (اگر کسی پنل را هک کند فوراً دیده می‌شود)
-            _rp = load_config()["reps"].get(rid, {})
+            _rp = C.load_config_ro()["reps"].get(rid, {})
             _bg_notify(f"{'➕ شارژ' if r.amount > 0 else '➖ کسر'} <b>دستیِ کیف پول</b>\nنماینده: <b>{C.esc(_rp.get('label') or _rp.get('name') or rid)}</b>\n"
                        f"مبلغ: <b>{abs(r.amount):,}</b> تومان\nموجودی جدید: {b:,} تومان\nIP: <code>{C.esc(_client_ip(request))}</code>")
         except Exception:  # noqa: BLE001
@@ -1550,7 +1562,7 @@ class RepTplsReq(BaseModel):
 @app.post("/api/reps/{rid}/templates", dependencies=[Depends(guard)])
 async def reps_templates(rid: str, r: RepTplsReq):
     result = await asyncio.to_thread(C.set_rep_templates, rid, r.names)
-    C.audit_event("ادمین وب‌پنل", "تغییر تمپلت‌های نماینده", rid, ", ".join(result))
+    _audit("ادمین وب‌پنل", "تغییر تمپلت‌های نماینده", rid, ", ".join(result))
     return {"ok": True, "tpls": result}
 
 
@@ -1566,7 +1578,7 @@ async def reps_panel(rid: str, r: RepPanelReq):
     if r.panel and not get_panel(cfg, r.panel):
         raise HTTPException(404, "پنل پیدا نشد.")
     update_config(lambda c: c["reps"][rid].__setitem__("panel", r.panel))
-    C.audit_event("ادمین وب‌پنل", "تغییر پنل نماینده", rid, f"پنل: {r.panel or 'پنل فعال'}")
+    _audit("ادمین وب‌پنل", "تغییر پنل نماینده", rid, f"پنل: {r.panel or 'پنل فعال'}")
     return {"ok": True}
 
 
@@ -1603,7 +1615,7 @@ async def reps_assign(rid: str, r: RepSpecReq, panel: str | None = Query(None, m
     if not names:
         raise HTTPException(400, "نام کاربری یا بازه را وارد کنید.")
     n = await asyncio.to_thread(C.assign_users, rid, _rep_pid(panel), names)
-    C.audit_event("ادمین وب‌پنل", "افزودن کاربران به نماینده", rid, f"پنل: {_rep_pid(panel)}؛ تعداد: {n}؛ کاربران: {', '.join(names[:30])}")
+    _audit("ادمین وب‌پنل", "افزودن کاربران به نماینده", rid, f"پنل: {_rep_pid(panel)}؛ تعداد: {n}؛ کاربران: {', '.join(names[:30])}")
     return {"added": n}
 
 
@@ -1613,7 +1625,7 @@ async def reps_unassign(rid: str, r: RepSpecReq, panel: str | None = Query(None,
     if not names:
         raise HTTPException(400, "نام کاربری یا بازه را وارد کنید.")
     n = await asyncio.to_thread(C.unassign_users, rid, _rep_pid(panel), names)
-    C.audit_event("ادمین وب‌پنل", "حذف کاربران از نماینده", rid, f"پنل: {_rep_pid(panel)}؛ تعداد: {n}؛ کاربران: {', '.join(names[:30])}")
+    _audit("ادمین وب‌پنل", "حذف کاربران از نماینده", rid, f"پنل: {_rep_pid(panel)}؛ تعداد: {n}؛ کاربران: {', '.join(names[:30])}")
     return {"removed": n}
 
 
@@ -1625,7 +1637,7 @@ def _slim(u: dict, api, pend: dict | None = None) -> dict:
     username = u.get("username") or ""
     # در پنل ادمین، مالکیت کاربران ساخته‌شده توسط نماینده را از نگاشت محلی می‌خوانیم.
     # این فیلد فقط در پاسخ مدیریتی استفاده می‌شود؛ پاسخ نماینده در _slim_rep آن را فیلتر می‌کند.
-    cfg = C.load_config()
+    cfg = C.load_config_ro()
     rid = C.rep_owner(cfg, str(getattr(api, "pid", "")), username)
     rep = cfg.get("reps", {}).get(rid, {}) if rid else {}
     rep_owner_label = (rep.get("label") or rep.get("name") or "").strip()
@@ -1834,7 +1846,7 @@ async def user_undo(uname: str, api: RebeccaClient = Depends(P)):
 
 def _aud(action: str, target: str = "", details: str = "", cat: str = "user") -> None:
     """ثبت یک تغییر ادمین وب‌پنل در لاگ فعالیت (هیچ‌وقت خطا نمی‌دهد)."""
-    C.audit_event("ادمین وب‌پنل", action, target, details, cat=cat)
+    _audit("ادمین وب‌پنل", action, target, details, cat=cat)
 
 
 def _created_ts(raw: dict) -> float:
@@ -2001,7 +2013,7 @@ def _mask(tok: str) -> str:
 
 @app.get("/api/settings", dependencies=[Depends(guard)])
 async def settings_get():
-    c = load_config()
+    c = C.load_config_ro()
     panels = [{"id": p["id"], "name": p["name"], "panel_url": p["panel_url"], "sub_url": p["sub_url"], "username": p["username"],
                "has_password": bool(p["password"]), "verify_ssl": p["verify_ssl"]} for p in c["panels"]]
     return {"panels": panels, "active_panel": c["active_panel"], "bot_token": _mask(c["bot_token"]),
@@ -2037,7 +2049,7 @@ async def settings_save(r: SettingsReq, request: Request):
         await _pw_gate(request, r.current_password or "")
     if sensitive:                                        # توکن ربات / ادمین‌ها / رمز = مسیر تصاحب پنل و دریافت هشدارها
         await _gate_code(request, r.code, None, "تغییر رمز وب‌پنل، توکن ربات یا ادمین‌ها", always=True)
-        C.audit_event("ادمین وب‌پنل", "تغییر تنظیمات حساس", "", ", ".join(k for k, v in (("رمز وب‌پنل", r.web_password), ("توکن ربات", r.bot_token and "…" not in r.bot_token), ("ادمین‌ها", new_ids is not None and new_ids != sorted(cur["admin_ids"]))) if v))
+        _audit("ادمین وب‌پنل", "تغییر تنظیمات حساس", "", ", ".join(k for k, v in (("رمز وب‌پنل", r.web_password), ("توکن ربات", r.bot_token and "…" not in r.bot_token), ("ادمین‌ها", new_ids is not None and new_ids != sorted(cur["admin_ids"]))) if v))
 
     if sensitive:
         try:
@@ -2099,7 +2111,7 @@ def _audit_filtered(cfg: dict, cat: str, q: str) -> list[dict]:
 
 @app.get("/api/audit", dependencies=[Depends(guard)])
 async def audit_get(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0, le=100000), cat: str = Query("all", max_length=10), q: str = Query("", max_length=80)):
-    items = _audit_filtered(load_config(), cat, q)
+    items = _audit_filtered(C.load_config_ro(), cat, q)
     return {"items": items[offset:offset + limit], "total": len(items)}
 
 
@@ -2147,7 +2159,7 @@ async def health(request: Request):
     """وضعیت سلامت: پنل‌ها، دیتابیس، ربات، دیسک، بکاپ، کیف پول و امنیت ورود؛ هر مورد ok / warn / bad."""
     import shutil
     import stat
-    cfg = load_config()
+    cfg = C.load_config_ro()
     items: list[dict] = []
 
     def add(key: str, title: str, level: str, text: str):
@@ -2260,11 +2272,12 @@ def _web_url(scheme: str, host: str, port: int) -> str:
 
 @app.get("/api/ssl", dependencies=[Depends(guard)])
 async def ssl_get(request: Request):
-    c = load_config()
+    c = C.load_config_ro()
     ss = c["ssl"]
+    info = await asyncio.to_thread(tlsutil.cert_info, ss["cert"]) if ss["cert"] else {}
     return {"enabled": ss["enabled"], "active": os.environ.get("REBECCA_SSL_ACTIVE") == "1", "cert": ss["cert"], "key": ss["key"],
             "domain": ss["domain"] or _panel_domain(c), "error": ss["error"], "port": c["web_port"],
-            "info": tlsutil.cert_info(ss["cert"]) if ss["cert"] else {}, "scheme": request.url.scheme,
+            "info": info, "scheme": request.url.scheme,
             "launcher": os.environ.get("REBECCA_LAUNCHER", "")}
 
 
@@ -2428,9 +2441,9 @@ async def backup_settings(r: BackupSettingsReq, request: Request):
             c["backup"]["password"] = r.password
     update_config(mut)
     if r.password is not None:
-        C.audit_event("ادمین وب‌پنل", "رمز بکاپ", "", "تنظیم شد" if r.password else "حذف شد")
+        _audit("ادمین وب‌پنل", "رمز بکاپ", "", "تنظیم شد" if r.password else "حذف شد")
     if r.bot_token is not None:
-        C.audit_event("ادمین وب‌پنل", "ربات بکاپ", "", f"تنظیم شد ({bot_user})" if r.bot_token else "حذف شد")
+        _audit("ادمین وب‌پنل", "ربات بکاپ", "", f"تنظیم شد ({bot_user})" if r.bot_token else "حذف شد")
     return {"ok": True, "bot": bot_user}
 
 
@@ -2490,7 +2503,7 @@ async def backup_restore(r: RestoreReq, request: Request):
     for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
         C.drop_api(p)
     _bot.update(token=None, obj=None)
-    C.audit_event("ادمین وب‌پنل", "بازیابی بکاپ", "", f"حالت کیف پول: {'حفظ وضعیت فعلی' if keep else 'برگردانده‌شده از بکاپ'}؛ نسخه‌ی پشتیبان: {os.path.basename(safety) if safety else '-'}")
+    _audit("ادمین وب‌پنل", "بازیابی بکاپ", "", f"حالت کیف پول: {'حفظ وضعیت فعلی' if keep else 'برگردانده‌شده از بکاپ'}؛ نسخه‌ی پشتیبان: {os.path.basename(safety) if safety else '-'}")
     _bg_notify(f"♻️ <b>بکاپ بازیابی شد</b>\nکیف پول: {'وضعیت فعلی حفظ شد' if keep else '⚠️ از بکاپ برگردانده شد'}\nIP: <code>{C.esc(_client_ip(request))}</code>")
     try:
         proc = await asyncio.create_subprocess_exec("systemctl", "restart", "rebecca-bot")
