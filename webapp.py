@@ -1380,6 +1380,7 @@ async def reps_create(r: RepCreateReq):
 async def reps_password(rid: str, r: RepPwReq):
     result = await asyncio.to_thread(C.reset_rep_password, rid, r.password)
     C.audit_event("ادمین وب‌پنل", "تغییر رمز نماینده", rid, "رمز بازنشانی شد؛ مقدار رمز ثبت نمی‌شود")
+    _bg_notify(f"🔑 رمز نماینده <code>{C.esc(rid)}</code> توسط ادمین بازنشانی شد.")
     return {"password": result}
 
 
@@ -1529,6 +1530,12 @@ async def reps_wallet(rid: str, r: WalletReq, request: Request):
         raise HTTPException(400, str(e))
     b = w["balance"]
     if not w.get("dup"):
+        try:                                                     # هر شارژ/کسر دستی ادمین ← هشدار تلگرام (اگر کسی پنل را هک کند فوراً دیده می‌شود)
+            _rp = load_config()["reps"].get(rid, {})
+            _bg_notify(f"{'➕ شارژ' if r.amount > 0 else '➖ کسر'} <b>دستیِ کیف پول</b>\nنماینده: <b>{C.esc(_rp.get('label') or _rp.get('name') or rid)}</b>\n"
+                       f"مبلغ: <b>{abs(r.amount):,}</b> تومان\nموجودی جدید: {b:,} تومان\nIP: <code>{C.esc(_client_ip(request))}</code>")
+        except Exception:  # noqa: BLE001
+            log.exception("notify wallet adjust")
         try:
             await _notify_low_wallet(rid, b)
         except Exception:  # noqa: BLE001
@@ -2032,6 +2039,14 @@ async def settings_save(r: SettingsReq, request: Request):
         await _gate_code(request, r.code, None, "تغییر رمز وب‌پنل، توکن ربات یا ادمین‌ها", always=True)
         C.audit_event("ادمین وب‌پنل", "تغییر تنظیمات حساس", "", ", ".join(k for k, v in (("رمز وب‌پنل", r.web_password), ("توکن ربات", r.bot_token and "…" not in r.bot_token), ("ادمین‌ها", new_ids is not None and new_ids != sorted(cur["admin_ids"]))) if v))
 
+    if sensitive:
+        try:
+            _what = ", ".join(k for k, v in (("رمز وب‌پنل", r.web_password), ("توکن ربات", r.bot_token and "…" not in r.bot_token),
+                                             ("ادمین‌ها", new_ids is not None and new_ids != sorted(cur["admin_ids"]))) if v)
+            await _notify_admins(cur, f"🔐 <b>تغییر تنظیمات حساس وب‌پنل</b>\nمورد: {C.esc(_what)}\nIP: <code>{C.esc(_client_ip(request))}</code>\nاگر خودتان نبودید فوراً اقدام کنید.")
+        except Exception:  # noqa: BLE001
+            log.exception("notify sensitive settings")
+
     def mut(c):
         nonlocal restart_bot
         if r.bot_token and "…" not in r.bot_token and r.bot_token.strip() != c["bot_token"]:
@@ -2457,6 +2472,12 @@ async def backup_restore(r: RestoreReq, request: Request):
         safety = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
         shutil.copy2(C.CONFIG_FILE, safety)
         os.chmod(safety, 0o600)
+        try:
+            import glob
+            for _old in sorted(glob.glob(C.CONFIG_FILE + ".pre-restore-*"))[:-5]:
+                os.remove(_old)
+        except OSError:
+            log.warning("پاک‌سازی نسخه‌های قدیمی pre-restore ممکن نشد")
     C.save_config(new)
     if extra:                                                   # لاگ فروش و ویرایش‌های گزارش (فقط در بکاپ کامل هست)
         if isinstance(extra.get("attach_log"), list):
