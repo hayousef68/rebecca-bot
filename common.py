@@ -2294,4 +2294,28 @@ def _cli(argv):
             cfg["web_port"] = a.port
         if a.user:
             if not re.fullmatch(r"[A-Za-z0-9_.@-]{3,32}", a.user):
-                sys.exit("نام کاربری فقط حروف انگلیسی/عدد/_.-@ و ۳
+                sys.exit("نام کاربری فقط حروف انگلیسی/عدد/_.-@ و ۳ تا ۳۲ کاراکتر.")
+            cfg["web"]["user"] = a.user
+        if env_pw or not cfg["web"].get("hash"):
+            if env_pw and len(env_pw) < 8:
+                sys.exit("رمز باید حداقل ۸ کاراکتر باشد.")
+            pw = env_pw or secrets.token_urlsafe(12)
+            cfg["web"].update(hash_password(pw))
+            cfg["web"]["secret"] = secrets.token_hex(32)
+            if not cfg["web"].get("user"):
+                cfg["web"]["user"] = "admin"
+            if not env_pw:
+                out["WEB_PASSWORD"] = pw
+    else:
+        pw = a.password or env_pw or secrets.token_urlsafe(12)
+        cfg["web"].update(hash_password(pw))
+        cfg["web"]["secret"] = secrets.token_hex(32)
+        out["WEB_PASSWORD"] = pw
+    save_config(cfg)
+    out.update(WEB_USER=cfg["web"].get("user", "admin"), WEB_PORT=cfg["web_port"])
+    for k, v in out.items():
+        print(f"{k}={v}")
+
+
+if __name__ == "__main__":
+    _cli(sys.argv[1:])
