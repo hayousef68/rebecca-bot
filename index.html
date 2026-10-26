@@ -1437,7 +1437,9 @@ function vTpl() {
 
 /* ───────── تنظیمات ───────── */
 async function vSet() {
-  let c; try { c = await api('/settings'); await refreshState(); } catch (e) { return mount(h('p', { class: 'err' }, e.message)); }   // refreshState: تمپلت‌ها و قیمت‌های به‌روز برای انتخاب تمپلت نماینده
+  const _pre = p => { p.catch(() => {}); return p; };                                   // درخواست‌های مستقل هم‌زمان شروع می‌شوند، نه پشت‌سرهم
+  const pSales = _pre(api('/sales/settings')), pSsl = _pre(api('/ssl')), pReps = _pre(api('/reps'));
+  let c; try { [c] = await Promise.all([api('/settings'), refreshState()]); } catch (e) { return mount(h('p', { class: 'err' }, e.message)); }   // refreshState: تمپلت‌ها و قیمت‌های به‌روز برای انتخاب تمپلت نماینده
   const i = (v, p = '', t = 'text') => h('input', { type: t, value: v ?? '', placeholder: p, dir: 'ltr', autocomplete: 'off' });
   const refresh = async () => { await refreshState(); await vSet(); };
   // فرم افزودن/ویرایش پنل
@@ -1620,7 +1622,7 @@ async function vSet() {
   const curPw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'رمز فعلی' });
   saveW.onclick = () => run(saveW, async () => { await withCode(code => api('/settings', 'POST', { web_password: wp.value, current_password: curPw.value, code })); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
   // قیمت‌ها و لیست فروش
-  let sc = null; try { sc = await api('/sales/settings'); } catch (e) { sc = null; }
+  let sc = null; try { sc = await pSales; } catch (e) { sc = null; }
   let priceCard = h('div', { class: 'card' }, h('h2', {}, '💰 قیمت‌ها'), h('p', { class: 'err' }, 'خطا در دریافت تنظیمات فروش'));
   if (sc) {
     const ham = i(sc.hamkari_per_gb, '3000', 'number'), buy = i(sc.buy_per_tb, '750000', 'number'), mul = i(sc.hamkari_usage_multiplier, '1.5', 'number');
@@ -1663,7 +1665,7 @@ async function vSet() {
   // SSL و پورت وب‌پنل
   let sslCard = h('div', { class: 'card' }, h('h2', {}, '🔒 SSL و پورت وب‌پنل'), h('p', { class: 'err' }, 'خطا در دریافت تنظیمات SSL')), sslSub = '—';
   try {
-    const sc2 = await api('/ssl'); sslSub = sc2.active ? '🔒 HTTPS فعال' : (sc2.enabled ? '⚠️ SSL روشن ولی اجرا نشده' : 'HTTP');
+    const sc2 = await pSsl; sslSub = sc2.active ? '🔒 HTTPS فعال' : (sc2.enabled ? '⚠️ SSL روشن ولی اجرا نشده' : 'HTTP');
     const dom = i(sc2.domain, 'panel.example.com'), crt = i(sc2.cert, '/var/lib/rebecca/certs/panel.example.com/fullchain.pem'), key = i(sc2.key, '/var/lib/rebecca/certs/panel.example.com/key.pem'), prt = i(c.web_port, '8686', 'number');
     const on = h('input', { type: 'checkbox', id: 'sslOn', checked: sc2.enabled });
     const found = h('div');
@@ -1802,7 +1804,7 @@ async function vSet() {
     h('p', { class: 'hint' }, 'بکاپ شامل نماینده‌ها (با رمز هش‌شده)، لیست کاربرهای هر نماینده و وضعیت مسدود/قفل آن‌هاست؛ بعد از بازیابی روی سرور جدید هر کاربر دوباره زیر نماینده‌ی خودش نمایش داده می‌شود. فایل بکاپ شامل توکن و رمزهاست. بعد از بازیابی ربات خودکار ریستارت می‌شود. اگر رمز وب‌پنل در فایل متفاوت باشد، باید با رمز آن فایل دوباره وارد شوید.'),
     h('div', { class: 'btns' }, vfB, rsB, rcB));
   // ─── نماینده‌ها ───
-  let reps = [], topups = []; try { const rr = await api('/reps'); reps = rr.reps; topups = rr.topups || []; S.repsP = Promise.resolve(reps); S.pend = topups.length; S.pendItems = topups; renderNav(); renderAlert(); } catch { /* خطا: لیست خالی */ }
+  let reps = [], topups = []; try { const rr = await pReps; reps = rr.reps; topups = rr.topups || []; S.repsP = Promise.resolve(reps); S.pend = topups.length; S.pendItems = topups; renderNav(); renderAlert(); } catch { /* خطا: لیست خالی */ }
   const TYPE_FA = { charge: '➕ شارژ ادمین', deduct: '➖ کسر ادمین', topup: '✅ افزایش موجودی', purchase: '🛒 خرید اکانت', refund: '↩️ بازگشت وجه' };
   const repMsg = (name, pw) => `🔐 پنل نماینده\nآدرس: ${location.origin}/login\nنام کاربری: ${name}\nرمز: ${pw}`;
   const rName = h('input', { placeholder: 'نام کاربری (انگلیسی)', dir: 'ltr', maxlength: 32, autocapitalize: 'off', autocomplete: 'off' });
