@@ -2500,6 +2500,78 @@ async def backup_verify(r: RestoreReq):
             "attach_log": len((extra or {}).get("attach_log") or [])}
 
 
+# ───────────────────────────── داشبورد نماینده ─────────────────────────────
+@app.get("/api/rep/dashboard")
+async def rep_dashboard(rep=Depends(rep_guard)):
+    """خلاصه‌ی عددی + سری زمانی ۳۰ روز فروش برای نمودارهای داشبورد نماینده."""
+    rid = rep[0]
+    cfg = load_config()
+    rp = cfg["reps"][rid]
+    sales_30d = await asyncio.to_thread(sales.rep_daily_sales, rid, 30)
+    today = sales_30d[0] if sales_30d else {"total": 0, "count": 0, "new_count": 0, "renew_count": 0, "breakdown": []}
+    templates: dict = {}
+    for day in sales_30d:
+        for x in day.get("breakdown", []):
+            name = x.get("template") or "—"
+            templates.setdefault(name, {"name": name, "count": 0})["count"] += int(x.get("count") or 0)
+    total_users = sum(1 for m in cfg["rep_users"].values() for r in m.values() if r == rid)
+
+    def _row(x):
+        return {"day": x["day"], "date": x["date"], "total": int(x.get("total") or 0), "count": int(x.get("count") or 0)}
+
+    return {
+        "balance": int(rp["balance"]),
+        "today": {"total": int(today.get("total") or 0), "count": int(today.get("count") or 0),
+                  "new_count": int(today.get("new_count") or 0), "renew_count": int(today.get("renew_count") or 0)},
+        "month": {"total": sum(int(x.get("total") or 0) for x in sales_30d), "count": sum(int(x.get("count") or 0) for x in sales_30d), "days": 30},
+        "sales_30d": [_row(x) for x in reversed(sales_30d)],
+        "sales_7d": [_row(x) for x in reversed(sales_30d[:7])],
+        "templates": sorted(templates.values(), key=lambda t: -t["count"])[:8],
+        "total_users": total_users,
+        "next_plan_enabled": bool(rp.get("next_plan")),
+    }
+
+
+_REP_STATS_CACHE: dict[str, tuple[float, dict]] = {}      # rid ← (زمان, نتیجه)؛ تا هر بار باز کردن داشبورد صدها درخواست به پنل نزند
+_REP_STATS_TTL = 120
+
+
+@app.get("/api/rep/dashboard/user-stats")
+async def rep_dashboard_user_stats(rep=Depends(rep_guard)):
+    """توزیع وضعیت کاربرهای یک نماینده (اگر بیش از ۲۰۰ کاربر باشد، نمونه‌گیری یکنواخت و تخمین)."""
+    rid = rep[0]
+    hit = _REP_STATS_CACHE.get(rid)
+    if hit and time.time() - hit[0] < _REP_STATS_TTL:
+        return hit[1]
+    cfg = load_config()
+    items = [(pid, u) for pid, m in cfg["rep_users"].items() for u, r in m.items() if r == rid]
+    total = len(items)
+    stats = {"active": 0, "on_hold": 0, "expired": 0, "limited": 0, "disabled": 0, "unknown": 0}
+    cap = 200
+    sample = items if total <= cap else [items[int(i * total / cap)] for i in range(cap)]
+    sem = asyncio.Semaphore(10)
+
+    async def one(pid, u):
+        async with sem:
+            try:
+                ap = get_api(pid)
+                if not ap.is_configured():
+                    return None
+                return (await ap.request("GET", ap.upath(u))).get("status")
+            except Exception:  # noqa: BLE001
+                return None
+
+    for s in await asyncio.gather(*(one(p, u) for p, u in sample)):
+        stats[s if s in stats else "unknown"] += 1
+    if total > cap:
+        ratio = total / cap
+        for k in stats:
+            stats[k] = int(round(stats[k] * ratio))
+    out = {"total": total, "status_stats": stats, "sampled": total > cap}
+    _REP_STATS_CACHE[rid] = (time.time(), out)
+    return out
+
+
 # ───────────────────────────── پنل‌های ربکا و تست اتصال ─────────────────────────────
 class PanelReq(BaseModel):
     id: str | None = None
