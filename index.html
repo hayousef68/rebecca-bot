@@ -307,6 +307,54 @@ code,.code{overflow-x:auto}
   .evf{grid-template-columns:1fr 1fr}
   .acc>summary .sub{max-width:38%}
 }
+
+/* ───────── ریزجزئیات: لمس، بارگذاری، حالت‌های خالی ───────── */
+html{-webkit-tap-highlight-color:transparent}
+.stat div,.badge,.pill,.dt{font-variant-numeric:tabular-nums}
+.card,.item,.stat div,.hero{box-shadow:inset 0 1px 0 color-mix(in srgb,var(--fg) 6%,transparent),0 2px 10px #0003}
+.acc-body .card{box-shadow:none}
+.item{transition:border-color .15s,transform .12s}
+.item:active{transform:scale(.995)}
+
+.btn{transition:transform .12s,box-shadow .2s,border-color .15s,background .15s,filter .15s}
+.btn:active:not(:disabled){transform:scale(.97)}
+.btn.pri:active:not(:disabled){transform:scale(.97);box-shadow:0 3px 10px -4px color-mix(in srgb,var(--ac) 60%,transparent)}
+.btn.busy{position:relative;color:transparent!important;pointer-events:none}
+.btn.busy>*{opacity:0}
+.btn.busy:disabled{opacity:.9;filter:none}
+.btn.busy::after{content:"";position:absolute;inset:0;margin:auto;width:18px;height:18px;border-radius:50%;
+  border:2px solid color-mix(in srgb,var(--ac) 25%,transparent);border-top-color:var(--ac);animation:spin .7s linear infinite}
+.btn.pri.busy::after{border-color:color-mix(in srgb,var(--ac-ink) 25%,transparent);border-top-color:var(--ac-ink)}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.badge[class*=" s-"]::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-inline-end:6px;vertical-align:middle}
+
+.toast{display:flex;align-items:center;gap:10px;overflow:hidden;cursor:pointer;box-shadow:var(--shadow)}
+.toast::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mu);flex:none}
+.toast.ok::before{background:var(--ok)}.toast.bad::before{background:var(--bad)}
+.toast::after{content:"";position:absolute;inset:auto 0 0 0;height:2px;background:currentColor;opacity:.3;transform-origin:right center;animation:tshrink 3.2s linear forwards}
+@keyframes tshrink{to{transform:scaleX(0)}}
+
+.empty{display:grid;justify-items:center;gap:6px;text-align:center;padding:28px 16px;color:var(--mu);
+  border:1px dashed color-mix(in srgb,var(--fg) 16%,transparent);border-radius:var(--r);background:color-mix(in srgb,var(--fg) 2%,transparent)}
+.empty svg{width:42px;height:42px;fill:none;stroke:var(--mu);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+.empty b{color:var(--tx);font-size:var(--fs-md);font-weight:var(--fw-bold)}
+.empty p{font-size:var(--fs-sm);max-width:32ch;line-height:1.7}
+
+.skel{display:grid;gap:12px}
+.skel i{display:block;height:84px;border-radius:var(--r);background-color:var(--s1);
+  background-image:linear-gradient(100deg,transparent 30%,color-mix(in srgb,var(--fg) 7%,transparent) 50%,transparent 70%);background-size:220% 100%;animation:shimmer 1.3s linear infinite}
+.skel i:first-child{height:120px}
+@keyframes shimmer{from{background-position:120% 0}to{background-position:-120% 0}}
+
+@media (prefers-reduced-motion:no-preference){
+  main>*{animation:none}
+  #view.vin{animation:viewin .24s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes viewin{from{opacity:0;transform:translateY(8px)}}
+}
+@media (prefers-reduced-motion:reduce){
+  .skel i{animation:none}.btn.busy::after{animation-duration:1.8s}.toast::after{animation:none;opacity:0}
+}
 </style>
 </head>
 <body>
@@ -333,7 +381,7 @@ code,.code{overflow-x:auto}
 })();
 </script>
 
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <script>
 'use strict';
@@ -384,7 +432,9 @@ async function withCode(fn) {
 }
 let tt;
 function toast(msg, bad) {
-  const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (bad ? ' bad' : ''); t.hidden = false;
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (bad ? ' bad' : /^✅/.test(msg) ? ' ok' : '');
+  t.hidden = true; void t.offsetWidth; t.hidden = false;                                    // انیمیشن نوار زمان از اول شروع شود
+  t.onclick = () => { t.hidden = true; };
   clearTimeout(tt); tt = setTimeout(() => t.hidden = true, 3200);
 }
 async function copy(text) {
@@ -404,8 +454,18 @@ function toggleQR(box, sub, name, path) {
 }
 const debounce = (f, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f(...a), ms); }; };
 async function run(btn, fn) {
-  const old = btn.textContent; btn.disabled = true;
-  try { await fn(); } catch (e) { toast(e.message, true); } finally { btn.disabled = false; btn.textContent = old; }
+  const old = btn.textContent; btn.disabled = true; btn.classList.add('busy');
+  try { await fn(); } catch (e) { toast(e.message, true); } finally { btn.disabled = false; btn.classList.remove('busy'); btn.textContent = old; }
+}
+/* حالت خالی: آیکون + عنوان + راهنمای کوتاه (فقط متن ثابت داخل innerHTML می‌رود؛ متن‌های متغیر با h() امن درج می‌شوند) */
+const EMPTY_ICONS = {
+  users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M17 11a3 3 0 0 0 0-6M18.5 14.4A5.5 5.5 0 0 1 21 20"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+};
+function empty(kind, title, hint) {
+  const ic = h('span', {}); ic.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + (EMPTY_ICONS[kind] || EMPTY_ICONS.search) + '</svg>';
+  return h('div', { class: 'empty' }, ic, h('b', {}, title), hint ? h('p', {}, hint) : null);
 }
 
 const S = { st: null, panel: null, tab: 'create', users: { q: '', status: '', off: 0 }, last: null };
@@ -444,7 +504,15 @@ async function pollTopups() {
   try { const r = await api('/topups/pending'); S.pend = r.count; S.pendItems = r.items; } catch { return; }
   renderNav(); renderAlert();
 }
-async function go(tab) { S.tab = tab; renderNav(); await ({ create: vCreate, users: vUsers, home: vHome, tpl: vTpl, set: vSet })[tab](); window.scrollTo(0, 0); }
+async function go(tab) {
+  S.tab = tab; renderNav();
+  const v = $('#view');
+  const sk = setTimeout(() => v.replaceChildren(h('div', { class: 'skel' }, h('i', {}), h('i', {}), h('i', {}))), 160);   // فقط اگر بارگذاری طول کشید
+  try { await ({ create: vCreate, users: vUsers, home: vHome, tpl: vTpl, set: vSet })[tab](); }
+  finally { clearTimeout(sk); if (v.querySelector(':scope > .skel')) v.replaceChildren(); }
+  v.classList.remove('vin'); void v.offsetWidth; v.classList.add('vin');                    // یک ورود نرم برای کل صفحه، نه برای تک‌تک کارت‌ها
+  window.scrollTo(0, 0);
+}
 const hasPanel = () => S.st.panels.some(p => p.ok);
 async function refreshState() {
   S.st = await api('/state');
@@ -623,7 +691,7 @@ async function vUsers() {
       if (my !== seq) return;
       if (!r.users.length && r.total && U.off >= r.total) { U.off = (Math.ceil(r.total / PAGE) - 1) * PAGE; return load(false); }   // صفحه‌ی آخر خالی شد (حذف کاربر)
       list.replaceChildren();
-      r.users.forEach(u => list.append(userItem(u, list)));
+      r.users.forEach(u => list.append(userItem(u, list))); if (!r.users.length) list.append(empty(U.q ? 'search' : 'users', U.q ? 'نتیجه‌ای پیدا نشد' : 'هنوز کاربری نیست', U.q ? 'عبارت دیگری را جستجو کنید.' : 'از بخش «ساخت» اولین کاربر را اضافه کنید.'));
       drawPager(pg, r.total, U.off, o => { U.off = o; load(false); window.scrollTo({ top: 0, behavior: 'smooth' }); });
       const pages = Math.ceil(r.total / PAGE), cur = Math.floor(U.off / PAGE) + 1;
       info.className = 'hint';
@@ -651,7 +719,7 @@ function histBox(path) {
       loaded = true;
       body.replaceChildren(...((r.items || []).length ? r.items.map(x => h('div', { class: 'hr' },
         h('span', {}, x.kind_fa, x.info ? h('small', {}, `${x.gb ? fa(x.gb) + ' گیگ' : 'حجم نامحدود'} · ${x.days ? fa(x.days) + ' روز' : 'زمان نامحدود'}`) : null),
-        h('span', { class: 'dt' }, x.date))) : [h('p', { class: 'hint' }, 'هنوز رویدادی ثبت نشده است.')]));
+        h('span', { class: 'dt' }, x.date))) : [empty('clock', 'هنوز رویدادی ثبت نشده', 'تغییرهای مهم این کاربر اینجا نمایش داده می‌شود.')]));
     } catch (e) { body.replaceChildren(h('p', { class: 'hint' }, '⚠️ ' + e.message)); }
   });
   return d;
@@ -1874,7 +1942,7 @@ async function vSet() {
       return h('div', { style: 'margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)' }, h('div', {}, `${t.rep} — ${toman(t.amount)}`), t.note ? h('div', { class: 'hint', style: 'margin:2px 0' }, '📝 ' + t.note) : null,
         h('div', { class: 'hint', style: 'margin:2px 0' }, new Date(t.ts * 1000).toLocaleString('fa-IR')), amt, h('div', { class: 'btns', style: 'margin-top:6px' }, bt('✅ تأیید و شارژ', 'pri', true), bt('✖ رد', 'bad', false))); })) : null);
   const repBody = h('div', { class: 'acc-in' },
-    newBox, tuBox, ...(reps.length ? reps.map(repItem) : [h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'هنوز نماینده‌ای نساخته‌اید.')]),
+    newBox, tuBox, ...(reps.length ? reps.map(repItem) : [empty('users', 'هنوز نماینده‌ای نساخته‌اید', 'از فرم پایین اولین نماینده را بسازید.')]),
     h('div', { class: 'psec' }, h('b', {}, '➕ نماینده‌ی جدید')),
     h('div', { class: 'cols' }, h('div', {}, h('label', {}, 'نام کاربری'), rName), h('div', {}, h('label', {}, 'رمز'), rPass)),
     h('div', {}, h('label', {}, 'نام نمایشی'), rLabel), h('div', { class: 'btns' }, rAdd),
