@@ -419,6 +419,32 @@ def fetch_events_range(d1: str, d2: str, partial: bool, include_hidden: bool = F
     return _fetch(*_bounds_days(d1, d2, partial), include_hidden=include_hidden)
 
 
+_ADMIN_COL: dict = {}
+
+
+def _admin_filter(conn, s: dict) -> tuple[str, tuple]:
+    """فقط کاربرانِ ساخته‌شده‌ی یک ادمین پنل در فروش حساب شوند (ادمین‌های دیگر حساب نمی‌شوند).
+    نام ادمین از sales.only_admin در config می‌آید (پیش‌فرض «admin»؛ خالی = خاموش). اگر ستون ادمین در جدول کاربران نباشد،
+    فیلتر اعمال نمی‌شود (گزارش خراب نمی‌شود) و در db_check دیده می‌شود. کاربرانِ بدون ادمین (NULL) حساب می‌شوند."""
+    name = str(load_config()["sales"].get("only_admin", "admin") or "").strip()
+    if not name:
+        return "", ()
+    col = str(s.get("u_admin", "admin_id"))
+    key = (s["users"], col)
+    ok = _ADMIN_COL.get(key)
+    if ok is None:
+        with conn.cursor() as c:
+            c.execute(f"SHOW COLUMNS FROM {_ident(s['users'])} LIKE %s", (col,))
+            ok = bool(c.fetchone())
+        _ADMIN_COL[key] = ok
+        if not ok:
+            log.warning("فیلتر ادمین فروش اعمال نشد: ستون %s در جدول %s نیست", col, s["users"])
+    if not ok:
+        return "", ()
+    uc = f"u.{_ident(col)}"
+    return f" AND ({uc} IS NULL OR {uc} IN (SELECT `id` FROM `admins` WHERE `username` = %s))", (name,)
+
+
 def _fetch(a, b, include_hidden: bool = False) -> list[dict]:
     s = _schema()
     off = int(load_config()["sales"].get("db_tz_offset_minutes", 0))
@@ -434,8 +460,9 @@ def _fetch(a, b, include_hidden: bool = False) -> list[dict]:
     conn = _connect()
     try:
         with conn.cursor() as c:
-            c.execute(sql_new, (a, b)); rows = list(c.fetchall())
-            c.execute(sql_rst, (a, b)); rows += list(c.fetchall())
+            fsql, fpar = _admin_filter(conn, s)
+            c.execute(sql_new + fsql, (a, b) + fpar); rows = list(c.fetchall())
+            c.execute(sql_rst + fsql, (a, b) + fpar); rows += list(c.fetchall())
             try:
                 c.execute(sql_svc); svc = {r["id"]: str(r["name"] or "") for r in c.fetchall()}
             except Exception:  # noqa: BLE001
@@ -1239,6 +1266,8 @@ def db_check() -> str:
                     out.append(f"❌ {t}: {e}")
             c.execute("SHOW TABLES")
             out.append("جدول‌ها: " + ", ".join(list(r.values())[0] for r in c.fetchall()))
+            fsql, fpar = _admin_filter(conn, s)
+            out.append(f"👤 فیلتر ادمین فروش: فعال (فقط «{fpar[0]}»)" if fpar else "👤 فیلتر ادمین فروش: غیرفعال")
     finally:
         conn.close()
     return "\n".join(out)
