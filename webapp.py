@@ -15,10 +15,13 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
+from telegram import Bot
+from telegram.error import TelegramError
 
 import common as C
 import ops
 import sales
+import shop
 import tlsutil
 from sales import price_for
 from common import get_api, get_panel, load_config, new_panel_id, update_config, RebeccaClient
@@ -2674,3 +2677,411 @@ async def settings_test(api: RebeccaClient = Depends(P)):
     s = await api.request("GET", "/api/system")
     svc = await api.list_services(force=True)
     return {"ok": True, "total_user": s.get("total_user", 0), "services": len(svc)}
+
+
+# ───────────────────────────── فروشگاه: مدیریت ربات فروش از وب‌پنل ─────────────────────────────
+# داده‌ها همان config.json > shop است (مشترک با ربات فروش). تأیید/رد رسید و ... با همان توابع اتمیک shop.py انجام می‌شود،
+# پس اگر ادمین هم‌زمان از ربات و وب‌پنل بزند فقط یکی موفق می‌شود. پیام به مشتری با خودِ توکن ربات فروش ارسال می‌شود.
+_SHOP_TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{30,}$")
+_SHOP_STATUSES = ("new", "pending", "processing", "done", "rejected", "cancelled", "failed", "refunded", "credited")
+
+
+def _shop_token() -> str:
+    t = C.load_config_ro()["shop"]["token"]
+    if not t:
+        raise HTTPException(409, "ابتدا توکن ربات فروش را در بخش «ربات» همین صفحه وارد کنید.")
+    return t
+
+
+def _shop_actor() -> str:
+    return "ادمین وب‌پنل"
+
+
+def _order_view(o: dict, custs: dict) -> dict:
+    cu = custs.get(str(o.get("uid"))) or {}
+    return {"id": o["id"], "uid": o.get("uid"), "name": cu.get("name", ""), "username": cu.get("username", ""), "kind": o.get("kind", ""),
+            "pname": o.get("pname", ""), "service": o.get("username", ""), "amount": int(o.get("amount") or 0), "status": o.get("status", ""),
+            "method": o.get("method", ""), "ts": int(o.get("ts") or 0), "rts": int(o.get("rts") or 0), "dts": int(o.get("dts") or 0),
+            "text": o.get("text", ""), "receipt": bool(o.get("file")), "err": o.get("err", ""), "reason": o.get("reason", ""),
+            "unsure": bool(o.get("unsure")), "result": o.get("result", ""), "balance": cu.get("balance")}
+
+
+def _shop_counts(s: dict) -> dict:
+    cnt = {k: 0 for k in _SHOP_STATUSES}
+    for o in s["orders"]:
+        cnt[o["status"]] = cnt.get(o["status"], 0) + 1
+    return cnt
+
+
+@app.get("/api/shop/summary", dependencies=[Depends(guard)])
+async def shop_summary():
+    """عدد کوچک برای نشان روی تب (هر ۳۰ ثانیه)."""
+    s = C.load_config_ro()["shop"]
+    cnt = _shop_counts(s)
+    return {"pending": cnt["pending"], "failed": cnt["failed"], "enabled": s["enabled"], "has_token": bool(s["token"])}
+
+
+@app.get("/api/shop", dependencies=[Depends(guard)])
+async def shop_overview():
+    cfg = C.load_config_ro()
+    s = cfg["shop"]
+    cnt = _shop_counts(s)
+    day0 = int(time.time()) - 86400
+    sales_total = sum(o["amount"] for o in s["orders"] if o["status"] == "done" and o["kind"] in ("buy", "renew"))
+    sales_24h = sum(o["amount"] for o in s["orders"] if o["status"] == "done" and o["kind"] in ("buy", "renew") and int(o.get("dts") or 0) >= day0)
+    tok = s["token"]
+    return {"enabled": s["enabled"], "panel": shop.shop_panel(cfg), "panels": [{"id": p["id"], "name": p["name"]} for p in cfg["panels"]],
+            "card": s["card"], "welcome": s["welcome"], "support": s["support"], "min_topup": s["min_topup"], "max_topup": s["max_topup"],
+            "receipt_hours": s["receipt_hours"], "has_token": bool(tok), "token_hint": ("…" + tok[-6:]) if tok else "",
+            "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
+            "counts": cnt, "customers": len(s["customers"]), "wallet_total": sum(c["balance"] for c in s["customers"].values()),
+            "sales_total": sales_total, "sales_24h": sales_24h}
+
+
+class ShopSettingsReq(BaseModel):
+    enabled: bool | None = None
+    panel: str | None = Field(default=None, max_length=40)
+    card_number: str | None = Field(default=None, max_length=40)
+    card_holder: str | None = Field(default=None, max_length=60)
+    card_bank: str | None = Field(default=None, max_length=60)
+    welcome: str | None = Field(default=None, max_length=1000)
+    support: str | None = Field(default=None, max_length=1000)
+    min_topup: int | None = Field(default=None, ge=1000, le=10 ** 9)
+    max_topup: int | None = Field(default=None, ge=1000, le=10 ** 10)
+    receipt_hours: int | None = Field(default=None, ge=1, le=720)
+    token: str | None = Field(default=None, max_length=120)
+    clear_token: bool = False
+    code: str = Field(default="", max_length=64)
+
+
+@app.post("/api/shop/settings", dependencies=[Depends(guard)])
+async def shop_settings(r: ShopSettingsReq, request: Request):
+    cur = C.load_config_ro()
+    tok_new = (r.token or "").strip()
+    if tok_new and "…" in tok_new:           # مقدار نمایشی (مخفی‌شده) دوباره فرستاده شده؛ تغییری نیست
+        tok_new = ""
+    digits = None
+    if r.card_number is not None:
+        digits = re.sub(r"\D", "", r.card_number.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
+        if digits and len(digits) != 16:
+            raise HTTPException(400, "شماره کارت باید ۱۶ رقم باشد.")
+    if r.panel is not None and r.panel and not get_panel(cur, r.panel):
+        raise HTTPException(400, "پنل پیدا نشد.")
+    lo = r.min_topup if r.min_topup is not None else cur["shop"]["min_topup"]
+    hi = r.max_topup if r.max_topup is not None else cur["shop"]["max_topup"]
+    if lo > hi:
+        raise HTTPException(400, "حداقل شارژ نباید از حداکثر بیشتر باشد.")
+    token_changed = bool(tok_new and tok_new != cur["shop"]["token"]) or (r.clear_token and bool(cur["shop"]["token"]))
+    card_changed = digits is not None and digits != cur["shop"]["card"]["number"]
+    if token_changed or card_changed:        # توکن و شماره کارت = مسیر تغییر مقصد پرداخت/تصاحب ربات؛ با 2FA روشن کد تازه می‌خواهد
+        await _gate_code(request, r.code, None, "تغییر توکن ربات فروش یا شماره کارت", always=True)
+    username = ""
+    if tok_new and token_changed:
+        if not _SHOP_TOKEN_RE.match(tok_new):
+            raise HTTPException(400, "فرمت توکن ربات فروش صحیح نیست.")
+        if tok_new == cur["bot_token"]:
+            raise HTTPException(400, "توکن ربات فروش باید با توکن ربات مدیریت فرق داشته باشد (دو ربات نمی‌توانند یک توکن را هم‌زمان بخوانند).")
+        try:
+            async with Bot(tok_new) as b:
+                me = await asyncio.wait_for(b.get_me(), 15)
+            username = me.username or ""
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"توکن معتبر نیست یا تلگرام جواب نداد ({e.__class__.__name__}).")
+
+    def mut(c):
+        sh = c["shop"]
+        if r.enabled is not None:
+            sh["enabled"] = r.enabled
+        if r.panel is not None:
+            sh["panel"] = r.panel
+        if digits is not None:
+            sh["card"]["number"] = digits
+        if r.card_holder is not None:
+            sh["card"]["holder"] = r.card_holder.strip()[:60]
+        if r.card_bank is not None:
+            sh["card"]["bank"] = r.card_bank.strip()[:60]
+        if r.welcome is not None:
+            sh["welcome"] = r.welcome.strip()[:1000]
+        if r.support is not None:
+            sh["support"] = r.support.strip()[:1000]
+        if r.min_topup is not None:
+            sh["min_topup"] = r.min_topup
+        if r.max_topup is not None:
+            sh["max_topup"] = r.max_topup
+        if r.receipt_hours is not None:
+            sh["receipt_hours"] = r.receipt_hours
+        if tok_new and token_changed:
+            sh["token"] = tok_new
+        elif r.clear_token:
+            sh["token"] = ""
+    update_config(mut)
+    what = [k for k, v in (("وضعیت باز/بسته", r.enabled is not None), ("پنل فروش", r.panel is not None), ("کارت", digits is not None or r.card_holder is not None or r.card_bank is not None),
+                           ("متن‌ها", r.welcome is not None or r.support is not None), ("محدوده شارژ/مهلت رسید", r.min_topup is not None or r.max_topup is not None or r.receipt_hours is not None),
+                           ("توکن ربات فروش", token_changed)) if v]
+    _aud("تنظیمات فروشگاه", "", "، ".join(what) + (f" — ****{digits[-4:]}" if digits else ""), "sys")
+    restarted = False
+    if token_changed:                         # Runner فقط داخل پروسه‌ی ربات است؛ برای اتصال/قطع ربات فروش ربات مدیریت ریستارت می‌شود
+        try:
+            proc = await asyncio.create_subprocess_exec("systemctl", "restart", "rebecca-bot")
+            t = asyncio.create_task(proc.wait())
+            _bg.add(t)
+            t.add_done_callback(_bg.discard)
+            restarted = True
+        except Exception:  # noqa: BLE001
+            log.warning("ریستارت خودکار ربات برای ربات فروش ممکن نشد؛ دستی: rebecca-bot restart")
+    return {"ok": True, "bot_restarted": restarted, "username": username}
+
+
+# ── پلن‌ها و قیمت‌ها ──
+class ShopPlanReq(BaseModel):
+    template: str = Field(min_length=1, max_length=80)
+    name: str = Field(default="", max_length=60)
+    price: int = Field(ge=1, le=10 ** 9)
+
+
+class ShopPlanEditReq(BaseModel):
+    name: str | None = Field(default=None, max_length=60)
+    price: int | None = Field(default=None, ge=0, le=10 ** 9)
+    active: bool | None = None
+
+
+@app.post("/api/shop/plans", dependencies=[Depends(guard)])
+async def shop_plan_add(r: ShopPlanReq):
+    out: dict = {}
+
+    def mut(c):
+        if r.template not in c["templates"]:
+            raise ValueError("تمپلت پیدا نشد.")
+        ids = {x["id"] for x in c["shop"]["plans"]}
+        n = 1
+        while f"p{n}" in ids:
+            n += 1
+        pl = {"id": f"p{n}", "name": (r.name.strip() or r.template)[:60], "template": r.template, "price": r.price, "active": True}
+        c["shop"]["plans"].append(pl)
+        out.update(pl)
+    update_config(mut)
+    _aud("پلن فروشگاه", out["id"], f"افزودن «{out['name']}» — قیمت {r.price:,}", "sys")
+    return {"ok": True, "plan": out}
+
+
+@app.post("/api/shop/plans/{pid}", dependencies=[Depends(guard)])
+async def shop_plan_edit(pid: str, r: ShopPlanEditReq):
+    out: dict = {}
+
+    def mut(c):
+        pl = shop.plan_get(c["shop"], pid)
+        if not pl:
+            raise ValueError("پلن پیدا نشد.")
+        if r.name is not None and r.name.strip():
+            pl["name"] = r.name.strip()[:60]
+        if r.price is not None:
+            pl["price"] = r.price
+        if r.active is not None:
+            pl["active"] = r.active
+        out.update(pl)
+    update_config(mut)
+    _aud("پلن فروشگاه", pid, f"ویرایش «{out['name']}» — قیمت {out['price']:,}" + ("" if out["active"] else " (غیرفعال)"), "sys")
+    return {"ok": True, "plan": out}
+
+
+@app.post("/api/shop/plans/{pid}/delete", dependencies=[Depends(guard)])
+async def shop_plan_delete(pid: str):
+    def mut(c):
+        if not shop.plan_get(c["shop"], pid):
+            raise ValueError("پلن پیدا نشد.")
+        c["shop"]["plans"] = [x for x in c["shop"]["plans"] if x["id"] != pid]
+    update_config(mut)
+    _aud("پلن فروشگاه", pid, "حذف", "sys")
+    return {"ok": True}
+
+
+# ── سفارش‌ها و رسیدها ──
+@app.get("/api/shop/orders", dependencies=[Depends(guard)])
+async def shop_orders(status: str = Query("open", max_length=12), kind: str = Query("", max_length=8), q: str = Query("", max_length=40),
+                      offset: int = Query(0, ge=0, le=10 ** 5), limit: int = Query(20, ge=1, le=50)):
+    s = C.load_config_ro()["shop"]
+    custs = s["customers"]
+    needle = q.strip().lstrip("@#").lower()
+    items = []
+    for o in reversed(s["orders"]):
+        st = o["status"]
+        if status == "open" and st not in ("pending", "failed"):
+            continue
+        if status not in ("open", "all", "") and st != status:
+            continue
+        if kind and o.get("kind") != kind:
+            continue
+        if needle:
+            cu = custs.get(str(o["uid"])) or {}
+            if not (needle == str(o["uid"]) or needle == o["id"].lower() or needle in (cu.get("username") or "").lower() or needle in (cu.get("name") or "").lower()
+                    or needle in str(o.get("username") or "").lower()):
+                continue
+        items.append(o)
+    page = items[offset:offset + limit]
+    return {"total": len(items), "items": [_order_view(o, custs) for o in page]}
+
+
+@app.get("/api/shop/orders/{oid}/receipt", dependencies=[Depends(guard)])
+async def shop_receipt(oid: str):
+    o = shop.order_get(oid)
+    if not o or not o.get("file"):
+        raise HTTPException(404, "عکس رسید پیدا نشد.")
+    try:
+        async with Bot(_shop_token()) as b:
+            f = await asyncio.wait_for(b.get_file(o["file"]), 20)
+            data = bytes(await asyncio.wait_for(f.download_as_bytearray(), 30))
+            path = (f.file_path or "").lower()
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"دریافت عکس از تلگرام ناموفق بود ({e.__class__.__name__}).")
+    ctype = "image/png" if path.endswith(".png") else "image/webp" if path.endswith(".webp") else "image/gif" if path.endswith(".gif") else "image/jpeg"
+    return Response(data, media_type=ctype, headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
+async def _shop_fulfil(oid: str) -> dict:
+    async with Bot(_shop_token()) as b:
+        await shop.fulfil(b, oid)
+    o = shop.order_get(oid) or {}
+    return {"status": o.get("status", ""), "result": o.get("result", ""), "err": o.get("err", "")}
+
+
+def _claim_web(oid: str, allowed: tuple) -> dict:
+    try:
+        return shop.order_claim(oid, 0, allowed)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/shop/orders/{oid}/approve", dependencies=[Depends(guard)])
+async def shop_order_approve(oid: str):
+    _shop_token()
+    o = await asyncio.to_thread(_claim_web, oid, ("pending",))
+    _aud("تأیید رسید فروشگاه", oid, f"{shop.KIND_FA.get(o['kind'], o['kind'])} — {o['amount']:,} تومان", "wallet")
+    return {"ok": True, **(await _shop_fulfil(oid))}
+
+
+@app.post("/api/shop/orders/{oid}/retry", dependencies=[Depends(guard)])
+async def shop_order_retry(oid: str):
+    _shop_token()
+    await asyncio.to_thread(_claim_web, oid, ("failed",))
+    _aud("تلاش مجدد سفارش فروشگاه", oid, "", "wallet")
+    return {"ok": True, **(await _shop_fulfil(oid))}
+
+
+@app.post("/api/shop/orders/{oid}/credit", dependencies=[Depends(guard)])
+async def shop_order_credit(oid: str, request: Request):
+    """سفارشِ ناموفق را انجام نمی‌دهد و مبلغش را به کیف پول مشتری اضافه می‌کند."""
+    token = _shop_token()
+    o = await asyncio.to_thread(_claim_web, oid, ("failed",))
+    try:
+        w = await asyncio.to_thread(shop.wallet_apply, o["uid"], o["amount"], "refund", f"اعتبار سفارش #{oid}", "credit:" + oid)
+        o = await asyncio.to_thread(shop.order_update, oid, status="credited", dts=int(time.time())) or o
+    except ValueError as e:
+        await asyncio.to_thread(shop.order_update, oid, status="failed")      # برگردان تا ادمین دوباره تلاش کند
+        raise HTTPException(409, str(e))
+    _aud("اعتبار سفارش فروشگاه به کیف پول", str(o["uid"]), f"#{oid}", "wallet")
+    async with Bot(token) as b:
+        await shop._tell(b, o["uid"], f"💰 سفارش #{oid} انجام نشد و مبلغ <b>{shop.money(o['amount'])}</b> تومان به کیف پول شما اضافه شد.\nموجودی: <b>{shop.money(w['balance'])}</b> تومان")
+        await shop._edit_admin_msgs(b, o, "💰 توسط ادمین وب‌پنل به کیف پول مشتری اضافه شد.")
+    return {"ok": True, "balance": w["balance"]}
+
+
+class ShopRejectReq(BaseModel):
+    reason_key: str = Field(default="a", max_length=2)
+    reason: str = Field(default="", max_length=200)
+
+
+@app.post("/api/shop/orders/{oid}/reject", dependencies=[Depends(guard)])
+async def shop_order_reject(oid: str, r: ShopRejectReq):
+    token = _shop_token()
+    reason = r.reason.strip() or shop.REJECT_REASONS.get(r.reason_key, shop.REJECT_REASONS["a"])
+    try:
+        o = await asyncio.to_thread(shop.order_reject, oid, 0, reason)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    _aud("رد رسید فروشگاه", oid, reason, "wallet")
+    async with Bot(token) as b:
+        await shop._tell(b, o["uid"], f"❌ <b>رسید سفارش #{o['id']} رد شد.</b>\nدلیل: {C.esc(reason)}\n\nاگر پرداخت کرده‌اید با پشتیبانی تماس بگیرید.")
+        await shop._edit_admin_msgs(b, o, "❌ توسط ادمین وب‌پنل رد شد.")
+    return {"ok": True}
+
+
+# ── مشتری‌ها ──
+def _cust_view(uid: str, c: dict, norders: int) -> dict:
+    return {"uid": uid, "name": c["name"], "username": c["username"], "balance": c["balance"], "joined": c["joined"], "banned": c["banned"],
+            "services": len(c["services"]), "orders": norders}
+
+
+@app.get("/api/shop/customers", dependencies=[Depends(guard)])
+async def shop_customers(q: str = Query("", max_length=40), offset: int = Query(0, ge=0, le=10 ** 5), limit: int = Query(20, ge=1, le=50)):
+    s = C.load_config_ro()["shop"]
+    needle = q.strip().lstrip("@").lower()
+    norders: dict[str, int] = {}
+    for o in s["orders"]:
+        norders[str(o["uid"])] = norders.get(str(o["uid"]), 0) + 1
+    rows = [(uid, c) for uid, c in s["customers"].items()
+            if not needle or needle == uid or needle in (c["username"] or "").lower() or needle in (c["name"] or "").lower()]
+    rows.sort(key=lambda kv: -kv[1]["joined"])
+    return {"total": len(rows), "items": [_cust_view(u, c, norders.get(u, 0)) for u, c in rows[offset:offset + limit]]}
+
+
+@app.get("/api/shop/customers/{uid}", dependencies=[Depends(guard)])
+async def shop_customer(uid: str):
+    s = C.load_config_ro()["shop"]
+    c = s["customers"].get(uid)
+    if not c:
+        raise HTTPException(404, "مشتری پیدا نشد.")
+    mine = [o for o in s["orders"] if str(o["uid"]) == uid]
+    return {**_cust_view(uid, c, len(mine)), "service_list": [x["u"] for x in c["services"][-30:]], "log": c["log"][-15:][::-1],
+            "recent": [_order_view(o, s["customers"]) for o in mine[-8:][::-1]]}
+
+
+class ShopWalletReq(BaseModel):
+    amount: int = Field(ge=1, le=10 ** 9)
+    sign: int = Field(default=1)
+    note: str = Field(default="", max_length=80)
+    code: str = Field(default="", max_length=64)
+
+
+@app.post("/api/shop/customers/{uid}/wallet", dependencies=[Depends(guard)])
+async def shop_customer_wallet(uid: str, r: ShopWalletReq, request: Request):
+    if r.sign not in (1, -1):
+        raise HTTPException(400, "نوع عملیات نامعتبر است.")
+    if not uid.lstrip("-").isdigit():
+        raise HTTPException(400, "شناسه نامعتبر است.")
+    await _gate_code(request, r.code, r.amount)
+    key = (request.headers.get("idempotency-key") or "").strip()[:40]
+    txid = ("web:" + key) if re.fullmatch(r"[A-Za-z0-9_-]{8,40}", key) else None
+    note = (r.note.strip() or "توسط ادمین وب‌پنل")
+    try:
+        w = await asyncio.to_thread(shop.wallet_apply, int(uid), r.sign * r.amount, "charge" if r.sign > 0 else "deduct", note, txid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if w.get("dup"):
+        return {"ok": True, "balance": w["balance"], "dup": True}
+    if r.sign > 0:
+        tok = C.load_config_ro()["shop"]["token"]
+        if tok:
+            try:
+                async with Bot(tok) as b:
+                    await shop._tell(b, int(uid), f"✅ کیف پول شما <b>{shop.money(r.amount)}</b> تومان شارژ شد.\nموجودی: <b>{shop.money(w['balance'])}</b> تومان")
+            except Exception:  # noqa: BLE001
+                log.exception("notify customer wallet")
+    return {"ok": True, "balance": w["balance"]}
+
+
+class ShopBanReq(BaseModel):
+    banned: bool
+
+
+@app.post("/api/shop/customers/{uid}/ban", dependencies=[Depends(guard)])
+async def shop_customer_ban(uid: str, r: ShopBanReq):
+    def mut(c):
+        cu = c["shop"]["customers"].get(uid)
+        if cu is None:
+            raise ValueError("مشتری پیدا نشد.")
+        cu["banned"] = r.banned
+    update_config(mut)
+    _aud("مسدود/آزاد کردن مشتری فروشگاه", uid, "مسدود" if r.banned else "آزاد", "sys")
+    return {"ok": True}
