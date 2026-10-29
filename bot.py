@@ -9,7 +9,7 @@ import logging
 import re
 import time
 
-from telegram import BotCommand, InlineKeyboardButton as B, InlineKeyboardMarkup as M, Update
+from telegram import Bot, BotCommand, InlineKeyboardButton as B, InlineKeyboardMarkup as M, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
@@ -19,6 +19,7 @@ from telegram.ext import (
 import common as C
 import ops
 import sales
+import shop
 from common import esc, get_api, get_panel, load_config, new_panel_id, update_config
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -1055,6 +1056,59 @@ async def sales_reply(update, context):
     await update.message.reply_html(text, reply_markup=main_kb())
 
 
+@nav
+async def setshop_cmd(update, context):
+    """/setshop TOKEN: ربات فروش مشتری را وصل و راه‌اندازی می‌کند. /setshop off: خاموش. بدون آرگومان: راهنما و وضعیت."""
+    msg = update.message
+    args = context.args or []
+    runner = context.application.bot_data.get("shop")
+    cur = load_config()["shop"]
+    if not args:
+        if runner and runner.app:
+            now = f"🟢 فعال: @{esc(runner.username)}"
+        elif cur["token"]:
+            now = f"🔴 توکن ذخیره شده ولی ربات بالا نیامده: {esc(runner.error if runner else '')}"
+        else:
+            now = "⚪ هنوز ربات فروشی وصل نشده."
+        await msg.reply_html(
+            "🛒 <b>ربات فروش مشتری</b>\n\n" + now + "\n\nبرای اتصال: در BotFather یک ربات <b>جدید</b> بسازید و توکنش را بفرستید:\n"
+            "<code>/setshop TOKEN</code>\n\nخاموش کردن: <code>/setshop off</code>\n\n"
+            "بعد از اتصال داخل <b>ربات فروش</b> بزنید /start و سپس /admin تا کارت، پلن‌ها و قیمت‌ها را تنظیم کنید. "
+            "پیام حاوی توکن را بعد از ارسال پاک می‌کنم.", reply_markup=main_kb())
+        return
+    token = args[0].strip()
+    try:
+        await msg.delete()          # پیام حاوی توکن
+    except TelegramError:
+        pass
+    chat = update.effective_chat.id
+    if token.lower() in ("off", "remove"):
+        update_config(lambda c: c["shop"].update(token=""))
+        if runner:
+            await runner.sync()
+        _aud(update, "خاموش کردن ربات فروش", cat="sys")
+        await context.bot.send_message(chat, "🛑 ربات فروش خاموش شد. داده‌ها (مشتری‌ها و موجودی‌ها) حفظ شده است.", reply_markup=main_kb())
+        return
+    if not re.fullmatch(r"\d{6,14}:[A-Za-z0-9_-]{30,60}", token):
+        await context.bot.send_message(chat, "⚠️ شکل توکن درست نیست. توکن را از BotFather کپی کنید.")
+        return
+    if token == load_config()["bot_token"]:
+        await context.bot.send_message(chat, "⚠️ این توکنِ همین ربات مدیریت است. برای فروشگاه یک ربات جدا بسازید.")
+        return
+    try:
+        me = await asyncio.wait_for(Bot(token).get_me(), 20)
+    except Exception as e:  # noqa: BLE001
+        await context.bot.send_message(chat, f"❌ توکن معتبر نیست یا تلگرام جواب نداد ({esc(e.__class__.__name__)}).", parse_mode=HTML)
+        return
+    update_config(lambda c: c["shop"].update(token=token))
+    _aud(update, "اتصال ربات فروش", f"@{me.username}", cat="sys")
+    uname = await runner.sync() if runner else ""
+    if uname:
+        await context.bot.send_message(chat, f"✅ ربات فروش <b>@{esc(uname)}</b> فعال شد.\n\nحالا داخل آن ربات بزنید /start و بعد /admin تا کارت، پلن‌ها و قیمت‌ها را تنظیم کنید.", parse_mode=HTML, reply_markup=main_kb())
+    else:
+        await context.bot.send_message(chat, f"⚠️ توکن ذخیره شد ولی ربات فروش بالا نیامد: {esc(runner.error if runner else '')}", parse_mode=HTML)
+
+
 # ───────────────────────────── راه‌اندازی ─────────────────────────────
 async def on_error(update, context):
     log.error("خطا در پردازش آپدیت", exc_info=context.error)
@@ -1066,7 +1120,7 @@ async def on_error(update, context):
 
 
 async def post_init(app: Application):
-    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("setdb", "اتصال دیتابیس پنل"), BotCommand("cancel", "لغو عملیات جاری")])
+    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("setdb", "اتصال دیتابیس پنل"), BotCommand("setshop", "اتصال ربات فروش مشتری"), BotCommand("cancel", "لغو عملیات جاری")])
     # ردیاب فروش و گزارش روزانه ۰۰:۰۰ (به وقت ایران)
     app.bot_data["bg"] = [
         asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot)),
@@ -1075,19 +1129,34 @@ async def post_init(app: Application):
         asyncio.create_task(ops.recon_loop(app.bot)),   # ردیاب اختلاف مالی هر ۶ ساعت
           # بکاپ اصلی روزانه ۱۲:۰۰
     ]
+    runner = shop.Runner()          # ربات فروش مشتری (توکن جدا) داخل همین پروسه؛ خطایش ربات مدیریت را خراب نمی‌کند
+    app.bot_data["shop"] = runner
+    try:
+        await runner.sync()
+    except Exception:  # noqa: BLE001
+        log.exception("shop start")
+
+
+async def post_shutdown(app: Application):
+    runner = app.bot_data.get("shop")
+    if runner:
+        try:
+            await runner.stop()
+        except Exception:  # noqa: BLE001
+            log.exception("shop stop")
 
 
 def build_app() -> Application:
     cfg = load_config()
     if not cfg["bot_token"]:
         raise SystemExit("bot_token در config.json خالی است. نصب را دوباره اجرا کنید یا وب‌پنل > تنظیمات را پر کنید.")
-    app = Application.builder().token(cfg["bot_token"]).concurrent_updates(True).post_init(post_init).build()
+    app = Application.builder().token(cfg["bot_token"]).concurrent_updates(True).post_init(post_init).post_shutdown(post_shutdown).build()
 
     txt = filters.TEXT & ~filters.COMMAND
     cb = CallbackQueryHandler
     conv = ConversationHandler(
         entry_points=[
-            CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), CommandHandler("report", report_cmd), CommandHandler("setdb", setdb_cmd),
+            CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), CommandHandler("report", report_cmd), CommandHandler("setdb", setdb_cmd), CommandHandler("setshop", setshop_cmd),
             cb(back_cb, pattern=r"^back$"), cb(report_cb, pattern=r"^rp:(today|yday)$"),
             cb(create_entry, pattern=r"^c:(quick|pick)$"),
             cb(tpl_new, pattern=r"^t:new$"), cb(tpl_edit_field, pattern=r"^te:(name|gb|days):\d+$"),
