@@ -106,7 +106,8 @@ DEFAULT_CFG = {
     "rep_notes": {},     # اسم/یادداشت نماینده برای هر کاربرش: {panel_id: {username: note}}
     # فروشگاه (ربات فروش مشتری): توکن ربات جدا، کارت، پلن‌ها، مشتری‌ها با کیف پول، سفارش‌ها (خرید/تمدید/شارژ با رسید) و دفتر تراکنش
     "shop": {"enabled": True, "token": "", "panel": "", "card": {"number": "", "holder": "", "bank": ""}, "plans": [], "welcome": "", "support": "",
-             "min_topup": 10000, "max_topup": 50000000, "receipt_hours": 24, "customers": {}, "orders": [], "tx": []},
+             "min_topup": 10000, "max_topup": 50000000, "receipt_hours": 24, "customers": {}, "orders": [], "tx": [],
+             "test": {"enabled": False, "template": "", "prefix": "test"}},      # تست رایگان: هر مشتری فقط یک‌بار
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
 
@@ -213,6 +214,9 @@ def _normalize_shop(raw) -> dict:
             s[k] = min(hi, max(lo, int(raw.get(k, s[k]))))
         except (TypeError, ValueError):
             pass
+    t = raw.get("test") if isinstance(raw.get("test"), dict) else {}
+    pre = re.sub(r"[^A-Za-z0-9_]", "", str(t.get("prefix") or "test"))[:16] or "test"
+    s["test"] = {"enabled": bool(t.get("enabled")), "template": str(t.get("template") or "")[:80], "prefix": pre}
     plans, seen = [], set()
     for p in raw.get("plans") if isinstance(raw.get("plans"), list) else []:
         try:
@@ -234,6 +238,7 @@ def _normalize_shop(raw) -> dict:
                     for x in (r.get("services") if isinstance(r.get("services"), list) else []) if isinstance(x, dict) and x.get("u")]
             cust[str(uid)] = {"balance": min(SHOP_BAL_MAX, max(0, int(r.get("balance") or 0))), "name": str(r.get("name") or "")[:60],
                               "username": str(r.get("username") or "")[:40], "joined": int(r.get("joined") or 0), "banned": bool(r.get("banned")),
+                              "test": int(r.get("test") or 0), "test_user": str(r.get("test_user") or "")[:64],
                               "services": svcs, "log": [x for x in (r.get("log") if isinstance(r.get("log"), list) else []) if isinstance(x, dict)][-SHOP_LOG_MAX:]}
         except (TypeError, ValueError):
             continue

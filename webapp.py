@@ -2718,7 +2718,7 @@ def _shop_counts(s: dict) -> dict:
 
 
 @app.get("/api/shop/summary", dependencies=[Depends(guard)])
-async def shop_summary():
+def shop_summary():
     """عدد کوچک برای نشان روی تب (هر ۳۰ ثانیه)."""
     s = C.load_config_ro()["shop"]
     cnt = _shop_counts(s)
@@ -2726,7 +2726,7 @@ async def shop_summary():
 
 
 @app.get("/api/shop", dependencies=[Depends(guard)])
-async def shop_overview():
+def shop_overview():
     cfg = C.load_config_ro()
     s = cfg["shop"]
     cnt = _shop_counts(s)
@@ -2737,7 +2737,7 @@ async def shop_overview():
     return {"enabled": s["enabled"], "panel": shop.shop_panel(cfg), "panels": [{"id": p["id"], "name": p["name"]} for p in cfg["panels"]],
             "card": s["card"], "welcome": s["welcome"], "support": s["support"], "min_topup": s["min_topup"], "max_topup": s["max_topup"],
             "receipt_hours": s["receipt_hours"], "has_token": bool(tok), "token_hint": ("…" + tok[-6:]) if tok else "",
-            "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
+            "test": s["test"], "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
             "counts": cnt, "customers": len(s["customers"]), "wallet_total": sum(c["balance"] for c in s["customers"].values()),
             "sales_total": sales_total, "sales_24h": sales_24h}
 
@@ -2753,6 +2753,9 @@ class ShopSettingsReq(BaseModel):
     min_topup: int | None = Field(default=None, ge=1000, le=10 ** 9)
     max_topup: int | None = Field(default=None, ge=1000, le=10 ** 10)
     receipt_hours: int | None = Field(default=None, ge=1, le=720)
+    test_enabled: bool | None = None
+    test_template: str | None = Field(default=None, max_length=80)
+    test_prefix: str | None = Field(default=None, max_length=16)
     token: str | None = Field(default=None, max_length=120)
     clear_token: bool = False
     code: str = Field(default="", max_length=64)
@@ -2771,6 +2774,12 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
             raise HTTPException(400, "شماره کارت باید ۱۶ رقم باشد.")
     if r.panel is not None and r.panel and not get_panel(cur, r.panel):
         raise HTTPException(400, "پنل پیدا نشد.")
+    if r.test_template and r.test_template not in cur["templates"]:
+        raise HTTPException(400, "تمپلت تست پیدا نشد.")
+    if r.test_prefix is not None and not re.fullmatch(r"[A-Za-z0-9_]{1,16}", r.test_prefix.strip()):
+        raise HTTPException(400, "پیشوند نام کاربری تست فقط حروف انگلیسی، عدد و _ (حداکثر ۱۶ کاراکتر) باشد.")
+    if r.test_enabled and not (r.test_template or cur["shop"]["test"]["template"]):
+        raise HTTPException(400, "ابتدا تمپلت تست را انتخاب کنید.")
     lo = r.min_topup if r.min_topup is not None else cur["shop"]["min_topup"]
     hi = r.max_topup if r.max_topup is not None else cur["shop"]["max_topup"]
     if lo > hi:
@@ -2814,6 +2823,12 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
             sh["max_topup"] = r.max_topup
         if r.receipt_hours is not None:
             sh["receipt_hours"] = r.receipt_hours
+        if r.test_enabled is not None:
+            sh["test"]["enabled"] = r.test_enabled
+        if r.test_template is not None:
+            sh["test"]["template"] = r.test_template
+        if r.test_prefix is not None:
+            sh["test"]["prefix"] = r.test_prefix.strip()
         if tok_new and token_changed:
             sh["token"] = tok_new
         elif r.clear_token:
@@ -2821,6 +2836,7 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
     update_config(mut)
     what = [k for k, v in (("وضعیت باز/بسته", r.enabled is not None), ("پنل فروش", r.panel is not None), ("کارت", digits is not None or r.card_holder is not None or r.card_bank is not None),
                            ("متن‌ها", r.welcome is not None or r.support is not None), ("محدوده شارژ/مهلت رسید", r.min_topup is not None or r.max_topup is not None or r.receipt_hours is not None),
+                           ("تست رایگان", r.test_enabled is not None or r.test_template is not None or r.test_prefix is not None),
                            ("توکن ربات فروش", token_changed)) if v]
     _aud("تنظیمات فروشگاه", "", "، ".join(what) + (f" — ****{digits[-4:]}" if digits else ""), "sys")
     restarted = False
@@ -2850,7 +2866,7 @@ class ShopPlanEditReq(BaseModel):
 
 
 @app.post("/api/shop/plans", dependencies=[Depends(guard)])
-async def shop_plan_add(r: ShopPlanReq):
+def shop_plan_add(r: ShopPlanReq):
     out: dict = {}
 
     def mut(c):
@@ -2869,7 +2885,7 @@ async def shop_plan_add(r: ShopPlanReq):
 
 
 @app.post("/api/shop/plans/{pid}", dependencies=[Depends(guard)])
-async def shop_plan_edit(pid: str, r: ShopPlanEditReq):
+def shop_plan_edit(pid: str, r: ShopPlanEditReq):
     out: dict = {}
 
     def mut(c):
@@ -2889,7 +2905,7 @@ async def shop_plan_edit(pid: str, r: ShopPlanEditReq):
 
 
 @app.post("/api/shop/plans/{pid}/delete", dependencies=[Depends(guard)])
-async def shop_plan_delete(pid: str):
+def shop_plan_delete(pid: str):
     def mut(c):
         if not shop.plan_get(c["shop"], pid):
             raise ValueError("پلن پیدا نشد.")
@@ -2901,7 +2917,7 @@ async def shop_plan_delete(pid: str):
 
 # ── سفارش‌ها و رسیدها ──
 @app.get("/api/shop/orders", dependencies=[Depends(guard)])
-async def shop_orders(status: str = Query("open", max_length=12), kind: str = Query("", max_length=8), q: str = Query("", max_length=40),
+def shop_orders(status: str = Query("open", max_length=12), kind: str = Query("", max_length=8), q: str = Query("", max_length=40),
                       offset: int = Query(0, ge=0, le=10 ** 5), limit: int = Query(20, ge=1, le=50)):
     s = C.load_config_ro()["shop"]
     custs = s["customers"]
@@ -3014,11 +3030,11 @@ async def shop_order_reject(oid: str, r: ShopRejectReq):
 # ── مشتری‌ها ──
 def _cust_view(uid: str, c: dict, norders: int) -> dict:
     return {"uid": uid, "name": c["name"], "username": c["username"], "balance": c["balance"], "joined": c["joined"], "banned": c["banned"],
-            "services": len(c["services"]), "orders": norders}
+            "services": len(c["services"]), "orders": norders, "test": c.get("test", 0), "test_user": c.get("test_user", "")}
 
 
 @app.get("/api/shop/customers", dependencies=[Depends(guard)])
-async def shop_customers(q: str = Query("", max_length=40), offset: int = Query(0, ge=0, le=10 ** 5), limit: int = Query(20, ge=1, le=50)):
+def shop_customers(q: str = Query("", max_length=40), offset: int = Query(0, ge=0, le=10 ** 5), limit: int = Query(20, ge=1, le=50)):
     s = C.load_config_ro()["shop"]
     needle = q.strip().lstrip("@").lower()
     norders: dict[str, int] = {}
@@ -3031,7 +3047,7 @@ async def shop_customers(q: str = Query("", max_length=40), offset: int = Query(
 
 
 @app.get("/api/shop/customers/{uid}", dependencies=[Depends(guard)])
-async def shop_customer(uid: str):
+def shop_customer(uid: str):
     s = C.load_config_ro()["shop"]
     c = s["customers"].get(uid)
     if not c:
@@ -3075,12 +3091,28 @@ async def shop_customer_wallet(uid: str, r: ShopWalletReq, request: Request):
     return {"ok": True, "balance": w["balance"]}
 
 
+@app.post("/api/shop/customers/{uid}/test-reset", dependencies=[Depends(guard)])
+def shop_customer_test_reset(uid: str):
+    """به مشتری اجازه‌ی یک تست رایگان دیگر می‌دهد (مثلاً وقتی ساخت تستش مبهم ماند)."""
+    def mut(c):
+        cu = c["shop"]["customers"].get(uid)
+        if cu is None:
+            raise ValueError("مشتری پیدا نشد.")
+        cu["test"], cu["test_user"] = 0, ""
+    try:
+        update_config(mut)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    _aud("بازنشانی تست رایگان مشتری", uid, "", "sys")
+    return {"ok": True}
+
+
 class ShopBanReq(BaseModel):
     banned: bool
 
 
 @app.post("/api/shop/customers/{uid}/ban", dependencies=[Depends(guard)])
-async def shop_customer_ban(uid: str, r: ShopBanReq):
+def shop_customer_ban(uid: str, r: ShopBanReq):
     def mut(c):
         cu = c["shop"]["customers"].get(uid)
         if cu is None:

@@ -415,9 +415,20 @@ async function api(path, method = 'GET', body) {
   if (S.panel && !/^\/(state|templates|panels|qr|shop)/.test(path) && path !== '/settings') path += (path.includes('?') ? '&' : '?') + 'panel=' + encodeURIComponent(S.panel);
   const headers = { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' };
   if (money) headers['Idempotency-Key'] = _idem[slot] || (_idem[slot] = _newKey());
-  try {
-    r = await fetch('/api' + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  } catch { throw new Error('ارتباط با سرور برقرار نشد؛ اگر مطمئن نیستید عملیات انجام شده، قبل از تلاش دوباره «کاربران من/تراکنش‌ها» را ببینید.'); }
+  // درخواست خواندنی: اگر سرور جواب نداد (۲۵ ثانیه) یا خطای موقت ۵۰۲/۵۰۳/۵۰۴ داد، یک‌بار خودکار دوباره تلاش می‌شود؛ صفحه بی‌پایان معطل نمی‌ماند.
+  for (let attempt = 0; ; attempt++) {
+    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), method === 'GET' ? 25000 : 90000);
+    try {
+      r = await fetch('/api' + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: ctl.signal });
+    } catch {
+      clearTimeout(tm);
+      if (method === 'GET' && attempt < 1) continue;
+      throw new Error(method === 'GET' ? 'سرور دیر جواب داد؛ دوباره امتحان کنید.' : 'ارتباط با سرور برقرار نشد؛ اگر مطمئن نیستید عملیات انجام شده، قبل از تلاش دوباره «کاربران من/تراکنش‌ها» را ببینید.');
+    }
+    clearTimeout(tm);
+    if (method === 'GET' && attempt < 1 && [502, 503, 504].includes(r.status)) continue;
+    break;
+  }
   if (money) delete _idem[slot];
   if (r.status === 401) { location.href = '/login'; throw new Error('نشست شما تمام شد؛ دوباره وارد شوید.'); }
   let d = {}; try { d = await r.json(); } catch {}
@@ -1522,7 +1533,10 @@ const lgRow = (k, v) => h('div', { class: 'lg' }, h('span', {}, k), h('span', { 
 
 async function vShop() {
   const D = S.shop;
-  let d; try { d = await api('/shop'); } catch (e) { return mount(h('p', { class: 'err' }, e.message)); }
+  let d; try { d = await api('/shop'); } catch (e) {
+    const rt = h('button', { class: 'btn pri', type: 'button' }, '🔄 تلاش دوباره'); rt.onclick = () => run(rt, () => vShop());
+    return mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message), rt));
+  }
   S.shopPend = d.counts.pending + d.counts.failed; renderNav();
   if (!d.has_token && !D.touched) D.sec = 'bot';
   const fa = n => (+n || 0).toLocaleString('fa-IR');
@@ -1705,10 +1719,13 @@ function shopCust(c, d) {
     b1.onclick = () => run(b1, adj(1)); b2.onclick = () => run(b2, adj(-1));
     const ban = h('button', { class: 'btn sm ' + (r.banned ? '' : 'bad'), type: 'button' }, r.banned ? '✅ رفع مسدودی' : '🚫 مسدود کردن');
     ban.onclick = () => run(ban, async () => { await api(`/shop/customers/${c.uid}/ban`, 'POST', { banned: !r.banned }); toast(r.banned ? 'آزاد شد' : 'مسدود شد'); c.banned = !r.banned; it.classList.toggle('s-disabled', c.banned); loaded = false; await fill(); });
+    const rst = r.test ? h('button', { class: 'btn sm', type: 'button' }, '🎁 بازنشانی تست') : null;
+    if (rst) rst.onclick = () => { if (confirm('به این مشتری اجازه‌ی یک تست رایگان دیگر داده شود؟')) run(rst, async () => { await api(`/shop/customers/${c.uid}/test-reset`, 'POST'); toast('✅ انجام شد'); loaded = false; await fill(); }); };
     inner.replaceChildren(
       h('div', { class: 'tiles' }, h('div', {}, h('span', {}, 'موجودی'), h('b', {}, toman(r.balance))), h('div', {}, h('span', {}, 'سفارش'), h('b', {}, String(r.orders))), h('div', {}, h('span', {}, 'سرویس'), h('b', {}, String(r.services)))),
       lgRow('عضویت', fdt(r.joined)), r.service_list.length ? lgRow('سرویس‌ها', r.service_list.join('، ')) : null,
-      field('مبلغ', amt), field('توضیح', note), h('div', { class: 'btns' }, b1, b2, ban),
+      r.test ? lgRow('🎁 تست رایگان', (r.test_user || 'گرفته شده') + ' · ' + fdt(r.test)) : null,
+      field('مبلغ', amt), field('توضیح', note), h('div', { class: 'btns' }, b1, b2, ban, rst),
       r.recent.length ? h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 4px' }, 'آخرین سفارش‌ها') : null,
       ...r.recent.map(o => lgRow(`#${o.id} ${SHOP_KIND[o.kind] || o.kind}`, `${toman(o.amount)} · ${SHOP_ST[o.status] || o.status}`)),
       r.log.length ? h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 4px' }, 'گردش کیف پول') : null,
@@ -1749,6 +1766,20 @@ async function shopBot(d, body, redraw) {
       min_topup: mv(mn), max_topup: mv(mx), receipt_hours: n, code }));
     toast('✅ ذخیره شد؛ تغییرات فوراً در ربات اعمال می‌شود'); await redraw();
   });
+  const tOn = h('input', { type: 'checkbox', id: 'tston' }); tOn.checked = !!d.test.enabled;
+  const tTpl = h('select', {}, [h('option', { value: '' }, '— انتخاب تمپلت تست —'), ...d.templates.map(t => h('option', { value: t.name, selected: t.name === d.test.template }, `${t.name} (${t.gb || '∞'}GB · ${t.days || '∞'} روز)`))]);
+  const tPre = i(d.test.prefix, 'test', { dir: 'ltr', maxlength: 16 });
+  const tSave = h('button', { class: 'btn pri', type: 'button' }, 'ذخیره تست رایگان');
+  tSave.onclick = () => run(tSave, async () => {
+    if (tOn.checked && !tTpl.value) throw new Error('برای فعال‌سازی، تمپلت تست را انتخاب کنید.');
+    await api('/shop/settings', 'POST', { test_enabled: tOn.checked, test_template: tTpl.value, test_prefix: tPre.value.trim() || 'test' });
+    toast('✅ تست رایگان ذخیره شد'); await redraw();
+  });
+  body.append(h('div', { class: 'card' }, h('h2', {}, '🎁 تست رایگان'),
+    h('label', { class: 'chk', for: 'tston' }, tOn, 'مشتری‌ها بتوانند یک‌بار تست رایگان بگیرند'),
+    field('تمپلت تست (حجم و مدت از همین تمپلت می‌آید)', tTpl), field('پیشوند نام کاربری تست', tPre),
+    h('p', { class: 'hint' }, 'هر مشتری فقط یک‌بار می‌تواند تست بگیرد و تست بعداً از «سرویس‌های من» قابل تمدید است. اگر ساخت تستی مبهم ماند، در تب «مشتری‌ها» دکمه‌ی «بازنشانی تست» اجازه‌ی یک تست دیگر می‌دهد.'),
+    h('div', { class: 'btns' }, tSave)));
   body.append(h('div', { class: 'card' }, h('h2', {}, '💳 کارت و پرداخت'), field('شماره کارت (۱۶ رقم)', num), field('نام صاحب کارت', holder), field('بانک', bank),
       d.card.number ? null : h('p', { class: 'err' }, 'کارت تنظیم نشده؛ تا آن را نگذارید مشتری نمی‌تواند با کارت‌به‌کارت خرید کند.')),
     h('div', { class: 'card' }, h('h2', {}, '⚙️ امکانات ربات'), field('پنلی که اکانت مشتری‌ها روی آن ساخته می‌شود', panel),

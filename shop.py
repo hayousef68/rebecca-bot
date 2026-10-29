@@ -82,7 +82,7 @@ def customer_touch(uid, name: str, username: str) -> dict:
 
     def mut(c):
         r = c["shop"]["customers"].setdefault(str(uid), {"balance": 0, "name": "", "username": "", "joined": int(time.time()),
-                                                        "banned": False, "services": [], "log": []})
+                                                        "banned": False, "services": [], "log": [], "test": 0, "test_user": ""})
         r["name"], r["username"] = name, username
     return dict(C.update_config(mut)["shop"]["customers"][str(uid)])
 
@@ -433,6 +433,134 @@ async def handle_link(update: Update, context, text: str) -> bool:
         pass
     await m.reply_html("\n".join(results) + ("\n\nحالا از «سرویس‌های من» می‌توانید تمدید کنید." if found else ""), reply_markup=kb)
     return True
+
+
+# ═════════════════════════════ تست رایگان ═════════════════════════════
+def test_available(cfg: dict | None = None) -> bool:
+    cfg = cfg or C.load_config_ro()
+    t = cfg["shop"]["test"]
+    return bool(t["enabled"] and t["template"] in cfg["templates"])
+
+
+def _test_claim(uid: int, grant: bool) -> str:
+    """grant=True: تست را اتمیک «مصرف‌شده» می‌کند. خروجی: ok | used | off. grant=False: برگرداندن (وقتی ساخت قطعاً شکست خورد)."""
+    out = {"r": "ok"}
+
+    def mut(c):
+        cu = c["shop"]["customers"].get(str(uid))
+        if cu is None:
+            raise ValueError("ابتدا /start را بزنید.")
+        if not grant:
+            cu["test"] = 0
+            return
+        t = c["shop"]["test"]
+        if not (t["enabled"] and t["template"] in c["templates"]):
+            out["r"] = "off"
+        elif cu["test"]:
+            out["r"] = "used"
+        else:
+            cu["test"] = int(time.time())
+    C.update_config(mut)
+    return out["r"]
+
+
+async def _create_test(uid: int) -> dict:
+    cfg = C.load_config()
+    t = cfg["shop"]["test"]
+    tpl = dict(cfg["templates"][t["template"]])
+    pid = shop_panel(cfg)
+    api = C.get_api(pid)
+    if not api.is_configured():
+        raise FulfilError("پنل در دسترس نیست.", True)
+    try:
+        services = await api.list_services()
+    except C.RebeccaError as e:
+        raise FulfilError(str(e), True) from e
+    svc_id = C.pick_default_service(services, tpl.get("kind") == "group")
+    if svc_id is None:
+        raise FulfilError("سرویس مناسب در پنل پیدا نشد.", True)
+    svc_name = next((x["name"] for x in services if x["id"] == svc_id), str(svc_id))
+    async with _lock():
+        prefix = t["prefix"]
+        nx = await sales.next_number(api, prefix, len(cfg["panels"]) <= 1)
+        name = C.make_names(prefix, int(nx.get("next") or 1), 1, 1)[0]
+        results, failed = None, []
+        for _ in range(4):
+            try:
+                results, failed = await C.create_users(api, [name], tpl, svc_id, concurrency=1)
+            except Exception:  # noqa: BLE001
+                log.exception("shop test create")
+                results, failed = [], [(name, "خطای پنل")]
+            if results or not failed or "قبل" not in failed[0][1]:
+                break
+            m = re.fullmatch(r"(.*?)(\d+)", name)
+            if not m:
+                break
+            name = C.make_names(m.group(1), int(m.group(2)) + 1, 1, 1)[0]
+        if not results:
+            msg = failed[0][1] if failed else "نامشخص"
+            try:
+                u = await api.request("GET", api.upath(name))
+            except C.RebeccaError as e:
+                raise FulfilError(msg, e.status == 404) from e
+            except Exception as e:  # noqa: BLE001
+                raise FulfilError(msg, False) from e
+            if isinstance(u, dict) and u.get("username"):
+                results = [{"username": name, "sub": api.full_sub(u.get("subscription_url", ""))}]
+            else:
+                raise FulfilError(msg, False)
+    uname = results[0]["username"]
+    await asyncio.to_thread(customer_add_service, uid, pid, uname)
+    await asyncio.to_thread(_test_set_user, uid, uname)
+    return {"results": results, "header": C.build_info(api.name, tpl, svc_name), "username": uname, "tpl": tpl}
+
+
+def _test_set_user(uid: int, uname: str) -> None:
+    def mut(c):
+        cu = c["shop"]["customers"].get(str(uid))
+        if cu is not None:
+            cu["test_user"] = uname
+    C.update_config(mut)
+
+
+async def give_test(update: Update, context) -> None:
+    """مشتری «تست رایگان» را زد: یک‌بار برای هر مشتری، اتمیک (دوبار زدن = فقط یک اکانت)."""
+    u = update.effective_user
+    cfg = C.load_config_ro()
+    if not test_available(cfg):
+        await show(update, context, "🎁 تست رایگان فعلاً فعال نیست.", back_kb())
+        return
+    r = await asyncio.to_thread(_test_claim, u.id, True)
+    if r == "used":
+        await show(update, context, "🎁 شما قبلاً تست رایگان گرفته‌اید (هر نفر فقط یک‌بار).\nبرای ادامه از «🛒 خرید کانفیگ» استفاده کنید.", back_kb())
+        return
+    if r == "off":
+        await show(update, context, "🎁 تست رایگان فعلاً فعال نیست.", back_kb())
+        return
+    await show(update, context, "⏳ در حال ساخت تست رایگان شما…", None)
+    try:
+        res = await _create_test(u.id)
+    except FulfilError as e:
+        if e.clean:
+            await asyncio.to_thread(_test_claim, u.id, False)       # قطعاً چیزی ساخته نشده؛ حق تست برمی‌گردد
+            await show(update, context, "❌ ساخت تست الان ممکن نشد؛ کمی بعد دوباره امتحان کنید.", back_kb())
+        else:
+            await show(update, context, "⚠️ ساخت تست با مشکل روبه‌رو شد؛ پشتیبانی بررسی می‌کند.", back_kb())
+            await _notify_admins(context.bot, f"⚠️ ساخت تست رایگان برای {label(customer_get(u.id), u.id)} نتیجه‌ی مبهم داشت ({esc(e)}). در پنل بررسی کنید؛ در صورت نیاز در وب‌پنل «بازنشانی تست» بزنید.")
+        return
+    except Exception:  # noqa: BLE001
+        log.exception("give_test")
+        await show(update, context, "⚠️ خطای غیرمنتظره؛ پشتیبانی بررسی می‌کند.", back_kb())
+        await _notify_admins(context.bot, f"⚠️ ساخت تست رایگان برای {label(customer_get(u.id), u.id)} با خطا مواجه شد.")
+        return
+    try:
+        await C.send_results(context.bot, u.id, res["results"], res["header"], cfg["max_qr"], True)
+        await context.bot.send_message(u.id, "🎁 تست رایگان شما آماده است. لینک بالا را در برنامه‌ی خود وارد کنید.\nبعداً می‌توانید از «🔄 سرویس‌های من» تمدیدش کنید.",
+                                       reply_markup=back_kb())
+    except Exception:  # noqa: BLE001
+        log.exception("send test result")
+        await _tell(context.bot, u.id, f"🎁 <b>تست رایگان شما</b>\n\n<code>{esc(res['results'][0]['sub'])}</code>", back_kb())
+    await _notify_admins(context.bot, f"🎁 تست رایگان: <code>{esc(res['username'])}</code> برای {label(customer_get(u.id), u.id)}")
 
 
 # ═════════════════════════════ انجام سفارش (ساخت اکانت / تمدید / شارژ) ═════════════════════════════
@@ -805,11 +933,13 @@ def is_adm(update: Update) -> bool:
     return bool(u and C.is_admin(u.id))
 
 
-def main_kb(admin: bool) -> M:
+def main_kb(admin: bool, uid: int | None = None) -> M:
     rows = [[B("🛒 خرید کانفیگ", callback_data="buy"), B("🔄 سرویس‌های من", callback_data="svc")],
             [B("👛 کیف پول", callback_data="wal"), B("🧾 سفارش‌های من", callback_data="ords")],
             [B("🔗 اتصال سرویس قبلی (با لینک ساب)", callback_data="lnk")],
             [B("☎️ پشتیبانی", callback_data="sup")]]
+    if uid is not None and test_available() and not (customer_get(uid) or {}).get("test"):
+        rows.insert(0, [B("🎁 دریافت تست رایگان", callback_data="tst")])
     if admin:
         rows.append([B("⚙️ مدیریت فروشگاه", callback_data="ad")])
     return M(rows)
@@ -828,7 +958,7 @@ async def home(update: Update, context, prefix: str = "") -> None:
     txt = f"{prefix}{txt}\n\n👛 موجودی شما: <b>{money(cu.get('balance', 0))}</b> تومان"
     if not s["enabled"]:
         txt += "\n\n🔴 فروشگاه موقتاً بسته است."
-    await show(update, context, txt, main_kb(is_adm(update)))
+    await show(update, context, txt, main_kb(is_adm(update), update.effective_user.id))
 
 
 def _gate(update: Update) -> str | None:
@@ -961,7 +1091,7 @@ async def _launch_wallet(update: Update, context, kind: str, plan_id: str, usern
         return
     await show(update, context, f"⚙️ پرداخت از کیف پول انجام شد؛ سفارش #{o['id']} در حال انجام است…", None)
     await fulfil(context.bot, o["id"])
-    await context.bot.send_message(update.effective_chat.id, "🏠 منوی اصلی", reply_markup=main_kb(is_adm(update)))
+    await context.bot.send_message(update.effective_chat.id, "🏠 منوی اصلی", reply_markup=main_kb(is_adm(update), update.effective_user.id))
 
 
 async def _submit_receipt(update: Update, context, oid: str) -> None:
@@ -1034,7 +1164,7 @@ async def on_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if mine:
             await _submit_receipt(update, context, mine[-1]["id"])
             return
-    await m.reply_html("از منوی زیر استفاده کنید 👇", reply_markup=main_kb(is_adm(update)))
+    await m.reply_html("از منوی زیر استفاده کنید 👇", reply_markup=main_kb(is_adm(update), update.effective_user.id))
 
 
 async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1136,6 +1266,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await _launch_wallet(update, context, "renew", p[2], svcs[i]["u"])
         else:
             await _launch_card(update, context, "renew", p[2], 0, svcs[i]["u"])
+    elif cmd == "tst":
+        await give_test(update, context)
     elif cmd == "lnk":
         context.user_data["aw"] = ("link",)
         await show(update, context, "🔗 <b>اتصال سرویس قبلی</b>\n\nلینک ساب (اشتراک) سرویس خود را همین‌جا بفرستید تا به حساب شما وصل شود و بتوانید از «سرویس‌های من» تمدیدش کنید.", back_kb())
