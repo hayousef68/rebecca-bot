@@ -1766,6 +1766,19 @@ async function shopBot(d, body, redraw) {
       min_topup: mv(mn), max_topup: mv(mx), receipt_hours: n, code }));
     toast('✅ ذخیره شد؛ تغییرات فوراً در ربات اعمال می‌شود'); await redraw();
   });
+  const fOn = h('input', { type: 'checkbox', id: 'fjon' }); fOn.checked = !!d.force.enabled;
+  const fCh = h('textarea', { rows: 3, maxlength: 1500, dir: 'ltr', placeholder: '@mychannel\n-1001234567890 https://t.me/+inviteLink' });
+  fCh.value = d.force.channels.map(x => x.chat + (x.link ? ' ' + x.link : '')).join('\n');
+  const fSave = h('button', { class: 'btn pri', type: 'button' }, 'ذخیره عضویت اجباری');
+  fSave.onclick = () => run(fSave, async () => {
+    await api('/shop/settings', 'POST', { force_enabled: fOn.checked, force_channels: fCh.value });
+    toast('✅ ذخیره شد'); await redraw();
+  });
+  body.append(h('div', { class: 'card' }, h('h2', {}, '📢 عضویت اجباری در کانال'),
+    h('label', { class: 'chk', for: 'fjon' }, fOn, 'مشتری‌ها قبل از استفاده از ربات باید عضو کانال(ها) شوند'),
+    field('کانال‌ها (هر خط یکی، حداکثر ۵)', fCh),
+    h('p', { class: 'hint' }, 'کانال عمومی: @name یا لینک t.me/name. کانال خصوصی: شناسه عددی (-100…) و بعدش لینک دعوت. حتماً ربات فروش را ادمین همان کانال کنید؛ وگرنه عضویت قابل بررسی نیست و آن کانال نادیده گرفته می‌شود (به ادمین‌ها هشدار می‌رسد). ادمین‌های ربات از این شرط معاف‌اند.'),
+    h('div', { class: 'btns' }, fSave)));
   const tOn = h('input', { type: 'checkbox', id: 'tston' }); tOn.checked = !!d.test.enabled;
   const tTpl = h('select', {}, [h('option', { value: '' }, '— انتخاب تمپلت تست —'), ...d.templates.map(t => h('option', { value: t.name, selected: t.name === d.test.template }, `${t.name} (${t.gb || '∞'}GB · ${t.days || '∞'} روز)`))]);
   const tPre = i(d.test.prefix, 'test', { dir: 'ltr', maxlength: 16 });

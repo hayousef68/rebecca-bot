@@ -107,7 +107,8 @@ DEFAULT_CFG = {
     # فروشگاه (ربات فروش مشتری): توکن ربات جدا، کارت، پلن‌ها، مشتری‌ها با کیف پول، سفارش‌ها (خرید/تمدید/شارژ با رسید) و دفتر تراکنش
     "shop": {"enabled": True, "token": "", "panel": "", "card": {"number": "", "holder": "", "bank": ""}, "plans": [], "welcome": "", "support": "",
              "min_topup": 10000, "max_topup": 50000000, "receipt_hours": 24, "customers": {}, "orders": [], "tx": [],
-             "test": {"enabled": False, "template": "", "prefix": "test"}},      # تست رایگان: هر مشتری فقط یک‌بار
+             "test": {"enabled": False, "template": "", "prefix": "test"},
+             "force": {"enabled": False, "channels": []}},      # عضویت اجباری: channels=[{chat: "@name"|"-100…", link: "https://t.me/…"}]      # تست رایگان: هر مشتری فقط یک‌بار
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
 
@@ -198,6 +199,33 @@ SHOP_LOG_MAX = 50
 SHOP_BAL_MAX = 10 ** 10
 
 
+def parse_force_channels(text: str) -> list[dict]:
+    """هر خط یک کانال: «@name» یا «https://t.me/name» یا «-100123… لینک‌دعوت» (برای کانال خصوصی). خطای قالب: ValueError."""
+    out = []
+    for ln in str(text or "").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        parts = ln.split()
+        first, link = parts[0], (parts[1] if len(parts) > 1 else "")
+        m = re.fullmatch(r"(?:https?://)?(?:t\.me|telegram\.me)/([A-Za-z0-9_]{4,64})/?", first)
+        if m:
+            first = "@" + m.group(1)
+        elif re.fullmatch(r"[A-Za-z0-9_]{4,64}", first) and not first.isdigit():
+            first = "@" + first
+        if not re.fullmatch(r"@[A-Za-z0-9_]{4,64}|-100\d{5,15}", first):
+            raise ValueError(f"کانال «{ln[:40]}» معتبر نیست؛ مثل @mychannel یا شناسه -100… بنویسید.")
+        if first.startswith("-") and not link:
+            raise ValueError("برای کانال خصوصی (شناسه -100…) لینک دعوت را بعد از شناسه بنویسید.")
+        if link and not re.fullmatch(r"https://t\.me/\S+", link):
+            raise ValueError("لینک دعوت باید با https://t.me/ شروع شود.")
+        if all(x["chat"] != first for x in out):
+            out.append({"chat": first, "link": link})
+    if len(out) > 5:
+        raise ValueError("حداکثر ۵ کانال.")
+    return out
+
+
 def _normalize_shop(raw) -> dict:
     """تنظیمات و داده‌ی فروشگاه را به ساختار معتبر برمی‌گرداند (کلیدهای ناشناخته حذف می‌شوند)."""
     s = copy.deepcopy(DEFAULT_CFG["shop"])
@@ -217,6 +245,12 @@ def _normalize_shop(raw) -> dict:
     t = raw.get("test") if isinstance(raw.get("test"), dict) else {}
     pre = re.sub(r"[^A-Za-z0-9_]", "", str(t.get("prefix") or "test"))[:16] or "test"
     s["test"] = {"enabled": bool(t.get("enabled")), "template": str(t.get("template") or "")[:80], "prefix": pre}
+    f = raw.get("force") if isinstance(raw.get("force"), dict) else {}
+    chans = []
+    for x in (f.get("channels") if isinstance(f.get("channels"), list) else [])[:5]:
+        if isinstance(x, dict) and re.fullmatch(r"@[A-Za-z0-9_]{4,64}|-100\d{5,15}", str(x.get("chat") or "")):
+            chans.append({"chat": str(x["chat"]), "link": str(x.get("link") or "")[:200]})
+    s["force"] = {"enabled": bool(f.get("enabled")) and bool(chans), "channels": chans}
     plans, seen = [], set()
     for p in raw.get("plans") if isinstance(raw.get("plans"), list) else []:
         try:

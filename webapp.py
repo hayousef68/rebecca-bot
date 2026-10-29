@@ -2737,7 +2737,7 @@ def shop_overview():
     return {"enabled": s["enabled"], "panel": shop.shop_panel(cfg), "panels": [{"id": p["id"], "name": p["name"]} for p in cfg["panels"]],
             "card": s["card"], "welcome": s["welcome"], "support": s["support"], "min_topup": s["min_topup"], "max_topup": s["max_topup"],
             "receipt_hours": s["receipt_hours"], "has_token": bool(tok), "token_hint": ("…" + tok[-6:]) if tok else "",
-            "test": s["test"], "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
+            "test": s["test"], "force": s["force"], "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
             "counts": cnt, "customers": len(s["customers"]), "wallet_total": sum(c["balance"] for c in s["customers"].values()),
             "sales_total": sales_total, "sales_24h": sales_24h}
 
@@ -2753,6 +2753,8 @@ class ShopSettingsReq(BaseModel):
     min_topup: int | None = Field(default=None, ge=1000, le=10 ** 9)
     max_topup: int | None = Field(default=None, ge=1000, le=10 ** 10)
     receipt_hours: int | None = Field(default=None, ge=1, le=720)
+    force_enabled: bool | None = None
+    force_channels: str | None = Field(default=None, max_length=1500)
     test_enabled: bool | None = None
     test_template: str | None = Field(default=None, max_length=80)
     test_prefix: str | None = Field(default=None, max_length=16)
@@ -2774,6 +2776,14 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
             raise HTTPException(400, "شماره کارت باید ۱۶ رقم باشد.")
     if r.panel is not None and r.panel and not get_panel(cur, r.panel):
         raise HTTPException(400, "پنل پیدا نشد.")
+    force_list = None
+    if r.force_channels is not None:
+        try:
+            force_list = C.parse_force_channels(r.force_channels)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    if r.force_enabled and not (force_list if force_list is not None else cur["shop"]["force"]["channels"]):
+        raise HTTPException(400, "برای فعال‌سازی، حداقل یک کانال وارد کنید.")
     if r.test_template and r.test_template not in cur["templates"]:
         raise HTTPException(400, "تمپلت تست پیدا نشد.")
     if r.test_prefix is not None and not re.fullmatch(r"[A-Za-z0-9_]{1,16}", r.test_prefix.strip()):
@@ -2823,6 +2833,10 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
             sh["max_topup"] = r.max_topup
         if r.receipt_hours is not None:
             sh["receipt_hours"] = r.receipt_hours
+        if force_list is not None:
+            sh["force"]["channels"] = force_list
+        if r.force_enabled is not None:
+            sh["force"]["enabled"] = r.force_enabled
         if r.test_enabled is not None:
             sh["test"]["enabled"] = r.test_enabled
         if r.test_template is not None:
@@ -2836,7 +2850,7 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
     update_config(mut)
     what = [k for k, v in (("وضعیت باز/بسته", r.enabled is not None), ("پنل فروش", r.panel is not None), ("کارت", digits is not None or r.card_holder is not None or r.card_bank is not None),
                            ("متن‌ها", r.welcome is not None or r.support is not None), ("محدوده شارژ/مهلت رسید", r.min_topup is not None or r.max_topup is not None or r.receipt_hours is not None),
-                           ("تست رایگان", r.test_enabled is not None or r.test_template is not None or r.test_prefix is not None),
+                           ("عضویت اجباری", r.force_enabled is not None or force_list is not None), ("تست رایگان", r.test_enabled is not None or r.test_template is not None or r.test_prefix is not None),
                            ("توکن ربات فروش", token_changed)) if v]
     _aud("تنظیمات فروشگاه", "", "، ".join(what) + (f" — ****{digits[-4:]}" if digits else ""), "sys")
     restarted = False

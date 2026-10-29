@@ -435,6 +435,64 @@ async def handle_link(update: Update, context, text: str) -> bool:
     return True
 
 
+# ═════════════════════════════ عضویت اجباری در کانال ═════════════════════════════
+_member_ok: dict[int, float] = {}          # uid ← زمان آخرین تأیید عضویت (کش ۶۰ ثانیه‌ای؛ جلوگیری از درخواست زیاد به تلگرام)
+_force_warned: dict[str, float] = {}
+
+
+def force_channels() -> list[dict]:
+    f = shop_cfg()["force"]
+    return f["channels"] if f["enabled"] else []
+
+
+def _chan_url(ch: dict) -> str:
+    if ch.get("link"):
+        return ch["link"]
+    return f"https://t.me/{ch['chat'][1:]}" if ch["chat"].startswith("@") else ""
+
+
+async def missing_channels(bot: Bot, uid: int) -> list[dict]:
+    """کانال‌هایی که کاربر عضو نیست. اگر ربات نتواند بررسی کند (ادمین کانال نیست…) آن کانال نادیده گرفته می‌شود تا فروشگاه قفل نشود."""
+    chans = force_channels()
+    if not chans or C.is_admin(uid):
+        return []
+    if time.time() - _member_ok.get(uid, 0) < 60:
+        return []
+    miss = []
+    for ch in chans:
+        chat = int(ch["chat"]) if ch["chat"].lstrip("-").isdigit() else ch["chat"]
+        try:
+            m = await asyncio.wait_for(bot.get_chat_member(chat, uid), 10)
+            if m.status in ("left", "kicked") or (m.status == "restricted" and not getattr(m, "is_member", True)):
+                miss.append(ch)
+        except Exception as e:  # noqa: BLE001
+            log.warning("force-join check %s: %s", ch["chat"], e)
+            if time.time() - _force_warned.get(ch["chat"], 0) > 6 * 3600:
+                _force_warned[ch["chat"]] = time.time()
+                await _notify_admins(bot, f"⚠️ بررسی عضویت اجباری در {esc(ch['chat'])} ممکن نشد ({esc(e.__class__.__name__)}). ربات فروش را <b>ادمین همان کانال</b> کنید؛ تا آن موقع این کانال نادیده گرفته می‌شود.")
+    if not miss:
+        _member_ok[uid] = time.time()
+        if len(_member_ok) > 5000:
+            _member_ok.clear()
+    return miss
+
+
+async def force_join_ok(update: Update, context) -> bool:
+    """False یعنی کاربر عضو نیست و پیام عضویت نشان داده شد."""
+    u = update.effective_user
+    miss = await missing_channels(context.bot, u.id)
+    if not miss:
+        return True
+    rows = [[B(f"📢 عضویت در {ch['chat'] if ch['chat'].startswith('@') else 'کانال'}", url=_chan_url(ch))] for ch in miss if _chan_url(ch)]
+    rows.append([B("✅ عضو شدم", callback_data="chk")])
+    text = "🔒 برای استفاده از ربات ابتدا در کانال زیر عضو شوید، سپس دکمه‌ی «✅ عضو شدم» را بزنید."
+    q = update.callback_query
+    if q:
+        await _ans(q, "ابتدا در کانال عضو شوید.", show_alert=True)
+    await show(update, context, text, M(rows))
+    return False
+
+
 # ═════════════════════════════ تست رایگان ═════════════════════════════
 def test_available(cfg: dict | None = None) -> bool:
     cfg = cfg or C.load_config_ro()
@@ -1129,6 +1187,8 @@ async def on_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if block:
         await m.reply_html(block)
         return
+    if not await force_join_ok(update, context):
+        return
     aw = context.user_data.get("aw")
     text = (m.text or "").strip()
     if text == MENU_BTN:
@@ -1189,10 +1249,16 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if block:
         await _ans(q, block, show_alert=True)
         return
+    if cmd == "chk":
+        _member_ok.pop(u.id, None)
+    if not await force_join_ok(update, context):
+        return
     await _ans(q, )
     s = shop_cfg()
     cu = customer_get(u.id) or {}
-    if cmd == "home":
+    if cmd == "chk":
+        await home(update, context, "✅ عضویت شما تأیید شد.\n\n")
+    elif cmd == "home":
         await home(update, context)
     elif cmd == "buy":
         kb = _plans_kb("bp")
