@@ -2073,7 +2073,7 @@ async function vSet() {
     const f = fileI.files[0]; if (!f) throw new Error('ابتدا فایل بکاپ را انتخاب کنید.');
     if (f.size > 2e6) throw new Error('حجم فایل زیاد است.');
     const r = await api('/backup/verify', 'POST', { content: await f.text(), password: rsPw.value });
-    alert(`✅ بکاپ سالم است${r.encrypted ? ' (رمزنگاری‌شده؛ رمز درست بود)' : ''}\n${r.panels} پنل · ${r.reps} نماینده · ${r.rep_users} کاربر تخصیص‌یافته\nمجموع موجودی نماینده‌ها: ${toman(r.balance)}${r.full ? `\nلاگ فروش: ${r.attach_log} رکورد` : ''}${r.old_format ? '\n⚠️ فرمت قدیمی (بدون نماینده‌ها)' : ''}\n\nچیزی تغییر نکرد.`);
+    alert(`✅ بکاپ سالم است${r.encrypted ? ' (رمزنگاری‌شده؛ رمز درست بود)' : ''}\n${r.panels} پنل · ${r.reps} نماینده · ${r.rep_users} کاربر تخصیص‌یافته\nمجموع موجودی نماینده‌ها: ${toman(r.balance)}\n🛒 فروشگاه: ${r.shop.customers} مشتری · ${r.shop.services} سرویس · ${r.shop.orders} سفارش · موجودی مشتری‌ها ${toman(r.shop.balance)}${r.full ? `\nلاگ فروش: ${r.attach_log} رکورد` : ''}${r.old_format ? '\n⚠️ فرمت قدیمی (بدون نماینده‌ها)' : ''}\n\nچیزی تغییر نکرد.`);
   });
   const rcB = h('button', { class: 'btn', type: 'button' }, '🧮 بررسی تطابق مالی');
   rcB.onclick = () => run(rcB, async () => {
@@ -2089,10 +2089,12 @@ async function vSet() {
     const pv = await api('/backup/restore/preview', 'POST', { content, password: rsPw.value });
     let mode = 'keep', confirmWallet = false;
     const d = pv.diff;
-    if (d && (d.changed_n || d.lost_tx)) {
+    const shopDiff = d && d.shop_now && d.shop_backup && (d.shop_now.balance !== d.shop_backup.balance || d.shop_now.customers !== d.shop_backup.customers || d.shop_now.orders !== d.shop_backup.orders);
+    if (d && (d.changed_n || d.lost_tx || shopDiff)) {
       const n = v => v == null ? '—' : (+v).toLocaleString('en-US');
       const lines = d.changed.slice(0, 8).map(x => `• ${x.name}: الان ${n(x.now)} ← در بکاپ ${n(x.backup)}`).join('\n');
-      const msg = `⚠️ موجودیِ ${d.changed_n} نماینده در این بکاپ با وضعیت فعلی فرق دارد.\nجمع فعلی: ${toman(d.total_now)}\nجمع در بکاپ: ${toman(d.total_backup)}\n${lines}${d.lost_tx ? `\n\n${d.lost_tx} تراکنش جدیدتر از این بکاپ هست که با بازیابی کامل از بین می‌رود.` : ''}\n\n✅ تأیید (پیشنهادی): فقط تنظیمات برگردد؛ موجودی و تراکنش‌های فعلی دست‌نخورده بماند.\n✖ لغو: گزینه‌ی دیگر…`;
+      const shopLn = shopDiff ? `\n\n🛒 فروشگاه — الان: ${d.shop_now.customers} مشتری · ${toman(d.shop_now.balance)} · ${d.shop_now.orders} سفارش\n🛒 فروشگاه — در بکاپ: ${d.shop_backup.customers} مشتری · ${toman(d.shop_backup.balance)} · ${d.shop_backup.orders} سفارش` : '';
+      const msg = `⚠️ موجودی/اطلاعات این بکاپ با وضعیت فعلی فرق دارد.\nموجودیِ ${d.changed_n} نماینده فرق دارد.\nجمع فعلی: ${toman(d.total_now)}\nجمع در بکاپ: ${toman(d.total_backup)}\n${lines}${shopLn}${d.lost_tx ? `\n\n${d.lost_tx} تراکنش جدیدتر از این بکاپ هست که با بازیابی کامل از بین می‌رود.` : ''}\n\n✅ تأیید (پیشنهادی): فقط تنظیمات برگردد؛ موجودی و تراکنش‌های فعلی (نماینده‌ها و مشتری‌های فروشگاه) دست‌نخورده بماند.\n✖ لغو: گزینه‌ی دیگر…`;
       if (!confirm(msg)) {
         if (!confirm('برگرداندن کاملِ موجودی و تراکنش‌ها از بکاپ؟\nموجودی‌های فعلی با اعداد بالا جایگزین می‌شود (فقط یک نسخه‌ی پشتیبان روی سرور می‌ماند).\nمطمئنید؟')) return;
         mode = 'restore'; confirmWallet = true;
@@ -2100,13 +2102,13 @@ async function vSet() {
     } else if (!confirm('تنظیمات از این فایل بازیابی شود؟ (موجودی نماینده‌ها تغییری نمی‌کند)\nاز وضعیت فعلی یک نسخه‌ی پشتیبان روی سرور ذخیره می‌شود.')) return;
     const r = await withCode(code => api('/backup/restore', 'POST', { content, password: rsPw.value, wallet_mode: mode, confirm_wallet: confirmWallet, code }));
     if (r.recon && !r.recon.ok) alert(`⚠️ بعد از بازیابی ${r.recon.count} اختلاف مالی پیدا شد:\n` + r.recon.issues.map(i => `• ${i.name}: ${i.text}`).join('\n'));
-    toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · موجودی کل ${toman(r.balance)}${r.wallet_kept ? ' (کیف پول‌ها دست‌نخورده)' : ''} · ربات در حال ریستارت`);
+    toast(`✅ بازیابی شد: ${r.panels} پنل · ${r.reps} نماینده · موجودی کل ${toman(r.balance)} · فروشگاه: ${r.shop ? r.shop.customers : 0} مشتری${r.wallet_kept ? ' (کیف پول‌ها دست‌نخورده)' : ''} · ربات در حال ریستارت`);
     setTimeout(() => location.reload(), r.web_changed ? 1800 : 1200);
   });
   const backupCard = h('div', { class: 'card' }, h('h2', {}, '💾 بکاپ و بازیابی'),
     h('label', { class: 'chk', for: 'autob' }, autoB, 'ارسال خودکار بکاپ به ادمین‌ها در تلگرام'),
     field('زمان‌بندی بکاپ', ivSel),
-    h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'بکاپ دقیقاً طبق زمان‌بندی ثابت فرستاده می‌شود (مثلاً «هر ۱ ساعت» = سر هر ساعت به وقت تهران؛ «روزانه» = ساعت ۱۲:۰۰). ریستارت ربات زمان‌بندی را به‌هم نمی‌زند. بکاپ شامل موجودی و تراکنش‌های همه‌ی نماینده‌هاست و با بازیابی روی سرور جدید برمی‌گردد. برای کیف پول، ۱۵ تا ۶۰ دقیقه پیشنهاد می‌شود.'),
+    h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'بکاپ دقیقاً طبق زمان‌بندی ثابت فرستاده می‌شود (مثلاً «هر ۱ ساعت» = سر هر ساعت به وقت تهران؛ «روزانه» = ساعت ۱۲:۰۰). ریستارت ربات زمان‌بندی را به‌هم نمی‌زند. بکاپ شامل موجودی و تراکنش‌های همه‌ی نماینده‌ها و همچنین همه‌ی کاربران، موجودی کیف پول، سرویس‌ها و سفارش‌های ربات فروشگاه است و با بازیابی روی سرور جدید برمی‌گردد. برای کیف پول، ۱۵ تا ۶۰ دقیقه پیشنهاد می‌شود.'),
     h('div', { class: 'btns' }, dlB, tgB),
     h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 6px' }, '☁️ بکاپ آنلاین (بدون پیام‌های تکراری)'),
     h('label', { class: 'chk', for: 'liveb' }, liveB, 'یک پیام ثابت در تلگرام که با هر تغییر، فایل داخلش جایگزین می‌شود'),

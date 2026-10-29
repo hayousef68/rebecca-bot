@@ -2475,7 +2475,9 @@ async def backup_restore(r: RestoreReq, request: Request):
     if not has_reps:                                    # بکاپ قدیمی (قبل از نماینده‌ها): نماینده‌های فعلی پاک نشوند
         new["reps"], new["rep_users"], new["rep_notes"], new["rep_paid"] = cur["reps"], cur["rep_users"], cur["rep_notes"], cur["rep_paid"]
     # سرور خالی/تازه (بدون موجودی و تراکنش): کیف پول همیشه از بکاپ برگردد
-    fresh_srv = not any(x["balance"] for x in cur["reps"].values()) and not cur["wallet_tx"]
+    _sh = C.shop_totals(cur)
+    fresh_srv = (not any(x["balance"] for x in cur["reps"].values()) and not cur["wallet_tx"]
+                 and not _sh["customers"] and not _sh["orders"])
     keep = (r.wallet_mode == "keep" and not fresh_srv) or not has_reps
     if not keep and not r.confirm_wallet and not fresh_srv:
         raise HTTPException(400, "برای برگرداندنِ موجودی و تراکنش‌ها از بکاپ، تأیید صریح لازم است.")
@@ -2516,6 +2518,7 @@ async def backup_restore(r: RestoreReq, request: Request):
     fresh = load_config()
     return {"ok": True, "panels": len(fresh["panels"]), "reps": len(fresh["reps"]),
             "balance": sum(x["balance"] for x in fresh["reps"].values()),
+            "shop": C.shop_totals(fresh),
             "wallet_kept": keep, "web_changed": web_changed,
             "recon": ops.recon_summary(ops.reconcile(fresh, None), 8)}
 
@@ -2534,6 +2537,7 @@ async def backup_verify(r: RestoreReq):
     return {"ok": True, "encrypted": C.is_encrypted_backup(r.content), "full": extra is not None,
             "old_format": "reps" not in data, "panels": s["panels"], "reps": s["reps"], "rep_users": s["rep_users"],
             "balance": sum(x["balance"] for x in new["reps"].values()),
+            "shop": C.shop_totals(new),
             "attach_log": len((extra or {}).get("attach_log") or [])}
 
 

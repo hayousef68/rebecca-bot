@@ -20,13 +20,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
 import re
 import secrets
 import time
 from collections import defaultdict, deque
+from urllib.parse import unquote, urlsplit
 
-from telegram import Bot, InlineKeyboardButton as B, InlineKeyboardMarkup as M, Update
+from telegram import (Bot, BotCommand, BotCommandScopeChat, InlineKeyboardButton as B, InlineKeyboardMarkup as M, MenuButtonCommands,
+                      ReplyKeyboardMarkup, Update)
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -288,6 +292,147 @@ def customer_add_service(uid: int, pid: str, username: str) -> None:
         if r is not None and not any(x["u"] == username and x["pid"] == pid for x in r["services"]):
             r["services"].append({"pid": pid, "u": username, "ts": int(time.time())})
     C.update_config(mut)
+
+
+# ═════════════════════════════ اتصال سرویس قبلی با لینک ساب ═════════════════════════════
+MENU_BTN = "🏠 منوی اصلی"
+_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
+_tok_cache: dict = {"ts": 0.0, "map": {}}
+
+
+def sub_token(link: str) -> str:
+    """توکن ساب از لینک (…/sub/TOKEN یا …/sub/TOKEN/v2ray و …)."""
+    path = unquote(urlsplit(link.strip()).path or "")
+    parts = [x for x in path.split("/") if x]
+    if "sub" in parts and parts.index("sub") + 1 < len(parts):
+        return parts[parts.index("sub") + 1]
+    return parts[-1] if parts else ""
+
+
+def _token_username(token: str) -> str | None:
+    """نام کاربری داخل توکن ساب (فرمت مرزبان/ربکا: base64(username,ts)+امضا یا JWT). فقط حدس؛ اعتبار با مقایسه‌ی توکن در پنل بررسی می‌شود."""
+    def b64(x: str) -> bytes:
+        return base64.urlsafe_b64decode(x + "=" * (-len(x) % 4))
+    try:
+        if token.count(".") == 2:
+            sub = json.loads(b64(token.split(".")[1])).get("sub") or json.loads(b64(token.split(".")[1])).get("username")
+            return str(sub) if sub else None
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        name = b64(token[:-10]).decode("utf-8").split(",")[0]
+        return name or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _scan_token(token: str) -> tuple[str, str, dict] | None:
+    """راه جایگزین: فهرست کاربران هر پنل را می‌خواند و توکن را تطبیق می‌دهد (نتیجه ۵ دقیقه کش می‌شود)."""
+    now = time.time()
+    if now - _tok_cache["ts"] > 300:
+        m: dict = {}
+        for pn in C.load_config_ro()["panels"]:
+            api = C.get_api(pn["id"])
+            if not api.is_configured():
+                continue
+            try:
+                users = await asyncio.wait_for(api.iter_users(), 90)
+            except Exception:  # noqa: BLE001
+                continue
+            for u in users:
+                t = sub_token(u.get("subscription_url") or "")
+                if t:
+                    m[t] = (pn["id"], u.get("username"), u)
+        _tok_cache.update(ts=now, map=m)
+    hit = _tok_cache["map"].get(token)
+    return (hit[0], hit[1], hit[2]) if hit else None
+
+
+async def find_service_by_link(link: str) -> tuple[str, str, dict] | None:
+    """لینک ساب ← (panel_id, username, user). فقط وقتی توکنِ لینک دقیقاً با توکن کاربر در پنل یکی باشد (اثبات مالکیت)."""
+    token = sub_token(link)
+    if len(token) < 8:
+        return None
+    guess = _token_username(token)
+    cfg = C.load_config_ro()
+    if guess:
+        for pn in cfg["panels"]:
+            api = C.get_api(pn["id"])
+            if not api.is_configured():
+                continue
+            try:
+                u = await asyncio.wait_for(api.request("GET", api.upath(guess)), 20)
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(u, dict) and sub_token(u.get("subscription_url") or "") == token:
+                return pn["id"], u.get("username") or guess, u
+    return await _scan_token(token)
+
+
+def customer_link_service(uid: int, pid: str, username: str) -> str:
+    """سرویس را به مشتری وصل می‌کند. خروجی: ok | dup (قبلاً وصل بوده) | taken (متعلق به مشتری دیگر)."""
+    out = {"r": "ok"}
+
+    def mut(c):
+        cs = c["shop"]["customers"]
+        me = cs.get(str(uid))
+        if me is None:
+            raise ValueError("ابتدا /start را بزنید.")
+        if any(x["u"] == username and (x["pid"] == pid or not x["pid"]) for x in me["services"]):
+            out["r"] = "dup"
+            return
+        if any(k != str(uid) and any(x["u"] == username and (x["pid"] == pid or not x["pid"]) for x in r["services"]) for k, r in cs.items()):
+            out["r"] = "taken"
+            return
+        if len(me["services"]) >= 50:
+            raise ValueError("سقف تعداد سرویس‌ها پر است.")
+        me["services"].append({"pid": pid, "u": username, "ts": int(time.time())})
+    C.update_config(mut)
+    if out["r"] == "ok":
+        C.audit_event("فروشگاه", "اتصال سرویس با لینک ساب", str(uid), username, cat="user")
+    return out["r"]
+
+
+async def handle_link(update: Update, context, text: str) -> bool:
+    """اگر پیام شامل لینک ساب معتبر بود سرویس را وصل می‌کند و True برمی‌گرداند."""
+    m = update.effective_message
+    links = _URL_RE.findall(text)
+    if not links:
+        return False
+    wait = await m.reply_html("⏳ در حال بررسی لینک…")
+    u = update.effective_user
+    results, found = [], 0
+    for link in links[:3]:
+        try:
+            hit = await find_service_by_link(link)
+        except Exception:  # noqa: BLE001
+            log.exception("link lookup")
+            hit = None
+        if not hit:
+            results.append("❌ این لینک در سیستم پیدا نشد. لینک ساب کامل را بفرستید.")
+            continue
+        pid, uname, _ = hit
+        try:
+            r = await asyncio.to_thread(customer_link_service, u.id, pid, uname)
+        except ValueError as e:
+            results.append(f"❌ {esc(e)}")
+            continue
+        if r == "taken":
+            results.append(f"⛔ سرویس <b>{esc(uname)}</b> قبلاً به حساب دیگری وصل شده است؛ به پشتیبانی پیام بدهید.")
+        elif r == "dup":
+            results.append(f"ℹ️ سرویس <b>{esc(uname)}</b> از قبل در لیست شماست.")
+            found += 1
+        else:
+            results.append(f"✅ سرویس <b>{esc(uname)}</b> وصل شد.")
+            found += 1
+    context.user_data.pop("aw", None)
+    kb = back_kb([[B("🔄 سرویس‌های من / تمدید", callback_data="svc")]]) if found else back_kb()
+    try:
+        await wait.delete()
+    except TelegramError:
+        pass
+    await m.reply_html("\n".join(results) + ("\n\nحالا از «سرویس‌های من» می‌توانید تمدید کنید." if found else ""), reply_markup=kb)
+    return True
 
 
 # ═════════════════════════════ انجام سفارش (ساخت اکانت / تمدید / شارژ) ═════════════════════════════
@@ -663,6 +808,7 @@ def is_adm(update: Update) -> bool:
 def main_kb(admin: bool) -> M:
     rows = [[B("🛒 خرید کانفیگ", callback_data="buy"), B("🔄 سرویس‌های من", callback_data="svc")],
             [B("👛 کیف پول", callback_data="wal"), B("🧾 سفارش‌های من", callback_data="ords")],
+            [B("🔗 اتصال سرویس قبلی (با لینک ساب)", callback_data="lnk")],
             [B("☎️ پشتیبانی", callback_data="sup")]]
     if admin:
         rows.append([B("⚙️ مدیریت فروشگاه", callback_data="ad")])
@@ -700,6 +846,10 @@ def _gate(update: Update) -> str | None:
     return None
 
 
+def _menu_reply_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([[MENU_BTN]], resize_keyboard=True, is_persistent=True)
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     u = update.effective_user
     await asyncio.to_thread(customer_touch, u.id, u.full_name, u.username or "")
@@ -707,6 +857,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if block:
         await update.effective_message.reply_html(block)
         return
+    await update.effective_message.reply_html("⌨️ برای برگشت به منو، هر وقت دکمه‌ی «🏠 منوی اصلی» پایین صفحه را بزنید.", reply_markup=_menu_reply_kb())
     await home(update, context)
 
 
@@ -850,6 +1001,9 @@ async def on_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     aw = context.user_data.get("aw")
     text = (m.text or "").strip()
+    if text == MENU_BTN:
+        await home(update, context)
+        return
     if aw and aw[0] == "receipt":
         await _submit_receipt(update, context, aw[1])
         return
@@ -869,6 +1023,11 @@ async def on_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if aw and aw[0].startswith("a_") and is_adm(update):
         await admin_text(update, context, aw)
+        return
+    if text and not (aw and aw[0].startswith("a_")) and await handle_link(update, context, text):
+        return
+    if aw and aw[0] == "link":
+        await m.reply_html("لینک ساب معتبر نبود. لینک کامل را بفرستید (مثلاً <code>https://…/sub/…</code>).", reply_markup=back_kb())
         return
     if m.photo:                                  # عکسِ بدون حالت: اگر سفارش منتظر رسید دارد همان را می‌گیریم
         mine = [o for o in shop_cfg()["orders"] if o["uid"] == u.id and o["status"] == "new"]
@@ -946,7 +1105,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif cmd == "svc":
         svcs = cu.get("services") or []
         rows = [[B(f"👤 {sv['u']}", callback_data=f"sv:{i}")] for i, sv in enumerate(svcs[:30])]
-        await show(update, context, "🔄 <b>سرویس‌های من</b>" if svcs else "هنوز سرویسی ندارید. از «🛒 خرید کانفیگ» شروع کنید.", back_kb(rows))
+        await show(update, context, "🔄 <b>سرویس‌های من</b>" if svcs else "هنوز سرویسی ندارید. از «🛒 خرید کانفیگ» شروع کنید، یا لینک ساب سرویس قبلی‌تان را همین‌جا بفرستید.", back_kb(rows))
     elif cmd == "sv":
         await show_service(update, context, int(p[1]))
     elif cmd == "sq":
@@ -977,6 +1136,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await _launch_wallet(update, context, "renew", p[2], svcs[i]["u"])
         else:
             await _launch_card(update, context, "renew", p[2], 0, svcs[i]["u"])
+    elif cmd == "lnk":
+        context.user_data["aw"] = ("link",)
+        await show(update, context, "🔗 <b>اتصال سرویس قبلی</b>\n\nلینک ساب (اشتراک) سرویس خود را همین‌جا بفرستید تا به حساب شما وصل شود و بتوانید از «سرویس‌های من» تمدیدش کنید.", back_kb())
     elif cmd == "sup":
         await show(update, context, "☎️ <b>پشتیبانی</b>\n\n" + (esc(s["support"]) if s["support"] else "پشتیبانی هنوز تنظیم نشده است."), back_kb())
     else:
@@ -1317,6 +1479,23 @@ def build_shop_app(token: str) -> Application:
     return app
 
 
+async def _setup_menu(bot: Bot) -> None:
+    """منوی دستورات (/start و /admin بدون تایپ)، دکمه‌ی منو کنار فیلد پیام و توضیحات صفحه‌ی اول ربات."""
+    try:
+        await bot.set_my_commands([BotCommand("start", "🏠 منوی اصلی")])
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        s = shop_cfg()
+        await bot.set_my_short_description("خرید و تمدید کانفیگ · کیف پول · اتصال سرویس با لینک ساب")
+        await bot.set_my_description((s["welcome"] or "به فروشگاه خوش آمدید.") [:400] + "\n\nبرای شروع دکمه‌ی START را بزنید.")
+    except TelegramError as e:
+        log.warning("shop menu setup: %s", e)
+    for aid in C.load_config_ro().get("admin_ids", []):
+        try:
+            await bot.set_my_commands([BotCommand("start", "🏠 منوی اصلی"), BotCommand("admin", "⚙️ مدیریت فروشگاه")], scope=BotCommandScopeChat(int(aid)))
+        except (TelegramError, ValueError, TypeError):
+            pass
+
+
 class Runner:
     """ربات فروش را کنار ربات مدیریت (در همان event loop) بالا می‌آورد و با تغییر توکن دوباره راه می‌اندازد."""
 
@@ -1355,6 +1534,7 @@ class Runner:
             return
         self.app, self.token = app, token
         self.username = getattr(app.bot, "username", "") or ""
+        await _setup_menu(app.bot)
         self.task = asyncio.create_task(maintenance_loop(app.bot))
         log.info("✅ Shop bot started (@%s)", self.username)
 

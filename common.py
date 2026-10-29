@@ -835,7 +835,8 @@ def restore_diff(cur: dict, new: dict) -> dict:
     return {"changed": changed[:40], "changed_n": len(changed),
             "total_now": sum(r["balance"] for r in cur["reps"].values()), "total_backup": sum(r["balance"] for r in new["reps"].values()),
             "only_now": [r["name"] for r in rows if r["backup"] is None], "only_backup": [r["name"] for r in rows if r["now"] is None],
-            "lost_tx": lost, "backup_latest_ts": latest, "pending_topups_now": sum(1 for t in cur["topups"] if t.get("status") == "pending")}
+            "lost_tx": lost, "backup_latest_ts": latest, "pending_topups_now": sum(1 for t in cur["topups"] if t.get("status") == "pending"),
+            "shop_now": shop_totals(cur), "shop_backup": shop_totals(new)}
 
 
 def restore_keep_wallet(new: dict, cur: dict) -> None:
@@ -1070,8 +1071,19 @@ def unlock_rep(rid: str) -> None:
 def backup_summary(cfg: dict | None = None) -> dict:
     """شمارش نماینده‌ها و کاربرهای تخصیص‌یافته (برای نمایش در بکاپ/بازیابی)."""
     cfg = cfg or load_config()
+    sh = shop_totals(cfg)
     return {"panels": len(cfg["panels"]), "reps": len(cfg["reps"]),
-            "rep_users": sum(len(m) for m in cfg["rep_users"].values())}
+            "rep_users": sum(len(m) for m in cfg["rep_users"].values()),
+            "shop_customers": sh["customers"], "shop_balance": sh["balance"], "shop_orders": sh["orders"],
+            "shop_services": sh["services"]}
+
+
+def shop_totals(cfg: dict) -> dict:
+    """شمارش کاربران، جمع موجودی، سفارش‌ها و سرویس‌های فروشگاه (برای کپشن بکاپ و پیش‌نمایش بازیابی)."""
+    sh = cfg.get("shop") or {}
+    cu = sh.get("customers") or {}
+    return {"customers": len(cu), "balance": sum(int(r.get("balance") or 0) for r in cu.values()),
+            "orders": len(sh.get("orders") or []), "services": sum(len(r.get("services") or []) for r in cu.values())}
 
 
 def _rep_key(rep: dict) -> bytes | None:

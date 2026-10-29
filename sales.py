@@ -963,7 +963,7 @@ def attach_import(items: list) -> int:
 
 
 def full_backup_bytes() -> bytes:
-    """بکاپ اصلی: همه‌ی تنظیمات (پنل‌ها، ربات، قیمت‌ها، دیتابیس، SSL، رمز وب‌پنل)، نماینده‌ها و کاربرهایشان + لاگ فروش."""
+    """بکاپ اصلی: همه‌ی تنظیمات (پنل‌ها، ربات، قیمت‌ها، دیتابیس، SSL، رمز وب‌پنل)، نماینده‌ها و کاربرهایشان، کاربران و موجودی و سفارش‌های فروشگاه + لاگ فروش."""
     cfg = json.loads(config_backup_bytes().decode("utf-8"))
     payload = {
         "format": BACKUP_FORMAT, "version": 2,
@@ -1080,6 +1080,7 @@ async def _live_push(bot, targets: list, msgs: dict) -> int:
         b = backup_summary()
         cap += f"\n👥 {b['reps']} نماینده · {b['rep_users']} کاربر"
         cap += f"\n💰 جمع موجودی نماینده‌ها: {sum(r['balance'] for r in load_config()['reps'].values()):,} تومان"
+        cap += f"\n🛒 فروشگاه: {b['shop_customers']} مشتری · {b['shop_services']} سرویس · {b['shop_orders']} سفارش · جمع موجودی مشتری‌ها {b['shop_balance']:,} تومان"
     except Exception:  # noqa: BLE001
         pass
     ok = 0
@@ -1230,6 +1231,7 @@ async def send_backup(bot, admin_ids, caption: str) -> int:
         b = backup_summary()
         caption += f"\n👥 {b['reps']} نماینده · {b['rep_users']} کاربر تخصیص‌یافته در این بکاپ است."
         caption += f"\n💰 مجموع موجودی نماینده‌ها: {sum(r['balance'] for r in load_config()['reps'].values()):,} تومان"
+        caption += f"\n🛒 فروشگاه: {b['shop_customers']} مشتری · {b['shop_services']} سرویس · {b['shop_orders']} سفارش · مجموع موجودی مشتری‌ها {b['shop_balance']:,} تومان"
     except Exception:  # noqa: BLE001
         pass
     sent = 0
