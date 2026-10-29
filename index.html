@@ -359,6 +359,11 @@ html{-webkit-tap-highlight-color:transparent}
 .card textarea{width:100%;min-height:80px;background:var(--bg);border:1px solid var(--line);border-radius:12px;color:var(--tx);font:inherit;padding:10px 12px;resize:vertical}
 .card textarea:focus{border-color:var(--ac);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 15%,transparent);outline:0}
 .item .body .lg span:first-child{flex:none;color:var(--mu)}
+.tx{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 14px;align-items:center;padding:10px 0;border-bottom:1px dashed var(--line);font-size:var(--fs-sm);line-height:1.5}.tx:last-child{border:0}
+.tx .t{min-width:0}.tx .t b{display:block;font-weight:600;color:var(--tx);font-size:var(--fs-sm)}.tx .t small{display:block;color:var(--mu);font-size:var(--fs-xs);overflow-wrap:anywhere}
+.tx .a{text-align:end;white-space:nowrap}.tx .a b{display:block;font-weight:700;font-size:var(--fs-sm);font-variant-numeric:tabular-nums}.tx .a small{display:block;color:var(--mu);font-size:var(--fs-xs);font-variant-numeric:tabular-nums}
+.tx .pos{color:var(--ok)}.tx .neg{color:var(--bad)}
+
 </style>
 </head>
 <body>
@@ -1302,7 +1307,7 @@ async function repApp(me) {
     const nt = h('input', { placeholder: 'توضیح / شماره پیگیری واریز (اختیاری)', maxlength: 200 });
     const sendB = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' }, '📨 ارسال درخواست به ادمین');
     sendB.onclick = () => run(sendB, async () => { const v = mv(amt); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.'); await api('/rep/topup', 'POST', { amount: v, note: nt.value.trim() }); toast('✅ درخواست برای ادمین ارسال شد'); await views.wallet(); });
-    const lgRow = e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('span', { style: 'text-align:end' }, h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))));
+    const lgRow = txRow;
     mount(h('div', { class: 'card bigbal' }, h('span', {}, 'موجودی کیف پول'), h('b', {}, toman(w.balance))),
       h('div', { class: 'card' }, h('h2', {}, 'درخواست افزایش موجودی'), field('مبلغ', amt), field('توضیح', nt), sendB, h('p', { class: 'hint' }, 'بعد از واریز، درخواست را ثبت کنید؛ ادمین بررسی و کیف پول شما را شارژ می‌کند.')),
       w.topups.length ? h('div', { class: 'card' }, h('h2', {}, 'درخواست‌های من'), ...w.topups.map(t => h('div', { class: 'lg' }, h('span', {}, ST_FA[t.status], h('small', {}, new Date(t.ts * 1000).toLocaleString('fa-IR'))), h('b', { dir: 'ltr' }, t.amount.toLocaleString('en-US'))))) : null,
@@ -1553,6 +1558,15 @@ const SHOP_ST = { new: '⏳ منتظر رسید', pending: '🕓 در انتظا
 const SHOP_KIND = { buy: 'خرید کانفیگ', renew: 'تمدید سرویس', topup: 'شارژ کیف پول' };
 const SHOP_BAD = { rejected: 1, failed: 1, cancelled: 1 }, SHOP_OK = { done: 1, credited: 1, refunded: 1 };
 const fdt = ts => ts ? new Date(ts * 1000).toLocaleString('fa-IR') : '—';
+// ردیف تراکنش کیف پول (نماینده و مشتری فروشگاه): ستون راست عنوان + توضیح + تاریخ، ستون چپ مبلغ + موجودی بعد از تراکنش
+const TX_FA = { charge: '➕ شارژ ادمین', deduct: '➖ کسر ادمین', topup: '✅ افزایش موجودی', purchase: '🛒 خرید اکانت', refund: '↩️ بازگشت وجه', buy: '🛒 خرید کانفیگ', renew: '🔄 تمدید سرویس' };
+const txRow = e => {
+  const amt = +e.amount || 0;
+  return h('div', { class: 'tx' },
+    h('div', { class: 't' }, h('b', {}, TX_FA[e.type] || e.type || '—'), h('small', {}, [e.note, fdt(e.ts)].filter(Boolean).join(' · '))),
+    h('div', { class: 'a' }, h('b', { class: amt > 0 ? 'pos' : amt < 0 ? 'neg' : '', dir: 'ltr' }, (amt > 0 ? '+' : '') + amt.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))));
+};
+
 const who = o => (o.name || 'بدون‌نام') + (o.username ? ' @' + o.username : '') + ' (' + o.uid + ')';
 const lgRow = (k, v) => h('div', { class: 'lg' }, h('span', {}, k), h('span', { style: 'text-align:end;overflow-wrap:anywhere', dir: 'auto' }, v));
 
@@ -1754,7 +1768,7 @@ function shopCust(c, d) {
       r.recent.length ? h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 4px' }, 'آخرین سفارش‌ها') : null,
       ...r.recent.map(o => lgRow(`#${o.id} ${SHOP_KIND[o.kind] || o.kind}`, `${toman(o.amount)} · ${SHOP_ST[o.status] || o.status}`)),
       r.log.length ? h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 4px' }, 'گردش کیف پول') : null,
-      ...r.log.map(e => h('div', { class: 'lg' }, h('span', {}, e.type, h('small', {}, (e.note || '') + ' · ' + fdt(e.ts))), h('span', { style: 'text-align:end' }, h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))))));
+      ...r.log.map(txRow));
     loaded = true;
   };
   const fill = async () => { try { await render(); } catch (e) { inner.replaceChildren(h('p', { class: 'err' }, e.message)); } };
@@ -2257,7 +2271,7 @@ async function vSet() {
         h('div', { class: 'btns' },
           act('➕ شارژ', 'pri', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await withCode(code => api(`/reps/${r.id}/wallet`, 'POST', { amount: v, note: wNote.value.trim(), code })); await done('✅ شارژ شد · موجودی: ' + toman(x.balance)); }),
           act('➖ کسر', 'bad', async () => { const v = mv(wAmt); if (!(v > 0)) throw new Error('مبلغ را وارد کنید.'); const x = await withCode(code => api(`/reps/${r.id}/wallet`, 'POST', { amount: -v, note: wNote.value.trim(), code })); await done('کسر شد · موجودی: ' + toman(x.balance)); }),
-          act('🧾 تراکنش‌ها', '', async () => { const x = await api(`/reps/${r.id}/log`); logBox.hidden = !logBox.hidden; logBox.replaceChildren(...(x.log.length ? x.log.map(e => h('div', { class: 'lg' }, h('span', {}, TYPE_FA[e.type] || e.type, h('small', {}, (e.note || '') + ' · ' + new Date(e.ts * 1000).toLocaleString('fa-IR'))), h('span', { style: 'text-align:end' }, h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))))) : [h('p', { class: 'hint' }, 'تراکنشی ثبت نشده.')])); })),
+          act('🧾 تراکنش‌ها', '', async () => { const x = await api(`/reps/${r.id}/log`); logBox.hidden = !logBox.hidden; logBox.replaceChildren(...(x.log.length ? x.log.map(txRow) : [h('p', { class: 'hint' }, 'تراکنشی ثبت نشده.')])); })),
         logBox,
         h('div', { class: 'psec' }, h('b', {}, '🧩 تمپلت‌های فعال این نماینده'), h('span', {}, 'فقط تمپلت‌های دارای قیمت قابل خرید است')),
         tplBox,
