@@ -104,6 +104,9 @@ DEFAULT_CFG = {
     "rep_sales": [],     # خرید/تمدید نماینده‌ها با کیف پول (برای «فروش روزانه» در پنل نماینده؛ بازگشت وجه با مبلغ منفی): [{ts, rid, amount}]
     "topups": [],        # درخواست‌های افزایش موجودی نماینده‌ها: [{id, rid, amount, note, ts, status: pending|approved|rejected, done}]
     "rep_notes": {},     # اسم/یادداشت نماینده برای هر کاربرش: {panel_id: {username: note}}
+    # فروشگاه (ربات فروش مشتری): توکن ربات جدا، کارت، پلن‌ها، مشتری‌ها با کیف پول، سفارش‌ها (خرید/تمدید/شارژ با رسید) و دفتر تراکنش
+    "shop": {"enabled": True, "token": "", "panel": "", "card": {"number": "", "holder": "", "bank": ""}, "plans": [], "welcome": "", "support": "",
+             "min_topup": 10000, "max_topup": 50000000, "receipt_hours": 24, "customers": {}, "orders": [], "tx": []},
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
 
@@ -186,6 +189,58 @@ def get_panel(cfg: dict, pid: str | None) -> dict | None:
 def new_panel_id(cfg: dict) -> str:
     nums = [int(p["id"][1:]) for p in cfg["panels"] if p["id"][1:].isdigit()]
     return f"p{max(nums, default=0) + 1}"
+
+
+SHOP_ORDER_MAX = 3000
+SHOP_TX_MAX = 5000
+SHOP_LOG_MAX = 50
+SHOP_BAL_MAX = 10 ** 10
+
+
+def _normalize_shop(raw) -> dict:
+    """تنظیمات و داده‌ی فروشگاه را به ساختار معتبر برمی‌گرداند (کلیدهای ناشناخته حذف می‌شوند)."""
+    s = copy.deepcopy(DEFAULT_CFG["shop"])
+    raw = raw if isinstance(raw, dict) else {}
+    s["enabled"] = bool(raw.get("enabled", True))
+    s["token"] = str(raw.get("token") or "").strip()
+    s["panel"] = str(raw.get("panel") or "").strip()[:40]
+    card = raw.get("card") if isinstance(raw.get("card"), dict) else {}
+    s["card"] = {k: str(card.get(k) or "").strip()[:60] for k in ("number", "holder", "bank")}
+    for k in ("welcome", "support"):
+        s[k] = str(raw.get(k) or "").strip()[:1000]
+    for k, lo, hi in (("min_topup", 1000, 10 ** 9), ("max_topup", 1000, 10 ** 10), ("receipt_hours", 1, 720)):
+        try:
+            s[k] = min(hi, max(lo, int(raw.get(k, s[k]))))
+        except (TypeError, ValueError):
+            pass
+    plans, seen = [], set()
+    for p in raw.get("plans") if isinstance(raw.get("plans"), list) else []:
+        try:
+            pid = str(p["id"]).strip()[:12]
+            if not pid or pid in seen or not str(p.get("template") or ""):
+                continue
+            seen.add(pid)
+            plans.append({"id": pid, "name": str(p.get("name") or p["template"]).strip()[:60], "template": str(p["template"]),
+                          "price": max(0, int(p.get("price") or 0)), "active": bool(p.get("active", True))})
+        except (TypeError, ValueError, KeyError, AttributeError):
+            continue
+    s["plans"] = plans
+    cust = {}
+    for uid, r in (raw.get("customers") if isinstance(raw.get("customers"), dict) else {}).items():
+        if not isinstance(r, dict) or not str(uid).lstrip("-").isdigit():
+            continue
+        try:
+            svcs = [{"pid": str(x.get("pid") or ""), "u": str(x["u"])[:64], "ts": int(x.get("ts") or 0)}
+                    for x in (r.get("services") if isinstance(r.get("services"), list) else []) if isinstance(x, dict) and x.get("u")]
+            cust[str(uid)] = {"balance": min(SHOP_BAL_MAX, max(0, int(r.get("balance") or 0))), "name": str(r.get("name") or "")[:60],
+                              "username": str(r.get("username") or "")[:40], "joined": int(r.get("joined") or 0), "banned": bool(r.get("banned")),
+                              "services": svcs, "log": [x for x in (r.get("log") if isinstance(r.get("log"), list) else []) if isinstance(x, dict)][-SHOP_LOG_MAX:]}
+        except (TypeError, ValueError):
+            continue
+    s["customers"] = cust
+    s["orders"] = [o for o in (raw.get("orders") if isinstance(raw.get("orders"), list) else []) if isinstance(o, dict) and o.get("id")][-SHOP_ORDER_MAX:]
+    s["tx"] = [t for t in (raw.get("tx") if isinstance(raw.get("tx"), list) else []) if isinstance(t, dict) and t.get("id")][-SHOP_TX_MAX:]
+    return s
 
 
 def _normalize(data: dict) -> dict:
@@ -411,6 +466,7 @@ def _normalize(data: dict) -> dict:
             if v:
                 rp[str(pid)] = v
     cfg["rep_paid"] = rp
+    cfg["shop"] = _normalize_shop(cfg.get("shop"))
     for k in ("max_batch", "max_qr", "web_port"):
         try:
             cfg[k] = int(cfg[k])
@@ -800,6 +856,8 @@ def restore_keep_wallet(new: dict, cur: dict) -> None:
                 new["rep_users"].setdefault(pid, {})[u] = rid
     for k in _WALLET_KEYS:
         new[k] = cur[k]
+    # فروشگاه: تنظیمات از بکاپ می‌آید ولی موجودی مشتری‌ها، سفارش‌ها و دفتر تراکنش فعلی دست‌نخورده می‌ماند
+    new["shop"] = {**new["shop"], "customers": cur["shop"]["customers"], "orders": cur["shop"]["orders"], "tx": cur["shop"]["tx"]}
 
 
 def preserve_security(new: dict, cur: dict) -> None:
