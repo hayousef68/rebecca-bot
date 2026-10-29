@@ -547,6 +547,17 @@ def _copy_cfg(d: dict) -> dict:
 
 def _cached_cfg() -> dict:
     """کش را (در صورت تغییر فایل) تازه می‌کند و خودِ شیء کش را برمی‌گرداند (بدون کپی)."""
+    # مسیر سریع بدون قفل: اگر فایل عوض نشده، خواندن منتظر نویسنده‌ای که وسط fsync است نمی‌ماند (علت کندی صفحه‌ی فروشگاه/وب‌پنل
+    # وقتی ربات هم‌زمان می‌نویسد). نویسنده روی یک کپی کار می‌کند و کش را فقط بعد از جایگزینی فایل باطل می‌کند، پس دیدن نسخه‌ی قبلی تا آن لحظه درست است.
+    data = _cache["data"]
+    if data is not None:
+        try:
+            st = os.stat(CONFIG_FILE)
+            if _cache["sig"] == (st.st_mtime_ns, st.st_size):
+                return data
+        except OSError:
+            if _cache["sig"] is None:
+                return data
     with _lock:
         try:
             st = os.stat(CONFIG_FILE)

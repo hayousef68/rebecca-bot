@@ -517,10 +517,35 @@ function renderAlert() {
   bar.replaceChildren(h('div', { class: 'abar' }, h('span', {}, '💰'),
     h('b', {}, `${S.pend} درخواست افزایش موجودی`, h('small', {}, `${first.rep || ''} — ${(+first.amount || 0).toLocaleString('fa-IR')} تومان${more}`)), view, x));
 }
+// اعلان زنده: هر ۸ ثانیه یک درخواست سبک. مورد جدید (رسید فروشگاه، شارژ کیف پول مشتری، سفارش ناموفق، درخواست افزایش موجودی نماینده) = پیام + صدا + اعلان مرورگر،
+// و اگر تب فروشگاه باز است خودکار تازه می‌شود؛ بدون رفرش دستی.
+const LIVE = { seen: null, busy: false };
+function ding() { try { const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain(); o.connect(g); g.connect(a.destination); o.frequency.value = 880; g.gain.setValueAtTime(.15, a.currentTime); g.gain.exponentialRampToValueAtTime(.001, a.currentTime + .45); o.start(); o.stop(a.currentTime + .45); } catch {} }
+function liveNotify(msg) {
+  toast(msg); ding();
+  try { if ('Notification' in window && Notification.permission === 'granted' && document.hidden) new Notification('ربکا', { body: msg.replace(/^[^\s]+\s/, '') }); } catch {}
+}
+try { document.addEventListener('click', () => { try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch {} }, { once: true }); } catch {}
 async function pollTopups() {
-  try { const r = await api('/topups/pending'); S.pend = r.count; S.pendItems = r.items; } catch { return; }
-  try { const sh = await api('/shop/summary'); S.shopPend = sh.pending + sh.failed; } catch {}           // نشان روی تب «فروشگاه»: رسید در انتظار + سفارش ناموفق
-  renderNav(); renderAlert();
+  if (LIVE.busy) return; LIVE.busy = true;
+  try {
+    let r; try { r = await api('/live'); } catch { return; }
+    S.pend = r.topups.count; S.pendItems = r.topups.items; S.shopPend = r.shop.pending + r.shop.failed;
+    const now = new Set([...r.topups.items.map(x => 't' + x.id), ...r.shop.items.map(x => 's' + x.id + x.status)]);
+    if (LIVE.seen) {
+      const fa = n => (+n || 0).toLocaleString('fa-IR');
+      const newT = r.topups.items.filter(x => !LIVE.seen.has('t' + x.id)), newS = r.shop.items.filter(x => !LIVE.seen.has('s' + x.id + x.status));
+      let shopChanged = newS.length > 0 || [...LIVE.seen].some(k => k[0] === 's' && !now.has(k));
+      newT.slice(-2).forEach(x => liveNotify(`💰 درخواست افزایش موجودی ${x.rep}: ${fa(x.amount)} تومان`));
+      newS.slice(-2).forEach(x => liveNotify(x.status === 'failed' ? `⚠️ سفارش ناموفق #${x.id} نیاز به بررسی دارد`
+        : `${x.kind === 'topup' ? '👛 رسید شارژ کیف پول' : '🧾 رسید جدید'} #${x.id}${x.name ? ' از ' + x.name : ''} — ${fa(x.amount)} تومان`));
+      const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if (shopChanged && S.tab === 'shop' && !typing && !document.querySelector('#view details[open] .btns button:disabled')) { LIVE.seen = now; renderNav(); renderAlert(); await vShop(); return; }
+      if (newT.length && S.tab === 'set' && S.setOpen === 'reps' && !typing) { LIVE.seen = now; renderNav(); renderAlert(); await vSet(); return; }
+    }
+    LIVE.seen = now;
+    renderNav(); renderAlert();
+  } finally { LIVE.busy = false; }
 }
 async function go(tab) {
   S.tab = tab; renderNav();
@@ -2301,7 +2326,7 @@ async function vSet() {
 (async () => {
   let me; try { me = await api('/me'); } catch { return; }
   if (me.role === 'rep') return repApp(me);
-  renderNav(); pollTopups(); setInterval(() => { if (!document.hidden) pollTopups(); }, 30000);
+  renderNav(); pollTopups(); setInterval(() => { if (!document.hidden) pollTopups(); }, 8000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pollTopups(); });
   try { await refreshState(); await go(hasPanel() ? 'create' : 'set'); }
   catch (e) { mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }

@@ -2717,6 +2717,21 @@ def _shop_counts(s: dict) -> dict:
     return cnt
 
 
+@app.get("/api/live", dependencies=[Depends(guard)])
+def live():
+    """یک درخواست سبک برای اعلان‌های زنده: درخواست‌های افزایش موجودی نماینده + رسید/سفارش‌های فروشگاه که منتظر ادمین‌اند."""
+    cfg = C.load_config_ro()
+    reps = cfg["reps"]
+    top = [{"id": t["id"], "rep": (reps.get(t["rid"], {}).get("label") or reps.get(t["rid"], {}).get("name") or t["rid"]),
+            "amount": t.get("amount", 0), "ts": t.get("ts", 0)} for t in cfg["topups"] if t.get("status") == "pending"]
+    s = cfg["shop"]
+    custs = s["customers"]
+    items = [{"id": o["id"], "kind": o.get("kind", ""), "status": o["status"], "amount": int(o.get("amount") or 0),
+              "name": (custs.get(str(o.get("uid"))) or {}).get("name", "")} for o in s["orders"] if o["status"] in ("pending", "failed")]
+    return {"topups": {"count": len(top), "items": top[-20:]},
+            "shop": {"pending": sum(1 for x in items if x["status"] == "pending"), "failed": sum(1 for x in items if x["status"] == "failed"), "items": items[-20:]}}
+
+
 @app.get("/api/shop/summary", dependencies=[Depends(guard)])
 def shop_summary():
     """عدد کوچک برای نشان روی تب (هر ۳۰ ثانیه)."""
@@ -2963,11 +2978,17 @@ def shop_orders(status: str = Query("open", max_length=12), kind: str = Query(""
     return {"total": len(items), "items": [_order_view(o, custs) for o in page]}
 
 
+_receipt_cache: dict[str, tuple[str, bytes]] = {}          # file_id ← (content-type, bytes)؛ حداکثر ۴۰ عکس اخیر (باز کردن دوباره‌ی رسید بدون رفت‌وبرگشت به تلگرام)
+
+
 @app.get("/api/shop/orders/{oid}/receipt", dependencies=[Depends(guard)])
 async def shop_receipt(oid: str):
     o = shop.order_get(oid)
     if not o or not o.get("file"):
         raise HTTPException(404, "عکس رسید پیدا نشد.")
+    hit = _receipt_cache.get(o["file"])
+    if hit:
+        return Response(hit[1], media_type=hit[0], headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
     try:
         async with Bot(_shop_token()) as b:
             f = await asyncio.wait_for(b.get_file(o["file"]), 20)
@@ -2978,6 +2999,9 @@ async def shop_receipt(oid: str):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"دریافت عکس از تلگرام ناموفق بود ({e.__class__.__name__}).")
     ctype = "image/png" if path.endswith(".png") else "image/webp" if path.endswith(".webp") else "image/gif" if path.endswith(".gif") else "image/jpeg"
+    _receipt_cache[o["file"]] = (ctype, data)
+    while len(_receipt_cache) > 40:
+        _receipt_cache.pop(next(iter(_receipt_cache)))
     return Response(data, media_type=ctype, headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
 
