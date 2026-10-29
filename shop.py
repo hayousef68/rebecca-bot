@@ -485,7 +485,7 @@ async def force_join_ok(update: Update, context) -> bool:
         return True
     rows = [[B(f"📢 عضویت در {ch['chat'] if ch['chat'].startswith('@') else 'کانال'}", url=_chan_url(ch))] for ch in miss if _chan_url(ch)]
     rows.append([B("✅ عضو شدم", callback_data="chk")])
-    text = "🔒 برای استفاده از ربات ابتدا در کانال زیر عضو شوید، سپس دکمه‌ی «✅ عضو شدم» را بزنید."
+    text = "🔒 <b>قبل از استفاده از ربات، در کانال زیر عضو شوید.</b>\n\nبعد از عضویت، دکمه‌ی «✅ عضو شدم» را بزنید تا منو باز شود."
     q = update.callback_query
     if q:
         await _ans(q, "ابتدا در کانال عضو شوید.", show_alert=True)
@@ -1045,6 +1045,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if block:
         await update.effective_message.reply_html(block)
         return
+    if not await force_join_ok(update, context):          # قبل از نمایش منو و دکمه‌ی دائمی
+        return
     await update.effective_message.reply_html("⌨️ برای برگشت به منو، هر وقت دکمه‌ی «🏠 منوی اصلی» پایین صفحه را بزنید.", reply_markup=_menu_reply_kb())
     await home(update, context)
 
@@ -1257,6 +1259,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     s = shop_cfg()
     cu = customer_get(u.id) or {}
     if cmd == "chk":
+        await context.bot.send_message(update.effective_chat.id, "⌨️ برای برگشت به منو، هر وقت دکمه‌ی «🏠 منوی اصلی» پایین صفحه را بزنید.", reply_markup=_menu_reply_kb())
         await home(update, context, "✅ عضویت شما تأیید شد.\n\n")
     elif cmd == "home":
         await home(update, context)
