@@ -451,8 +451,12 @@ def _chan_url(ch: dict) -> str:
     return f"https://t.me/{ch['chat'][1:]}" if ch["chat"].startswith("@") else ""
 
 
+_trust: dict[int, float] = {}               # کاربرهایی که وقتی بررسی ممکن نبود «عضو شدم» زدند (۲۴ ساعت اعتماد)
+
+
 async def missing_channels(bot: Bot, uid: int) -> list[dict]:
-    """کانال‌هایی که کاربر عضو نیست. اگر ربات نتواند بررسی کند (ادمین کانال نیست…) آن کانال نادیده گرفته می‌شود تا فروشگاه قفل نشود."""
+    """کانال‌هایی که کاربر عضو نیست. اگر ربات نتواند بررسی کند (ادمین کانال نیست…)، پیام عضویت باز هم نشان داده می‌شود
+    (فروشگاه قفل نمی‌ماند: با زدن «عضو شدم» ۲۴ ساعت اجازه می‌گیرد) و علت دقیق به ادمین‌ها گزارش می‌شود."""
     chans = force_channels()
     if not chans or C.is_admin(uid):
         return []
@@ -467,9 +471,11 @@ async def missing_channels(bot: Bot, uid: int) -> list[dict]:
                 miss.append(ch)
         except Exception as e:  # noqa: BLE001
             log.warning("force-join check %s: %s", ch["chat"], e)
-            if time.time() - _force_warned.get(ch["chat"], 0) > 6 * 3600:
+            if time.time() - _force_warned.get(ch["chat"], 0) > 3600:
                 _force_warned[ch["chat"]] = time.time()
-                await _notify_admins(bot, f"⚠️ بررسی عضویت اجباری در {esc(ch['chat'])} ممکن نشد ({esc(e.__class__.__name__)}). ربات فروش را <b>ادمین همان کانال</b> کنید؛ تا آن موقع این کانال نادیده گرفته می‌شود.")
+                await _notify_admins(bot, f"⚠️ بررسی عضویت اجباری در {esc(ch['chat'])} ممکن نشد:\n<code>{esc(str(e)[:200])}</code>\nربات فروش را <b>ادمین همان کانال</b> کنید و یوزرنیم/شناسه کانال را چک کنید. تا آن موقع به مشتری فقط پیام عضویت نشان داده می‌شود و با «✅ عضو شدم» رد می‌شود.")
+            if time.time() - _trust.get(uid, 0) > 86400:
+                miss.append(ch)
     if not miss:
         _member_ok[uid] = time.time()
         if len(_member_ok) > 5000:
@@ -526,6 +532,7 @@ async def _create_test(uid: int) -> dict:
     cfg = C.load_config()
     t = cfg["shop"]["test"]
     tpl = dict(cfg["templates"][t["template"]])
+    tpl["hours"] = int(t.get("hours") or 24)              # مدت تست بر حسب ساعت (از تنظیمات)؛ مدت تمپلت نادیده گرفته می‌شود
     pid = shop_panel(cfg)
     api = C.get_api(pid)
     if not api.is_configured():
@@ -538,46 +545,84 @@ async def _create_test(uid: int) -> dict:
     if svc_id is None:
         raise FulfilError("سرویس مناسب در پنل پیدا نشد.", True)
     svc_name = next((x["name"] for x in services if x["id"] == svc_id), str(svc_id))
-    async with _lock():
-        prefix = t["prefix"]
-        nx = await sales.next_number(api, prefix, len(cfg["panels"]) <= 1)
-        name = C.make_names(prefix, int(nx.get("next") or 1), 1, 1)[0]
-        results, failed = None, []
-        for _ in range(4):
-            try:
-                results, failed = await C.create_users(api, [name], tpl, svc_id, concurrency=1)
-            except Exception:  # noqa: BLE001
-                log.exception("shop test create")
-                results, failed = [], [(name, "خطای پنل")]
-            if results or not failed or "قبل" not in failed[0][1]:
-                break
-            m = re.fullmatch(r"(.*?)(\d+)", name)
-            if not m:
-                break
-            name = C.make_names(m.group(1), int(m.group(2)) + 1, 1, 1)[0]
-        if not results:
-            msg = failed[0][1] if failed else "نامشخص"
-            try:
-                u = await api.request("GET", api.upath(name))
-            except C.RebeccaError as e:
-                raise FulfilError(msg, e.status == 404) from e
-            except Exception as e:  # noqa: BLE001
-                raise FulfilError(msg, False) from e
-            if isinstance(u, dict) and u.get("username"):
-                results = [{"username": name, "sub": api.full_sub(u.get("subscription_url", ""))}]
-            else:
-                raise FulfilError(msg, False)
+    # نام تست کدِ تصادفی است (مثل test_k7x2q9) و از شماره‌گذاری اشتراک‌های پنل جداست
+    results, failed, name = None, [], ""
+    for _ in range(5):
+        name = f"{t['prefix']}_" + "".join(secrets.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(6))
+        try:
+            results, failed = await C.create_users(api, [name], tpl, svc_id, concurrency=1)
+        except Exception:  # noqa: BLE001
+            log.exception("shop test create")
+            results, failed = [], [(name, "خطای پنل")]
+        if results or not failed or "قبل" not in failed[0][1]:
+            break
+    if not results:
+        msg = failed[0][1] if failed else "نامشخص"
+        try:
+            u = await api.request("GET", api.upath(name))
+        except C.RebeccaError as e:
+            raise FulfilError(msg, e.status == 404) from e
+        except Exception as e:  # noqa: BLE001
+            raise FulfilError(msg, False) from e
+        if isinstance(u, dict) and u.get("username"):
+            results = [{"username": name, "sub": api.full_sub(u.get("subscription_url", ""))}]
+        else:
+            raise FulfilError(msg, False)
     uname = results[0]["username"]
     await asyncio.to_thread(customer_add_service, uid, pid, uname)
-    await asyncio.to_thread(_test_set_user, uid, uname)
+    await asyncio.to_thread(_test_set_user, uid, uname, pid, int(time.time()) + tpl["hours"] * 3600)
     return {"results": results, "header": C.build_info(api.name, tpl, svc_name), "username": uname, "tpl": tpl}
 
 
-def _test_set_user(uid: int, uname: str) -> None:
+def _hours_fa(h: int) -> str:
+    return f"{h // 24} روز" if h % 24 == 0 and h >= 24 else f"{h} ساعت"
+
+
+async def cleanup_tests(bot: Bot) -> None:
+    """تست‌های تمام‌شده را از پنل (دیتابیس) پاک می‌کند و از لیست مشتری برمی‌دارد.
+    اگر مشتری قبل از پایان تست تمدید کرده باشد (انقضای پنل جلوتر است) حذف نمی‌شود. شکست موقت = دفعه‌ی بعد دوباره."""
+    now = int(time.time())
+    due = [(uid, dict(cu)) for uid, cu in shop_cfg()["customers"].items() if cu.get("test_user") and cu.get("test_exp") and not cu.get("test_del") and now > cu["test_exp"] + 120]
+    for uid, cu in due:
+        uname = cu["test_user"]
+        cfg = C.load_config_ro()
+        pid = cu["test_pid"] if cu["test_pid"] and C.get_panel(cfg, cu["test_pid"]) else shop_panel(cfg)
+        api = C.get_api(pid)
+        if not api.is_configured():
+            continue
+        state = "deleted"
+        try:
+            u = await asyncio.wait_for(api.request("GET", api.upath(uname)), 20)
+            exp = int((u or {}).get("expire") or 0) if isinstance(u, dict) else 0
+            if exp > now + 300 or (isinstance(u, dict) and u.get("status") == "on_hold"):
+                state = "kept"                                   # تمدید شده؛ دیگر تست نیست
+            else:
+                await asyncio.wait_for(api.request("DELETE", api.upath(uname)), 30)
+        except C.RebeccaError as e:
+            if e.status != 404:
+                log.warning("test cleanup %s: %s", uname, e)
+                continue
+        except Exception as e:  # noqa: BLE001
+            log.warning("test cleanup %s: %s", uname, e)
+            continue
+
+        def mut(c, uid=uid, uname=uname, state=state):
+            r = c["shop"]["customers"].get(uid)
+            if r is not None:
+                r["test_del"] = 1 if state == "deleted" else 2
+                if state == "deleted":
+                    r["services"] = [x for x in r["services"] if x["u"] != uname]
+        await asyncio.to_thread(C.update_config, mut)
+        if state == "deleted":
+            C.audit_event("فروشگاه", "حذف خودکار تست رایگان", str(uid), uname, cat="del")
+            await _tell(bot, int(uid), "⏰ زمان تست رایگان شما تمام شد و حذف شد.\nبرای ادامه از «🛒 خرید کانفیگ» استفاده کنید.")
+
+
+def _test_set_user(uid: int, uname: str, pid: str = "", exp: int = 0) -> None:
     def mut(c):
         cu = c["shop"]["customers"].get(str(uid))
         if cu is not None:
-            cu["test_user"] = uname
+            cu["test_user"], cu["test_pid"], cu["test_exp"], cu["test_del"] = uname, pid, exp, 0
     C.update_config(mut)
 
 
@@ -613,7 +658,7 @@ async def give_test(update: Update, context) -> None:
         return
     try:
         await C.send_results(context.bot, u.id, res["results"], res["header"], cfg["max_qr"], True)
-        await context.bot.send_message(u.id, "🎁 تست رایگان شما آماده است. لینک بالا را در برنامه‌ی خود وارد کنید.\nبعداً می‌توانید از «🔄 سرویس‌های من» تمدیدش کنید.",
+        await context.bot.send_message(u.id, f"🎁 تست رایگان شما آماده است.\n⏳ اعتبار: {_hours_fa(cfg['shop']['test']['hours'])} (بعد از آن خودکار حذف می‌شود؛ اگر قبل از پایان از «🔄 سرویس‌های من» تمدیدش کنید حذف نمی‌شود).\nلینک بالا را در برنامه‌ی خود وارد کنید.",
                                        reply_markup=back_kb())
     except Exception:  # noqa: BLE001
         log.exception("send test result")
@@ -933,6 +978,10 @@ async def maintain(bot: Bot, startup: bool = False) -> None:
                 o["rem"] = now
                 remind.append(dict(o))
     C.update_config(mut)
+    try:
+        await cleanup_tests(bot)
+    except Exception:  # noqa: BLE001
+        log.exception("test cleanup")
     for o in stale:
         await _tell(bot, o["uid"], f"🚫 سفارش #{o['id']} چون رسید ارسال نشد لغو شد.")
     for o in stuck:
@@ -1052,12 +1101,15 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _card_text(o: dict) -> str:
-    card = shop_cfg()["card"]
-    if not card["number"]:
+    cards = shop_cfg()["cards"]
+    if not cards:
         return "⚠️ شماره کارت هنوز توسط ادمین تنظیم نشده است."
-    num = " ".join(card["number"][i:i + 4] for i in range(0, len(card["number"]), 4))
-    return (f"💳 <b>کارت‌به‌کارت</b>\n\nمبلغ دقیق: <b>{money(o['amount'])}</b> تومان\nشماره کارت:\n<code>{esc(num)}</code>\n"
-            + (f"به نام: <b>{esc(card['holder'])}</b>\n" if card["holder"] else "") + (f"بانک: {esc(card['bank'])}\n" if card["bank"] else ""))
+    out = [f"💳 <b>کارت‌به‌کارت</b>\n\nمبلغ دقیق: <b>{money(o['amount'])}</b> تومان\n" + ("به یکی از کارت‌های زیر واریز کنید:\n" if len(cards) > 1 else "شماره کارت:\n")]
+    for i, card in enumerate(cards, 1):
+        num = " ".join(card["number"][k:k + 4] for k in range(0, len(card["number"]), 4))
+        out.append((f"<b>{i}.</b> " if len(cards) > 1 else "") + f"<code>{esc(num)}</code>\n"
+                   + (f"به نام: <b>{esc(card['holder'])}</b>\n" if card["holder"] else "") + (f"بانک: {esc(card['bank'])}\n" if card["bank"] else ""))
+    return "\n".join(out)
 
 
 async def ask_receipt(update: Update, context, o: dict) -> None:
@@ -1253,6 +1305,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if cmd == "chk":
         _member_ok.pop(u.id, None)
+        _trust[u.id] = time.time()          # فقط وقتی اثر دارد که بررسی عضویت خطا بدهد (ربات ادمین کانال نیست)
     if not await force_join_ok(update, context):
         return
     await _ans(q, )
@@ -1489,8 +1542,26 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, p: list) 
         await admin_home(update, context)
     elif sub == "card":
         await _ans(q, )
+        context.user_data.pop("aw", None)
+        cards = s["cards"]
+        rows = [[B(f"🗑 حذف {i}. ****{c['number'][-4:]}" + (f" — {c['holder']}" if c["holder"] else ""), callback_data=f"ad:cdel:{i - 1}")] for i, c in enumerate(cards, 1)]
+        if len(cards) < C.SHOP_CARDS_MAX:
+            rows.append([B("➕ افزودن کارت", callback_data="ad:cadd")])
+        txt = "💳 <b>کارت‌های فروشگاه</b>\n\n" + ("\n".join(f"{i}. <code>{c['number']}</code> {esc(c['holder'])} {esc(c['bank'])}" for i, c in enumerate(cards, 1)) or "هنوز کارتی ثبت نشده.") + "\n\nمشتری همه‌ی کارت‌ها را می‌بیند و به یکی از آن‌ها واریز می‌کند."
+        await show(update, context, txt, _adm_back(rows))
+    elif sub == "cadd":
+        await _ans(q, )
         context.user_data["aw"] = ("a_card",)
         await show(update, context, "💳 اطلاعات کارت را در <b>سه خط</b> بفرستید:\n\n<code>6037991234567890\nعلی رضایی\nبانک ملی</code>\n\n(خط دوم و سوم اختیاری است)", _adm_back())
+    elif sub == "cdel":
+        i = int(p[2])
+        def _del(c):
+            if 0 <= i < len(c["shop"]["cards"]):
+                c["shop"]["cards"].pop(i)
+                c["shop"]["card"] = dict(c["shop"]["cards"][0]) if c["shop"]["cards"] else {"number": "", "holder": "", "bank": ""}
+        await asyncio.to_thread(C.update_config, _del)
+        await _ans(q, "حذف شد.")
+        await admin_cb(update, context, ["ad", "card"])
     elif sub in ("wel", "sup"):
         await _ans(q, )
         context.user_data["aw"] = ("a_wel" if sub == "wel" else "a_sup",)
@@ -1595,10 +1666,24 @@ async def admin_text(update: Update, context, aw: tuple) -> None:
             await m.reply_html("❌ شماره کارت باید ۱۶ رقم باشد؛ دوباره بفرستید.")
             return
         card = {"number": num, "holder": lines[1][:60] if len(lines) > 1 else "", "bank": lines[2][:60] if len(lines) > 2 else ""}
-        await asyncio.to_thread(C.update_config, lambda c: c["shop"].update(card=card))
-        C.audit_event(f"ادمین فروشگاه ({admin.id})", "تغییر کارت فروشگاه", "", f"****{num[-4:]}", cat="sys")
+
+        def _add(c):
+            cs = c["shop"]["cards"]
+            if len(cs) >= C.SHOP_CARDS_MAX:
+                raise ValueError(f"حداکثر {C.SHOP_CARDS_MAX} کارت.")
+            if any(x["number"] == num for x in cs):
+                raise ValueError("این کارت قبلاً ثبت شده است.")
+            cs.append(card)
+            c["shop"]["card"] = dict(cs[0])
+        try:
+            await asyncio.to_thread(C.update_config, _add)
+        except ValueError as e:
+            await m.reply_html(f"❌ {esc(e)}", reply_markup=_adm_back())
+            context.user_data.pop("aw", None)
+            return
+        C.audit_event(f"ادمین فروشگاه ({admin.id})", "افزودن کارت فروشگاه", "", f"****{num[-4:]}", cat="sys")
         context.user_data.pop("aw", None)
-        await m.reply_html("✅ کارت ذخیره شد.", reply_markup=_adm_back())
+        await m.reply_html("✅ کارت اضافه شد.", reply_markup=_adm_back([[B("💳 کارت‌ها", callback_data="ad:card")]]))
     elif kind in ("a_wel", "a_sup"):
         key = "welcome" if kind == "a_wel" else "support"
         val = "" if text == "-" else text[:1000]

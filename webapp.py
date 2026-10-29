@@ -2735,7 +2735,7 @@ def shop_overview():
     sales_24h = sum(o["amount"] for o in s["orders"] if o["status"] == "done" and o["kind"] in ("buy", "renew") and int(o.get("dts") or 0) >= day0)
     tok = s["token"]
     return {"enabled": s["enabled"], "panel": shop.shop_panel(cfg), "panels": [{"id": p["id"], "name": p["name"]} for p in cfg["panels"]],
-            "card": s["card"], "welcome": s["welcome"], "support": s["support"], "min_topup": s["min_topup"], "max_topup": s["max_topup"],
+            "cards": s["cards"], "welcome": s["welcome"], "support": s["support"], "min_topup": s["min_topup"], "max_topup": s["max_topup"],
             "receipt_hours": s["receipt_hours"], "has_token": bool(tok), "token_hint": ("…" + tok[-6:]) if tok else "",
             "test": s["test"], "force": s["force"], "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
             "counts": cnt, "customers": len(s["customers"]), "wallet_total": sum(c["balance"] for c in s["customers"].values()),
@@ -2745,9 +2745,7 @@ def shop_overview():
 class ShopSettingsReq(BaseModel):
     enabled: bool | None = None
     panel: str | None = Field(default=None, max_length=40)
-    card_number: str | None = Field(default=None, max_length=40)
-    card_holder: str | None = Field(default=None, max_length=60)
-    card_bank: str | None = Field(default=None, max_length=60)
+    cards: list[dict] | None = Field(default=None, max_length=10)
     welcome: str | None = Field(default=None, max_length=1000)
     support: str | None = Field(default=None, max_length=1000)
     min_topup: int | None = Field(default=None, ge=1000, le=10 ** 9)
@@ -2758,6 +2756,7 @@ class ShopSettingsReq(BaseModel):
     test_enabled: bool | None = None
     test_template: str | None = Field(default=None, max_length=80)
     test_prefix: str | None = Field(default=None, max_length=16)
+    test_hours: int | None = Field(default=None, ge=1, le=720)
     token: str | None = Field(default=None, max_length=120)
     clear_token: bool = False
     code: str = Field(default="", max_length=64)
@@ -2769,11 +2768,21 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
     tok_new = (r.token or "").strip()
     if tok_new and "…" in tok_new:           # مقدار نمایشی (مخفی‌شده) دوباره فرستاده شده؛ تغییری نیست
         tok_new = ""
-    digits = None
-    if r.card_number is not None:
-        digits = re.sub(r"\D", "", r.card_number.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
-        if digits and len(digits) != 16:
-            raise HTTPException(400, "شماره کارت باید ۱۶ رقم باشد.")
+    cards_new = None
+    if r.cards is not None:
+        cards_new = []
+        for x in r.cards:
+            num = re.sub(r"\D", "", str(x.get("number") or "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
+            if not num:
+                continue
+            if len(num) != 16:
+                raise HTTPException(400, f"شماره کارت «{num[:6]}…» باید ۱۶ رقم باشد.")
+            if any(c["number"] == num for c in cards_new):
+                raise HTTPException(400, "یک کارت دو بار وارد شده است.")
+            cards_new.append({"number": num, "holder": str(x.get("holder") or "").strip()[:60], "bank": str(x.get("bank") or "").strip()[:60]})
+        if len(cards_new) > C.SHOP_CARDS_MAX:
+            raise HTTPException(400, f"حداکثر {C.SHOP_CARDS_MAX} کارت.")
+    digits = None if cards_new is None else ",".join(c["number"] for c in cards_new)
     if r.panel is not None and r.panel and not get_panel(cur, r.panel):
         raise HTTPException(400, "پنل پیدا نشد.")
     force_list = None
@@ -2795,7 +2804,7 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
     if lo > hi:
         raise HTTPException(400, "حداقل شارژ نباید از حداکثر بیشتر باشد.")
     token_changed = bool(tok_new and tok_new != cur["shop"]["token"]) or (r.clear_token and bool(cur["shop"]["token"]))
-    card_changed = digits is not None and digits != cur["shop"]["card"]["number"]
+    card_changed = cards_new is not None and digits != ",".join(c["number"] for c in cur["shop"]["cards"])
     if token_changed or card_changed:        # توکن و شماره کارت = مسیر تغییر مقصد پرداخت/تصاحب ربات؛ با 2FA روشن کد تازه می‌خواهد
         await _gate_code(request, r.code, None, "تغییر توکن ربات فروش یا شماره کارت", always=True)
     username = ""
@@ -2817,12 +2826,9 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
             sh["enabled"] = r.enabled
         if r.panel is not None:
             sh["panel"] = r.panel
-        if digits is not None:
-            sh["card"]["number"] = digits
-        if r.card_holder is not None:
-            sh["card"]["holder"] = r.card_holder.strip()[:60]
-        if r.card_bank is not None:
-            sh["card"]["bank"] = r.card_bank.strip()[:60]
+        if cards_new is not None:
+            sh["cards"] = cards_new
+            sh["card"] = dict(cards_new[0]) if cards_new else {"number": "", "holder": "", "bank": ""}
         if r.welcome is not None:
             sh["welcome"] = r.welcome.strip()[:1000]
         if r.support is not None:
@@ -2843,16 +2849,18 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
             sh["test"]["template"] = r.test_template
         if r.test_prefix is not None:
             sh["test"]["prefix"] = r.test_prefix.strip()
+        if r.test_hours is not None:
+            sh["test"]["hours"] = r.test_hours
         if tok_new and token_changed:
             sh["token"] = tok_new
         elif r.clear_token:
             sh["token"] = ""
     update_config(mut)
-    what = [k for k, v in (("وضعیت باز/بسته", r.enabled is not None), ("پنل فروش", r.panel is not None), ("کارت", digits is not None or r.card_holder is not None or r.card_bank is not None),
+    what = [k for k, v in (("وضعیت باز/بسته", r.enabled is not None), ("پنل فروش", r.panel is not None), ("کارت‌ها", cards_new is not None),
                            ("متن‌ها", r.welcome is not None or r.support is not None), ("محدوده شارژ/مهلت رسید", r.min_topup is not None or r.max_topup is not None or r.receipt_hours is not None),
-                           ("عضویت اجباری", r.force_enabled is not None or force_list is not None), ("تست رایگان", r.test_enabled is not None or r.test_template is not None or r.test_prefix is not None),
+                           ("عضویت اجباری", r.force_enabled is not None or force_list is not None), ("تست رایگان", r.test_enabled is not None or r.test_template is not None or r.test_prefix is not None or r.test_hours is not None),
                            ("توکن ربات فروش", token_changed)) if v]
-    _aud("تنظیمات فروشگاه", "", "، ".join(what) + (f" — ****{digits[-4:]}" if digits else ""), "sys")
+    _aud("تنظیمات فروشگاه", "", "، ".join(what) + (f" — " + "، ".join("****" + c["number"][-4:] for c in cards_new) if cards_new else ""), "sys")
     restarted = False
     if token_changed:                         # Runner فقط داخل پروسه‌ی ربات است؛ برای اتصال/قطع ربات فروش ربات مدیریت ریستارت می‌شود
         try:
@@ -3119,6 +3127,27 @@ def shop_customer_test_reset(uid: str):
         raise HTTPException(404, str(e))
     _aud("بازنشانی تست رایگان مشتری", uid, "", "sys")
     return {"ok": True}
+
+
+@app.post("/api/shop/force/check", dependencies=[Depends(guard)])
+async def shop_force_check():
+    """آیا ربات فروش می‌تواند عضویت را در کانال‌های تنظیم‌شده بررسی کند؟ (ادمین کانال بودن لازم است)"""
+    tok = _shop_token()
+    chans = C.load_config_ro()["shop"]["force"]["channels"]
+    if not chans:
+        raise HTTPException(400, "کانالی تنظیم نشده است.")
+    out = []
+    async with Bot(tok) as b:
+        me = await asyncio.wait_for(b.get_me(), 15)
+        for ch in chans:
+            chat = int(ch["chat"]) if ch["chat"].lstrip("-").isdigit() else ch["chat"]
+            try:
+                m = await asyncio.wait_for(b.get_chat_member(chat, me.id), 15)
+                ok = m.status in ("administrator", "creator")
+                out.append({"chat": ch["chat"], "ok": ok, "msg": "✅ ربات ادمین کانال است" if ok else f"⚠️ ربات ادمین نیست (وضعیت: {m.status})"})
+            except Exception as e:  # noqa: BLE001
+                out.append({"chat": ch["chat"], "ok": False, "msg": f"❌ {str(e)[:120]}"})
+    return {"bot": me.username, "items": out}
 
 
 class ShopBanReq(BaseModel):

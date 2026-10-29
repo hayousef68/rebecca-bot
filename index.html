@@ -1753,7 +1753,18 @@ async function shopBot(d, body, redraw) {
   body.append(h('div', { class: 'card' }, h('h2', {}, '🤖 توکن ربات فروش'), field('توکن', tok),
     h('p', { class: 'hint' }, 'یک ربات جدا از ربات مدیریت (از @BotFather). بعد از ذخیره، ربات یک‌بار ریستارت می‌شود. بعدش داخل ربات فروش /start بزنید تا رسیدها را در تلگرام هم بگیرید.'),
     h('div', { class: 'btns' }, save1, off)));
-  const num = i(d.card.number, '6037…', { dir: 'ltr', inputmode: 'numeric', maxlength: 24 }), holder = i(d.card.holder, 'نام صاحب کارت', { maxlength: 60 }), bank = i(d.card.bank, 'نام بانک', { maxlength: 60 });
+  // چند شماره کارت: هر ردیف شماره/نام/بانک؛ مشتری همه را می‌بیند (حداکثر ۵)
+  const cardsBox = h('div'); const cardRows = []; const addB = h('button', { class: 'btn', type: 'button' }, '➕ افزودن کارت');
+  const addCardRow = (c = {}) => {
+    const n = i(c.number, '6037…', { dir: 'ltr', inputmode: 'numeric', maxlength: 24 }), ho = i(c.holder, 'نام صاحب کارت', { maxlength: 60 }), bk = i(c.bank, 'نام بانک', { maxlength: 60 });
+    const rm = h('button', { class: 'btn sm bad', type: 'button' }, '🗑 حذف این کارت');
+    const row = h('div', { class: 'item', style: 'padding:10px;margin-bottom:8px' }, field('شماره کارت (۱۶ رقم)', n), field('نام صاحب کارت', ho), field('بانک', bk), h('div', { class: 'btns' }, rm));
+    const ent = { n, ho, bk, row }; cardRows.push(ent);
+    rm.onclick = () => { cardRows.splice(cardRows.indexOf(ent), 1); row.remove(); addB.hidden = cardRows.length >= 5; };
+    cardsBox.append(row); addB.hidden = cardRows.length >= 5;
+  };
+  addB.onclick = () => addCardRow();
+  (d.cards.length ? d.cards : [{}]).forEach(addCardRow); addB.hidden = cardRows.length >= 5;
   const panel = h('select', {}, d.panels.map(p => h('option', { value: p.id, selected: p.id === d.panel }, p.name)));
   const wel = h('textarea', { rows: 4, maxlength: 1000, placeholder: 'متن خوش‌آمد در /start (خالی = پیش‌فرض)' }); wel.value = d.welcome;
   const sup = h('textarea', { rows: 3, maxlength: 1000, placeholder: 'متن پشتیبانی (آیدی/راه تماس)' }); sup.value = d.support;
@@ -1762,7 +1773,7 @@ async function shopBot(d, body, redraw) {
   save2.onclick = () => run(save2, async () => {
     const n = Math.round(+hrs.value); if (!(n >= 1 && n <= 720)) throw new Error('مهلت رسید بین ۱ تا ۷۲۰ ساعت باشد.');
     if (mv(mn) < 1000 || mv(mx) < mv(mn)) throw new Error('حداقل/حداکثر شارژ نامعتبر است (حداقل ۱٬۰۰۰ تومان و حداکثر ≥ حداقل).');
-    await withCode(code => api('/shop/settings', 'POST', { card_number: num.value, card_holder: holder.value, card_bank: bank.value, panel: panel.value, welcome: wel.value, support: sup.value,
+    await withCode(code => api('/shop/settings', 'POST', { cards: cardRows.map(r => ({ number: r.n.value, holder: r.ho.value, bank: r.bk.value })), panel: panel.value, welcome: wel.value, support: sup.value,
       min_topup: mv(mn), max_topup: mv(mx), receipt_hours: n, code }));
     toast('✅ ذخیره شد؛ تغییرات فوراً در ربات اعمال می‌شود'); await redraw();
   });
@@ -1774,27 +1785,34 @@ async function shopBot(d, body, redraw) {
     await api('/shop/settings', 'POST', { force_enabled: fOn.checked, force_channels: fCh.value });
     toast('✅ ذخیره شد'); await redraw();
   });
+  const fTest = h('button', { class: 'btn', type: 'button' }, '🔍 تست دسترسی ربات به کانال');
+  fTest.onclick = () => run(fTest, async () => {
+    const r = await api('/shop/force/check', 'POST');
+    alert(`ربات @${r.bot}\n\n` + r.items.map(x => `${x.chat}: ${x.msg}`).join('\n'));
+  });
   body.append(h('div', { class: 'card' }, h('h2', {}, '📢 عضویت اجباری در کانال'),
     h('label', { class: 'chk', for: 'fjon' }, fOn, 'مشتری‌ها قبل از استفاده از ربات باید عضو کانال(ها) شوند'),
     field('کانال‌ها (هر خط یکی، حداکثر ۵)', fCh),
     h('p', { class: 'hint' }, 'کانال عمومی: @name یا لینک t.me/name. کانال خصوصی: شناسه عددی (-100…) و بعدش لینک دعوت. حتماً ربات فروش را ادمین همان کانال کنید؛ وگرنه عضویت قابل بررسی نیست و آن کانال نادیده گرفته می‌شود (به ادمین‌ها هشدار می‌رسد). ادمین‌های ربات از این شرط معاف‌اند.'),
-    h('div', { class: 'btns' }, fSave)));
+    h('div', { class: 'btns' }, fSave, fTest)));
   const tOn = h('input', { type: 'checkbox', id: 'tston' }); tOn.checked = !!d.test.enabled;
   const tTpl = h('select', {}, [h('option', { value: '' }, '— انتخاب تمپلت تست —'), ...d.templates.map(t => h('option', { value: t.name, selected: t.name === d.test.template }, `${t.name} (${t.gb || '∞'}GB · ${t.days || '∞'} روز)`))]);
   const tPre = i(d.test.prefix, 'test', { dir: 'ltr', maxlength: 16 });
+  const tHrs = i(d.test.hours, '24', { type: 'number', min: 1, max: 720, dir: 'ltr' });
   const tSave = h('button', { class: 'btn pri', type: 'button' }, 'ذخیره تست رایگان');
   tSave.onclick = () => run(tSave, async () => {
     if (tOn.checked && !tTpl.value) throw new Error('برای فعال‌سازی، تمپلت تست را انتخاب کنید.');
-    await api('/shop/settings', 'POST', { test_enabled: tOn.checked, test_template: tTpl.value, test_prefix: tPre.value.trim() || 'test' });
+    if (!(+tHrs.value >= 1 && +tHrs.value <= 720)) throw new Error('مدت تست بین ۱ تا ۷۲۰ ساعت باشد.');
+    await api('/shop/settings', 'POST', { test_enabled: tOn.checked, test_template: tTpl.value, test_prefix: tPre.value.trim() || 'test', test_hours: Math.round(+tHrs.value) });
     toast('✅ تست رایگان ذخیره شد'); await redraw();
   });
   body.append(h('div', { class: 'card' }, h('h2', {}, '🎁 تست رایگان'),
     h('label', { class: 'chk', for: 'tston' }, tOn, 'مشتری‌ها بتوانند یک‌بار تست رایگان بگیرند'),
-    field('تمپلت تست (حجم و مدت از همین تمپلت می‌آید)', tTpl), field('پیشوند نام کاربری تست', tPre),
-    h('p', { class: 'hint' }, 'هر مشتری فقط یک‌بار می‌تواند تست بگیرد و تست بعداً از «سرویس‌های من» قابل تمدید است. اگر ساخت تستی مبهم ماند، در تب «مشتری‌ها» دکمه‌ی «بازنشانی تست» اجازه‌ی یک تست دیگر می‌دهد.'),
+    field('تمپلت تست (فقط حجم از تمپلت می‌آید)', tTpl), field('مدت تست (ساعت، ۱ تا ۷۲۰؛ مثلاً ۲ یا ۲۴)', tHrs), field('پیشوند نام کاربری تست (بعدش کد تصادفی می‌آید، مثل test_k7x2q9)', tPre),
+    h('p', { class: 'hint' }, 'هر مشتری فقط یک‌بار می‌تواند تست بگیرد. نام تست کد تصادفی است و از شماره‌گذاری اشتراک‌های پنل جداست. بعد از پایان مدت، تست خودکار از پنل (دیتابیس) پاک می‌شود (تا حدود ۷ دقیقه تأخیر)؛ اگر مشتری قبل از پایان تمدیدش کند حذف نمی‌شود. اگر ساخت تستی مبهم ماند، در تب «مشتری‌ها» دکمه‌ی «بازنشانی تست» اجازه‌ی یک تست دیگر می‌دهد.'),
     h('div', { class: 'btns' }, tSave)));
-  body.append(h('div', { class: 'card' }, h('h2', {}, '💳 کارت و پرداخت'), field('شماره کارت (۱۶ رقم)', num), field('نام صاحب کارت', holder), field('بانک', bank),
-      d.card.number ? null : h('p', { class: 'err' }, 'کارت تنظیم نشده؛ تا آن را نگذارید مشتری نمی‌تواند با کارت‌به‌کارت خرید کند.')),
+  body.append(h('div', { class: 'card' }, h('h2', {}, '💳 کارت‌ها و پرداخت'), cardsBox, h('div', { class: 'btns' }, addB), h('p', { class: 'hint' }, 'اگر چند کارت بگذارید، مشتری همه‌ی آن‌ها را می‌بیند و به یکی واریز می‌کند. برای ذخیره، پایین همین صفحه «ذخیره تنظیمات فروشگاه» را بزنید.'),
+      d.cards.length ? null : h('p', { class: 'err' }, 'کارت تنظیم نشده؛ تا آن را نگذارید مشتری نمی‌تواند با کارت‌به‌کارت خرید کند.')),
     h('div', { class: 'card' }, h('h2', {}, '⚙️ امکانات ربات'), field('پنلی که اکانت مشتری‌ها روی آن ساخته می‌شود', panel),
       field('حداقل شارژ کیف پول (تومان)', mn), field('حداکثر شارژ کیف پول (تومان)', mx), field('مهلت ارسال رسید (ساعت؛ بعد از آن سفارش لغو می‌شود)', hrs),
       field('متن خوش‌آمد', wel), field('متن پشتیبانی', sup), h('div', { class: 'btns' }, save2)));

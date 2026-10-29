@@ -107,7 +107,7 @@ DEFAULT_CFG = {
     # فروشگاه (ربات فروش مشتری): توکن ربات جدا، کارت، پلن‌ها، مشتری‌ها با کیف پول، سفارش‌ها (خرید/تمدید/شارژ با رسید) و دفتر تراکنش
     "shop": {"enabled": True, "token": "", "panel": "", "card": {"number": "", "holder": "", "bank": ""}, "plans": [], "welcome": "", "support": "",
              "min_topup": 10000, "max_topup": 50000000, "receipt_hours": 24, "customers": {}, "orders": [], "tx": [],
-             "test": {"enabled": False, "template": "", "prefix": "test"},
+             "test": {"enabled": False, "template": "", "prefix": "test", "hours": 24}, "cards": [],
              "force": {"enabled": False, "channels": []}},      # عضویت اجباری: channels=[{chat: "@name"|"-100…", link: "https://t.me/…"}]      # تست رایگان: هر مشتری فقط یک‌بار
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
@@ -197,6 +197,7 @@ SHOP_ORDER_MAX = 3000
 SHOP_TX_MAX = 5000
 SHOP_LOG_MAX = 50
 SHOP_BAL_MAX = 10 ** 10
+SHOP_CARDS_MAX = 5
 
 
 def parse_force_channels(text: str) -> list[dict]:
@@ -235,6 +236,16 @@ def _normalize_shop(raw) -> dict:
     s["panel"] = str(raw.get("panel") or "").strip()[:40]
     card = raw.get("card") if isinstance(raw.get("card"), dict) else {}
     s["card"] = {k: str(card.get(k) or "").strip()[:60] for k in ("number", "holder", "bank")}
+    cards = []
+    for x in (raw.get("cards") if isinstance(raw.get("cards"), list) else [])[:SHOP_CARDS_MAX]:
+        if isinstance(x, dict):
+            num = re.sub(r"\D", "", str(x.get("number") or ""))[:24]
+            if num:
+                cards.append({"number": num, "holder": str(x.get("holder") or "").strip()[:60], "bank": str(x.get("bank") or "").strip()[:60]})
+    if not cards and "cards" not in raw and s["card"]["number"]:          # مهاجرت از نسخه‌ی تک‌کارت
+        cards = [dict(s["card"])]
+    s["cards"] = cards
+    s["card"] = dict(cards[0]) if cards else {"number": "", "holder": "", "bank": ""}          # سازگاری: «کارت اول»
     for k in ("welcome", "support"):
         s[k] = str(raw.get(k) or "").strip()[:1000]
     for k, lo, hi in (("min_topup", 1000, 10 ** 9), ("max_topup", 1000, 10 ** 10), ("receipt_hours", 1, 720)):
@@ -244,7 +255,11 @@ def _normalize_shop(raw) -> dict:
             pass
     t = raw.get("test") if isinstance(raw.get("test"), dict) else {}
     pre = re.sub(r"[^A-Za-z0-9_]", "", str(t.get("prefix") or "test"))[:16] or "test"
-    s["test"] = {"enabled": bool(t.get("enabled")), "template": str(t.get("template") or "")[:80], "prefix": pre}
+    try:
+        th = min(720, max(1, int(t.get("hours", 24))))
+    except (TypeError, ValueError):
+        th = 24
+    s["test"] = {"enabled": bool(t.get("enabled")), "template": str(t.get("template") or "")[:80], "prefix": pre, "hours": th}
     f = raw.get("force") if isinstance(raw.get("force"), dict) else {}
     chans = []
     for x in (f.get("channels") if isinstance(f.get("channels"), list) else [])[:5]:
@@ -273,6 +288,7 @@ def _normalize_shop(raw) -> dict:
             cust[str(uid)] = {"balance": min(SHOP_BAL_MAX, max(0, int(r.get("balance") or 0))), "name": str(r.get("name") or "")[:60],
                               "username": str(r.get("username") or "")[:40], "joined": int(r.get("joined") or 0), "banned": bool(r.get("banned")),
                               "test": int(r.get("test") or 0), "test_user": str(r.get("test_user") or "")[:64],
+                              "test_exp": int(r.get("test_exp") or 0), "test_pid": str(r.get("test_pid") or "")[:40], "test_del": int(r.get("test_del") or 0),
                               "services": svcs, "log": [x for x in (r.get("log") if isinstance(r.get("log"), list) else []) if isinstance(x, dict)][-SHOP_LOG_MAX:]}
         except (TypeError, ValueError):
             continue
@@ -1573,7 +1589,10 @@ def make_names(base: str, start, count: int, max_batch: int) -> list[str]:
 def build_payload(username: str, tpl: dict, service_id: int) -> dict:
     gb, days, mode = tpl["gb"], int(tpl["days"]), tpl.get("mode", "on_hold")
     p = {"username": username, "data_limit": int(gb * GB) if gb > 0 else 0, "service_id": int(service_id), "status": mode}
-    if mode == "on_hold":
+    if tpl.get("hours"):                                   # تست رایگان: مدت بر حسب ساعت، شروع از لحظه‌ی ساخت
+        p["status"] = "active"
+        p["expire"] = int(time.time()) + int(tpl["hours"]) * 3600
+    elif mode == "on_hold":
         p["on_hold_expire_duration"] = days * 86400 if days > 0 else 30 * 86400
     else:
         p["expire"] = int(time.time()) + days * 86400 if days > 0 else 0
