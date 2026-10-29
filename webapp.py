@@ -16,7 +16,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from telegram import Bot
-from telegram.error import TelegramError
+from telegram.error import Forbidden, RetryAfter, TelegramError
 
 import common as C
 import ops
@@ -2752,7 +2752,7 @@ def shop_overview():
     return {"enabled": s["enabled"], "panel": shop.shop_panel(cfg), "panels": [{"id": p["id"], "name": p["name"]} for p in cfg["panels"]],
             "cards": s["cards"], "welcome": s["welcome"], "support": s["support"], "min_topup": s["min_topup"], "max_topup": s["max_topup"],
             "receipt_hours": s["receipt_hours"], "has_token": bool(tok), "token_hint": ("…" + tok[-6:]) if tok else "",
-            "test": s["test"], "force": s["force"], "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
+            "test": s["test"], "force": s["force"], "remind": s["remind"], "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
             "counts": cnt, "customers": len(s["customers"]), "wallet_total": sum(c["balance"] for c in s["customers"].values()),
             "sales_total": sales_total, "sales_24h": sales_24h}
 
@@ -3172,6 +3172,181 @@ async def shop_force_check():
             except Exception as e:  # noqa: BLE001
                 out.append({"chat": ch["chat"], "ok": False, "msg": f"❌ {str(e)[:120]}"})
     return {"bot": me.username, "items": out}
+
+
+# ── کد تخفیف ──
+class ShopCodeReq(BaseModel):
+    code: str = Field(min_length=3, max_length=20)
+    kind: str = Field(pattern="^(percent|amount)$")
+    value: int = Field(ge=1, le=10 ** 9)
+    max: int = Field(default=0, ge=0, le=10 ** 6)             # کل دفعات استفاده (۰ = نامحدود)
+    per_user: int = Field(default=1, ge=1, le=100)
+    days: int = Field(default=0, ge=0, le=3650)               # اعتبار از همین حالا، به روز (۰ = بدون انقضا)
+    plans: list[str] = Field(default_factory=list, max_length=50)
+    note: str = Field(default="", max_length=80)
+
+
+@app.get("/api/shop/codes", dependencies=[Depends(guard)])
+def shop_codes():
+    s = C.load_config_ro()["shop"]
+    uses: dict[str, int] = {}
+    for o in s["orders"]:
+        if o.get("code") and o["status"] not in shop._CODE_DEAD:
+            uses[o["code"]] = uses.get(o["code"], 0) + 1
+    return {"items": [{"code": k, **v, "used": uses.get(k, 0)} for k, v in sorted(s["codes"].items(), key=lambda kv: -kv[1]["created"])],
+            "plans": [{"id": p["id"], "name": p["name"]} for p in s["plans"]]}
+
+
+@app.post("/api/shop/codes", dependencies=[Depends(guard)])
+def shop_code_save(r: ShopCodeReq):
+    code = re.sub(r"\s", "", r.code).upper()
+    if not re.fullmatch(r"[A-Z0-9_-]{3,20}", code):
+        raise HTTPException(400, "کد فقط حروف انگلیسی، عدد، - و _ (۳ تا ۲۰ کاراکتر) باشد.")
+    if r.kind == "percent" and not 1 <= r.value <= 100:
+        raise HTTPException(400, "درصد تخفیف بین ۱ تا ۱۰۰ باشد.")
+
+    def mut(c):
+        sh = c["shop"]
+        old = sh["codes"].get(code)
+        ids = {p["id"] for p in sh["plans"]}
+        sh["codes"][code] = {"kind": r.kind, "value": r.value, "max": r.max, "per_user": r.per_user,
+                             "exp": int(time.time()) + r.days * 86400 if r.days else 0, "active": True,
+                             "plans": [x for x in r.plans if x in ids], "note": r.note.strip(), "created": (old or {}).get("created") or int(time.time())}
+    update_config(mut)
+    _aud("کد تخفیف فروشگاه", code, f"{r.value}{'٪' if r.kind == 'percent' else ' تومان'}", "sys")
+    return {"ok": True}
+
+
+class ShopCodeToggleReq(BaseModel):
+    active: bool
+
+
+@app.post("/api/shop/codes/{code}/active", dependencies=[Depends(guard)])
+def shop_code_active(code: str, r: ShopCodeToggleReq):
+    def mut(c):
+        if code not in c["shop"]["codes"]:
+            raise ValueError("کد پیدا نشد.")
+        c["shop"]["codes"][code]["active"] = r.active
+    try:
+        update_config(mut)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/shop/codes/{code}/delete", dependencies=[Depends(guard)])
+def shop_code_delete(code: str):
+    update_config(lambda c: c["shop"]["codes"].pop(code, None))
+    _aud("حذف کد تخفیف فروشگاه", code, "", "sys")
+    return {"ok": True}
+
+
+# ── یادآوری انقضا و حجم ──
+class ShopRemindReq(BaseModel):
+    enabled: bool
+    days: list[int] = Field(max_length=4)
+    usage: int = Field(ge=50, le=99)
+
+
+@app.post("/api/shop/remind", dependencies=[Depends(guard)])
+def shop_remind_save(r: ShopRemindReq):
+    days = sorted({d for d in r.days if 1 <= d <= 30}, reverse=True)
+    if not days:
+        raise HTTPException(400, "حداقل یک روز (۱ تا ۳۰) وارد کنید.")
+
+    def mut(c):
+        c["shop"]["remind"] = {"enabled": r.enabled, "days": days, "usage": r.usage}
+    update_config(mut)
+    _aud("یادآوری انقضای فروشگاه", "", f"{'روشن' if r.enabled else 'خاموش'}؛ روزها {days}؛ حجم {r.usage}٪", "sys")
+    return {"ok": True}
+
+
+# ── پیام همگانی ──
+_BC_AUD = {"all": "همه‌ی مشتری‌ها", "buyers": "مشتری‌هایی که سرویس دارند", "nobuyers": "مشتری‌هایی که هنوز سرویس ندارند", "wallet": "مشتری‌هایی که موجودی کیف پول دارند"}
+
+
+def _bc_targets(s: dict, aud: str) -> list[int]:
+    out = []
+    for uid, c in s["customers"].items():
+        if c["banned"]:
+            continue
+        if aud == "buyers" and not c["services"]:
+            continue
+        if aud == "nobuyers" and c["services"]:
+            continue
+        if aud == "wallet" and c["balance"] <= 0:
+            continue
+        out.append(int(uid))
+    return out
+
+
+@app.get("/api/shop/broadcast", dependencies=[Depends(guard)])
+def shop_broadcast_info():
+    s = C.load_config_ro()["shop"]
+    return {"audiences": [{"key": k, "name": v, "count": len(_bc_targets(s, k))} for k, v in _BC_AUD.items()], "last": s["bcast"], "has_token": bool(s["token"])}
+
+
+class ShopBroadcastReq(BaseModel):
+    text: str = Field(min_length=1, max_length=3500)
+    audience: str = Field(pattern="^(all|buyers|nobuyers|wallet)$")
+
+
+async def _broadcast_run(token: str, bid: str, text: str, targets: list[int]) -> None:
+    sent = failed = 0
+
+    def prog(done: bool):
+        def mut(c):
+            b = c["shop"]["bcast"]
+            if b.get("id") == bid:
+                b.update(sent=sent, failed=failed, running=not done)
+                if done:
+                    b["done_ts"] = int(time.time())
+        update_config(mut)
+    try:
+        async with Bot(token) as b:
+            for n, uid in enumerate(targets, 1):
+                for attempt in range(3):
+                    try:
+                        await b.send_message(uid, text, disable_web_page_preview=True)
+                        sent += 1
+                        break
+                    except RetryAfter as e:
+                        await asyncio.sleep(min(60, float(e.retry_after) + 1))
+                    except (Forbidden, TelegramError):
+                        failed += 1                        # ربات را بلاک کرده یا چت پیدا نشد
+                        break
+                else:
+                    failed += 1
+                await asyncio.sleep(0.05)                  # ~۲۰ پیام در ثانیه (زیر سقف تلگرام)
+                if n % 25 == 0:
+                    await asyncio.to_thread(prog, False)
+    except Exception:  # noqa: BLE001
+        log.exception("broadcast")
+    finally:
+        await asyncio.to_thread(prog, True)
+
+
+@app.post("/api/shop/broadcast", dependencies=[Depends(guard)])
+async def shop_broadcast(r: ShopBroadcastReq):
+    tok = _shop_token()
+    s = C.load_config_ro()["shop"]
+    last = s["bcast"]
+    if last.get("running") and time.time() - int(last.get("ts") or 0) < 7200:
+        raise HTTPException(409, "یک ارسال همگانی هنوز در حال انجام است؛ صبر کنید تا تمام شود.")
+    targets = _bc_targets(s, r.audience)
+    if not targets:
+        raise HTTPException(400, "مخاطبی برای این گروه پیدا نشد.")
+    bid = secrets.token_hex(4)
+    text = r.text.strip()
+
+    def mut(c):
+        c["shop"]["bcast"] = {"id": bid, "ts": int(time.time()), "audience": r.audience, "text": text[:120], "total": len(targets), "sent": 0, "failed": 0, "running": True}
+    await asyncio.to_thread(update_config, mut)
+    _aud("پیام همگانی فروشگاه", bid, f"{_BC_AUD[r.audience]} — {len(targets)} نفر", "sys")
+    t = asyncio.create_task(_broadcast_run(tok, bid, text, targets))
+    _bg.add(t)
+    t.add_done_callback(_bg.discard)
+    return {"ok": True, "total": len(targets)}
 
 
 class ShopBanReq(BaseModel):

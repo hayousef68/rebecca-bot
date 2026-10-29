@@ -108,7 +108,8 @@ DEFAULT_CFG = {
     "shop": {"enabled": True, "token": "", "panel": "", "card": {"number": "", "holder": "", "bank": ""}, "plans": [], "welcome": "", "support": "",
              "min_topup": 10000, "max_topup": 50000000, "receipt_hours": 24, "customers": {}, "orders": [], "tx": [],
              "test": {"enabled": False, "template": "", "prefix": "test", "hours": 24}, "cards": [],
-             "force": {"enabled": False, "channels": []}},      # عضویت اجباری: channels=[{chat: "@name"|"-100…", link: "https://t.me/…"}]      # تست رایگان: هر مشتری فقط یک‌بار
+             "force": {"enabled": False, "channels": []},
+             "codes": {}, "remind": {"enabled": True, "days": [3, 1], "usage": 85}, "bcast": {}},      # عضویت اجباری: channels=[{chat: "@name"|"-100…", link: "https://t.me/…"}]      # تست رایگان: هر مشتری فقط یک‌بار
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
 
@@ -266,6 +267,32 @@ def _normalize_shop(raw) -> dict:
         if isinstance(x, dict) and re.fullmatch(r"@[A-Za-z0-9_]{4,64}|-100\d{5,15}", str(x.get("chat") or "")):
             chans.append({"chat": str(x["chat"]), "link": str(x.get("link") or "")[:200]})
     s["force"] = {"enabled": bool(f.get("enabled")) and bool(chans), "channels": chans}
+    codes = {}
+    for k, v in (raw.get("codes") if isinstance(raw.get("codes"), dict) else {}).items():
+        k = str(k).strip().upper()
+        if not re.fullmatch(r"[A-Z0-9_-]{3,20}", k) or not isinstance(v, dict) or v.get("kind") not in ("percent", "amount"):
+            continue
+        try:
+            val = int(v.get("value") or 0)
+            val = min(100, val) if v["kind"] == "percent" else min(10 ** 9, val)
+            if val <= 0:
+                continue
+            codes[k] = {"kind": v["kind"], "value": val, "max": max(0, int(v.get("max") or 0)), "per_user": max(1, int(v.get("per_user") or 1)),
+                        "exp": max(0, int(v.get("exp") or 0)), "active": bool(v.get("active", True)),
+                        "plans": [str(x)[:12] for x in (v.get("plans") if isinstance(v.get("plans"), list) else [])][:50], "note": str(v.get("note") or "")[:80],
+                        "created": int(v.get("created") or 0)}
+        except (TypeError, ValueError):
+            continue
+    s["codes"] = codes
+    rm = raw.get("remind") if isinstance(raw.get("remind"), dict) else {}
+    try:
+        days = sorted({min(30, max(1, int(x))) for x in (rm.get("days") if isinstance(rm.get("days"), list) else [3, 1])}, reverse=True)[:4]
+        usage = min(99, max(50, int(rm.get("usage", 85))))
+    except (TypeError, ValueError):
+        days, usage = [3, 1], 85
+    s["remind"] = {"enabled": bool(rm.get("enabled", True)), "days": days or [3, 1], "usage": usage}
+    bc = raw.get("bcast") if isinstance(raw.get("bcast"), dict) else {}
+    s["bcast"] = {k: bc[k] for k in ("id", "ts", "audience", "text", "total", "sent", "failed", "running", "done_ts") if k in bc}
     plans, seen = [], set()
     for p in raw.get("plans") if isinstance(raw.get("plans"), list) else []:
         try:
@@ -283,7 +310,8 @@ def _normalize_shop(raw) -> dict:
         if not isinstance(r, dict) or not str(uid).lstrip("-").isdigit():
             continue
         try:
-            svcs = [{"pid": str(x.get("pid") or ""), "u": str(x["u"])[:64], "ts": int(x.get("ts") or 0)}
+            svcs = [{"pid": str(x.get("pid") or ""), "u": str(x["u"])[:64], "ts": int(x.get("ts") or 0),
+                     **({"rem": {str(k): int(v) for k, v in x["rem"].items()}} if isinstance(x.get("rem"), dict) else {})}
                     for x in (r.get("services") if isinstance(r.get("services"), list) else []) if isinstance(x, dict) and x.get("u")]
             cust[str(uid)] = {"balance": min(SHOP_BAL_MAX, max(0, int(r.get("balance") or 0))), "name": str(r.get("name") or "")[:60],
                               "username": str(r.get("username") or "")[:40], "joined": int(r.get("joined") or 0), "banned": bool(r.get("banned")),

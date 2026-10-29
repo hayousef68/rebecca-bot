@@ -190,6 +190,7 @@ mark{background:color-mix(in srgb,var(--ac) 25%,transparent);color:var(--ac);bor
 .seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:3px;background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:3px;margin:14px 0 12px}
 .seg button{border:0;background:none;color:var(--mu);font:inherit;font-size:var(--fs-sm);font-weight:700;padding:9px 2px;border-radius:11px;cursor:pointer;transition:all .15s;white-space:nowrap}
 .seg button.on{background:linear-gradient(135deg,var(--ac),var(--ac2));color:var(--ac-ink)}
+.seg.scroll{grid-auto-columns:minmax(max-content,1fr);overflow-x:auto;scrollbar-width:none}.seg.scroll button{padding:9px 11px}
 .seg.sm{margin:0 0 10px}.seg.sm button{padding:7px 2px}
 .pane{animation:fade .2s ease-out both}
 .psec{display:flex;justify-content:space-between;align-items:baseline;margin:14px 0 6px;font-size:var(--fs-sm);color:var(--mu)}.psec b{color:var(--tx)}
@@ -1591,10 +1592,10 @@ async function vShop() {
       tile('رسید در انتظار', fa(d.counts.pending), '--warn'), tile('سفارش ناموفق', fa(d.counts.failed), '--bad'), tile('مشتری', fa(d.customers)),
       h('div', { class: 'wide' }, h('span', {}, 'فروش ۲۴ ساعت اخیر'), h('strong', { style: 'font-size:var(--fs-lg);white-space:nowrap' }, fa(d.sales_24h) + ' تومان')),
       h('div', { class: 'wide' }, h('span', {}, 'موجودی کیف پول مشتری‌ها'), h('strong', { style: 'font-size:var(--fs-lg);white-space:nowrap' }, fa(d.wallet_total) + ' تومان'))));
-  const SECS = [['rc', '🧾 رسیدها' + (S.shopPend ? ' •' : '')], ['pl', '📦 قیمت‌ها'], ['cu', '👥 مشتری‌ها'], ['bot', '🤖 ربات']];
+  const SECS = [['rc', '🧾 رسیدها' + (S.shopPend ? ' •' : '')], ['pl', '📦 قیمت‌ها'], ['dc', '🏷 کدها'], ['cu', '👥 مشتری‌ها'], ['bc', '📣 پیام'], ['bot', '🤖 ربات']];
   const body = h('div');
-  const seg = h('div', { class: 'seg' }, SECS.map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === D.sec ? 'on' : '', onclick: () => { D.sec = k; D.touched = true; draw(); } }, t)));
-  const SEC = { rc: shopReceipts, pl: shopPlans, cu: shopCustomers, bot: shopBot };
+  const seg = h('div', { class: 'seg scroll' }, SECS.map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === D.sec ? 'on' : '', onclick: () => { D.sec = k; D.touched = true; draw(); } }, t)));
+  const SEC = { rc: shopReceipts, pl: shopPlans, dc: shopCodes, cu: shopCustomers, bc: shopBroadcast, bot: shopBot };
   const draw = async () => {
     seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === D.sec));
     body.replaceChildren();
@@ -1777,6 +1778,86 @@ function shopCust(c, d) {
   return it;
 }
 
+/* ── کد تخفیف ── */
+async function shopCodes(d, body, redraw) {
+  let r; try { r = await api('/shop/codes'); } catch (e) { body.append(h('p', { class: 'err' }, e.message)); return; }
+  const fa = n => (+n || 0).toLocaleString('fa-IR');
+  const code = h('input', { placeholder: 'مثلاً OFF20', dir: 'ltr', maxlength: 20, autocomplete: 'off', style: 'text-transform:uppercase' });
+  const rnd = h('button', { class: 'btn sm', type: 'button' }, '🎲 کد تصادفی'); rnd.onclick = () => { code.value = Array.from(crypto.getRandomValues(new Uint8Array(6)), b => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[b % 31]).join(''); };
+  const kind = h('select', {}, h('option', { value: 'percent' }, 'درصدی (٪)'), h('option', { value: 'amount' }, 'مبلغ ثابت (تومان)'));
+  const val = h('input', { type: 'number', min: 1, dir: 'ltr', placeholder: 'مثلاً 20' });
+  const max = h('input', { type: 'number', min: 0, dir: 'ltr', placeholder: '0 = نامحدود', value: 0 });
+  const per = h('input', { type: 'number', min: 1, dir: 'ltr', value: 1 });
+  const days = h('input', { type: 'number', min: 0, dir: 'ltr', placeholder: '0 = بدون انقضا', value: 0 });
+  const note = h('input', { placeholder: 'یادداشت (اختیاری، فقط برای شما)', maxlength: 80 });
+  const planBoxes = r.plans.map(p => { const c = h('input', { type: 'checkbox', value: p.id }); return [c, h('label', { class: 'chk' }, c, p.name)]; });
+  const add = h('button', { class: 'btn pri', type: 'button' }, '➕ ساخت کد');
+  add.onclick = () => run(add, async () => {
+    if (!code.value.trim()) throw new Error('کد را وارد کنید.');
+    if (!(+val.value >= 1)) throw new Error('مقدار تخفیف را وارد کنید.');
+    await api('/shop/codes', 'POST', { code: code.value.trim(), kind: kind.value, value: Math.round(+val.value), max: Math.round(+max.value) || 0, per_user: Math.round(+per.value) || 1,
+      days: Math.round(+days.value) || 0, plans: planBoxes.filter(([c]) => c.checked).map(([c]) => c.value), note: note.value });
+    toast('✅ کد ساخته شد'); await redraw();
+  });
+  body.append(h('div', { class: 'card' }, h('h2', {}, '🏷 کد تخفیف جدید'),
+    field('کد', h('div', { style: 'display:flex;gap:8px' }, code, rnd)), field('نوع تخفیف', kind), field('مقدار (درصد یا تومان)', val),
+    field('حداکثر کل دفعات استفاده', max), field('حداکثر دفعات برای هر مشتری', per), field('اعتبار (روز از همین حالا)', days),
+    r.plans.length ? h('div', {}, h('label', {}, 'فقط برای این پلن‌ها (هیچ‌کدام = همه‌ی پلن‌ها)'), ...planBoxes.map(x => x[1])) : null,
+    field('یادداشت', note),
+    h('p', { class: 'hint' }, 'کد فقط روی خرید و تمدید اعمال می‌شود (نه شارژ کیف پول). مبلغ نهایی هرگز کمتر از ۱٬۰۰۰ تومان نمی‌شود. سفارشِ لغو یا ردشده، از ظرفیت کد کم نمی‌کند.'),
+    h('div', { class: 'btns' }, add)));
+  const list = h('div', { class: 'card' }, h('h2', {}, 'کدهای ساخته‌شده'));
+  if (!r.items.length) list.append(h('p', { class: 'hint' }, 'هنوز کدی نساخته‌اید.'));
+  r.items.forEach(x => {
+    const expired = x.exp && x.exp * 1000 < Date.now();
+    const tg = h('button', { class: 'btn sm' + (x.active ? '' : ' pri'), type: 'button' }, x.active ? '⏸ غیرفعال کردن' : '▶️ فعال کردن');
+    tg.onclick = () => run(tg, async () => { await api(`/shop/codes/${encodeURIComponent(x.code)}/active`, 'POST', { active: !x.active }); await redraw(); });
+    const dl = h('button', { class: 'btn sm bad', type: 'button' }, '🗑 حذف');
+    dl.onclick = () => { if (confirm(`کد ${x.code} حذف شود؟ (سفارش‌های قبلی دست‌نخورده می‌ماند)`)) run(dl, async () => { await api(`/shop/codes/${encodeURIComponent(x.code)}/delete`, 'POST'); await redraw(); }); };
+    const planNames = x.plans.length ? x.plans.map(id => (r.plans.find(p => p.id === id) || {}).name || id).join('، ') : 'همه‌ی پلن‌ها';
+    list.append(h('details', { class: 'item' + (x.active && !expired ? '' : ' s-disabled') },
+      h('summary', {}, h('span', { class: 'nm', dir: 'ltr' }, x.code, h('small', { style: 'display:block;color:var(--mu);font-weight:400' }, (x.kind === 'percent' ? fa(x.value) + '٪' : fa(x.value) + ' تومان') + (x.note ? ' · ' + x.note : ''))),
+        h('span', { class: 'sub' }, `${fa(x.used)}${x.max ? ' / ' + fa(x.max) : ''} استفاده`)),
+      h('div', { class: 'body' }, lgRow('وضعیت', expired ? 'منقضی شده' : x.active ? 'فعال' : 'غیرفعال'), lgRow('پلن‌ها', planNames), lgRow('هر مشتری', fa(x.per_user) + ' بار'),
+        lgRow('انقضا', x.exp ? fdt(x.exp) : 'ندارد'), h('div', { class: 'btns' }, tg, dl))));
+  });
+  body.append(list);
+}
+
+/* ── پیام همگانی ── */
+async function shopBroadcast(d, body, redraw) {
+  let r; try { r = await api('/shop/broadcast'); } catch (e) { body.append(h('p', { class: 'err' }, e.message)); return; }
+  const fa = n => (+n || 0).toLocaleString('fa-IR');
+  const aud = h('select', {}, r.audiences.map(a => h('option', { value: a.key }, `${a.name} (${fa(a.count)} نفر)`)));
+  const txt = h('textarea', { rows: 6, maxlength: 3500, placeholder: 'متن پیام برای مشتری‌ها…' });
+  const cnt = h('small', { style: 'color:var(--mu)' }, '0 / 3500'); txt.oninput = () => { cnt.textContent = txt.value.length + ' / 3500'; };
+  const send = h('button', { class: 'btn pri', type: 'button' }, '📣 ارسال');
+  const status = h('div', { class: 'card' });
+  const draw = l => {
+    if (!l || !l.id) { status.replaceChildren(h('h2', {}, 'آخرین ارسال'), h('p', { class: 'hint' }, 'هنوز پیام همگانی نفرستاده‌اید.')); return; }
+    const done = l.sent + l.failed;
+    status.replaceChildren(h('h2', {}, 'آخرین ارسال ' + (l.running ? '⏳ در حال ارسال' : '✅ تمام شد')),
+      lgRow('زمان', fdt(l.ts)), lgRow('متن', l.text), lgRow('پیشرفت', `${fa(done)} از ${fa(l.total)}`), lgRow('رسید', fa(l.sent)), lgRow('نرسید (ربات را بلاک کرده‌اند)', fa(l.failed)));
+  };
+  draw(r.last);
+  const poll = async () => {
+    if (!document.body.contains(status)) return;
+    try { const x = await api('/shop/broadcast'); draw(x.last); if (x.last.running) setTimeout(poll, 3000); } catch {}
+  };
+  if (r.last && r.last.running) setTimeout(poll, 3000);
+  send.onclick = () => run(send, async () => {
+    const t = txt.value.trim(); if (!t) throw new Error('متن پیام را بنویسید.');
+    const a = r.audiences.find(x => x.key === aud.value);
+    if (!confirm(`این پیام برای ${fa(a.count)} نفر (${a.name}) فرستاده شود؟\n\n${t.slice(0, 200)}${t.length > 200 ? '…' : ''}`)) return;
+    await api('/shop/broadcast', 'POST', { text: t, audience: aud.value });
+    toast('✅ ارسال شروع شد'); txt.value = ''; cnt.textContent = '0 / 3500';
+    const x = await api('/shop/broadcast'); draw(x.last); setTimeout(poll, 3000);
+  });
+  body.append(h('div', { class: 'card' }, h('h2', {}, '📣 پیام همگانی'), field('مخاطبان', aud), field('متن پیام', txt), cnt,
+    h('p', { class: 'hint' }, 'پیام متنی ساده بدون قالب‌بندی فرستاده می‌شود؛ حدود ۲۰ پیام در ثانیه. مشتری‌های مسدودشده دریافت نمی‌کنند. حتماً قبل از ارسال متن را بخوانید؛ پیام قابل بازگشت نیست.'),
+    !r.has_token ? h('p', { class: 'err' }, 'ابتدا توکن ربات فروش را ثبت کنید.') : null, h('div', { class: 'btns' }, send)), status);
+}
+
 /* ── تنظیمات ربات فروش ── */
 async function shopBot(d, body, redraw) {
   const i = (v, p = '', extra = {}) => h('input', { value: v ?? '', placeholder: p, autocomplete: 'off', ...extra });
@@ -1834,6 +1915,20 @@ async function shopBot(d, body, redraw) {
     field('کانال‌ها (هر خط یکی، حداکثر ۵)', fCh),
     h('p', { class: 'hint' }, 'کانال عمومی: @name یا لینک t.me/name. کانال خصوصی: شناسه عددی (-100…) و بعدش لینک دعوت. حتماً ربات فروش را ادمین همان کانال کنید؛ وگرنه عضویت قابل بررسی نیست و آن کانال نادیده گرفته می‌شود (به ادمین‌ها هشدار می‌رسد). ادمین‌های ربات از این شرط معاف‌اند.'),
     h('div', { class: 'btns' }, fSave, fTest)));
+  const rmOn = h('input', { type: 'checkbox', id: 'rmon' }); rmOn.checked = !!d.remind.enabled;
+  const rmDays = i(d.remind.days.join(', '), '3, 1', { dir: 'ltr' }), rmUse = i(d.remind.usage, '85', { type: 'number', min: 50, max: 99, dir: 'ltr' });
+  const rmSave = h('button', { class: 'btn pri', type: 'button' }, 'ذخیره یادآوری');
+  rmSave.onclick = () => run(rmSave, async () => {
+    const dl = rmDays.value.split(/[ ,،]+/).map(x => Math.round(+x)).filter(x => x >= 1 && x <= 30);
+    if (!dl.length) throw new Error('حداقل یک روز بین ۱ تا ۳۰ وارد کنید (مثل 3, 1).');
+    await api('/shop/remind', 'POST', { enabled: rmOn.checked, days: dl.slice(0, 4), usage: Math.round(+rmUse.value) });
+    toast('✅ ذخیره شد'); await redraw();
+  });
+  body.append(h('div', { class: 'card' }, h('h2', {}, '⏰ یادآوری انقضا و حجم'),
+    h('label', { class: 'chk', for: 'rmon' }, rmOn, 'به مشتری‌ها قبل از انقضا و نزدیک اتمام حجم پیام بده'),
+    field('چند روز مانده به انقضا (با کاما، مثلاً 3, 1)', rmDays), field('هشدار حجم وقتی مصرف از این درصد گذشت', rmUse),
+    h('p', { class: 'hint' }, 'هر هشدار برای هر دوره‌ی اعتبار فقط یک‌بار فرستاده می‌شود و با تمدید دوباره فعال می‌شود. علاوه بر آن، پیام «منقضی شد» و «حجم تمام شد» هم می‌رود. هر پیام دکمه‌ی تمدید دارد. بررسی هر حدود ۳۰ دقیقه انجام می‌شود. تست رایگان تمدیدنشده یادآوری نمی‌گیرد.'),
+    h('div', { class: 'btns' }, rmSave)));
   const tOn = h('input', { type: 'checkbox', id: 'tston' }); tOn.checked = !!d.test.enabled;
   const tTpl = h('select', {}, [h('option', { value: '' }, '— انتخاب تمپلت تست —'), ...d.templates.map(t => h('option', { value: t.name, selected: t.name === d.test.template }, `${t.name} (${t.gb || '∞'}GB · ${t.days || '∞'} روز)`))]);
   const tPre = i(d.test.prefix, 'test', { dir: 'ltr', maxlength: 16 });

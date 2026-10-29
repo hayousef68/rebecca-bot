@@ -130,7 +130,42 @@ def plan_get(s: dict, pid: str) -> dict | None:
     return next((p for p in s["plans"] if p["id"] == pid), None)
 
 
-def _build_order(c: dict, uid: int, kind: str, plan_id: str = "", amount: int = 0, username: str = "") -> tuple[dict, dict, dict]:
+_CODE_DEAD = ("cancelled", "rejected", "refunded", "credited")      # سفارش‌هایی که استفاده از کد را «مصرف‌شده» حساب نمی‌کنند
+
+
+def code_apply(s: dict, uid: int, code: str, plan: dict) -> tuple[str, int]:
+    """اعتبارسنجی کد تخفیف روی یک پلن. خروجی: (کد نرمال‌شده, مبلغ تخفیف). خطا: ValueError با پیام فارسی.
+    تعداد استفاده از روی خودِ سفارش‌ها شمرده می‌شود (سفارش لغو/ردشده حساب نمی‌شود)؛ پس نیازی به شمارنده‌ی جدا نیست."""
+    code = re.sub(r"\s", "", str(code)).upper()
+    d = s["codes"].get(code)
+    if not d or not d["active"]:
+        raise ValueError("کد تخفیف نامعتبر است.")
+    if d["exp"] and time.time() > d["exp"]:
+        raise ValueError("مهلت این کد تخفیف تمام شده است.")
+    if d["plans"] and plan["id"] not in d["plans"]:
+        raise ValueError("این کد برای این پلن قابل استفاده نیست.")
+    used = [o for o in s["orders"] if o.get("code") == code and o["status"] not in _CODE_DEAD]
+    if d["max"] and len(used) >= d["max"]:
+        raise ValueError("ظرفیت این کد تخفیف تمام شده است.")
+    if sum(1 for o in used if o["uid"] == uid) >= d["per_user"]:
+        raise ValueError("شما قبلاً از این کد استفاده کرده‌اید.")
+    price = int(plan["price"])
+    off = price * d["value"] // 100 if d["kind"] == "percent" else d["value"]
+    off = max(0, min(off, price - min(1000, price)))            # مبلغ نهایی هرگز کمتر از ۱٬۰۰۰ تومان نمی‌شود
+    return code, off
+
+
+def code_check(uid: int, code: str, plan_id: str) -> tuple[str, int, int]:
+    """پیش‌نمایش برای مشتری (چیزی ثبت نمی‌شود): (کد, تخفیف, قیمت نهایی)."""
+    s = shop_cfg()
+    p = plan_get(s, plan_id)
+    if not p or not p["active"]:
+        raise ValueError("این پلن فعال نیست.")
+    c, off = code_apply(s, uid, code, p)
+    return c, off, int(p["price"]) - off
+
+
+def _build_order(c: dict, uid: int, kind: str, plan_id: str = "", amount: int = 0, username: str = "", code: str = "") -> tuple[dict, dict, dict]:
     """اعتبارسنجی و ساخت رکورد سفارش (بدون افزودن به لیست). خروجی: (shop, customer, order)."""
     s = c["shop"]
     cu = s["customers"].get(str(uid))
@@ -156,6 +191,10 @@ def _build_order(c: dict, uid: int, kind: str, plan_id: str = "", amount: int = 
             raise ValueError("قیمت این پلن تنظیم نشده است.")
         amount = p["price"]
         o.update(plan=p["id"], pname=p["name"], tpl=p["template"])
+        if code:
+            cc, off = code_apply(s, uid, code, p)             # داخل همان قفلِ ساخت سفارش؛ دو سفارش هم‌زمان نمی‌توانند ظرفیت را رد کنند
+            o.update(code=cc, disc=off, orig=int(amount))
+            amount = int(amount) - off
     else:
         amount = int(amount)
         if not s["min_topup"] <= amount <= s["max_topup"]:
@@ -175,24 +214,24 @@ def _push(s: dict, o: dict) -> None:
     s["orders"] = s["orders"][-C.SHOP_ORDER_MAX:]
 
 
-def order_new(uid: int, kind: str, plan_id: str = "", amount: int = 0, username: str = "") -> dict:
+def order_new(uid: int, kind: str, plan_id: str = "", amount: int = 0, username: str = "", code: str = "") -> dict:
     """سفارشِ منتظر رسید (کارت‌به‌کارت)."""
     out: dict = {}
 
     def mut(c):
-        s, _, o = _build_order(c, uid, kind, plan_id, amount, username)
+        s, _, o = _build_order(c, uid, kind, plan_id, amount, username, code)
         _push(s, o)
         out.update(o)
     C.update_config(mut)
     return out
 
 
-def order_pay_wallet(uid: int, kind: str, plan_id: str, username: str = "") -> dict:
+def order_pay_wallet(uid: int, kind: str, plan_id: str, username: str = "", code: str = "") -> dict:
     """کسر از کیف پول + ساخت سفارشِ «در حال انجام» در یک عملیات اتمیک (یا هر دو انجام می‌شود یا هیچ‌کدام)."""
     out: dict = {}
 
     def mut(c):
-        s, cu, o = _build_order(c, uid, kind, plan_id, 0, username)
+        s, cu, o = _build_order(c, uid, kind, plan_id, 0, username, code)
         if kind == "topup":
             raise ValueError("شارژ کیف پول با کیف پول ممکن نیست.")
         if cu["balance"] < o["amount"]:
@@ -903,6 +942,8 @@ def order_text(o: dict, with_status: bool = True) -> str:
     if o["kind"] == "renew":
         what += f" ({esc(o.get('username') or '')})"
     rows = [f"🧾 <b>سفارش #{o['id']}</b>", f"👤 {label(cu, o['uid'])}", f"📌 {what}", f"💰 مبلغ: <b>{money(o['amount'])}</b> تومان"]
+    if o.get("code"):
+        rows.append(f"🏷 کد تخفیف <code>{esc(o['code'])}</code>: {money(o.get('disc', 0))} تومان تخفیف (قیمت اصلی {money(o.get('orig', 0))})")
     if cu:
         rows.append(f"👛 موجودی مشتری: {money(cu['balance'])}")
     rows.append(f"🕒 {sales.jdatetime(o.get('rts') or o['ts'])}")
@@ -990,12 +1031,113 @@ async def maintain(bot: Bot, startup: bool = False) -> None:
         await _notify_admins(bot, f"⏰ {len(remind)} رسید بیش از ۳ ساعت است منتظر بررسی شماست.\n/admin ← رسیدهای در انتظار")
 
 
+# ═════════════════════════════ یادآوری انقضا و حجم ═════════════════════════════
+async def remind(bot: Bot) -> None:
+    """به مشتری‌ها قبل از انقضا / نزدیک اتمام حجم / بعد از انقضا پیام می‌دهد (هر مورد برای هر دوره‌ی اعتبار فقط یک‌بار).
+    وضعیت ارسال داخل خودِ سرویس مشتری (rem) نگه داشته می‌شود و با تمدید (تغییر تاریخ انقضا) صفر می‌شود."""
+    cfg = C.load_config_ro()
+    rm = cfg["shop"]["remind"]
+    if not rm["enabled"]:
+        return
+    refs: list[tuple[str, dict, int, dict]] = []             # (uid, مشتری, اندیس سرویس, سرویس)
+    for uid, cu in cfg["shop"]["customers"].items():
+        if cu["banned"]:
+            continue
+        for i, sv in enumerate(cu["services"]):
+            if sv["u"] == cu.get("test_user") and cu.get("test_del") != 2:        # تست رایگان تمدیدنشده: یادآوری نمی‌خواهد
+                continue
+            refs.append((uid, cu, i, sv))
+    if not refs:
+        return
+
+    def pid_of(sv):
+        return sv["pid"] if sv["pid"] and C.get_panel(cfg, sv["pid"]) else cfg["active_panel"]
+    info: dict[tuple[str, str], dict] = {}
+    by_pid: dict[str, set] = defaultdict(set)
+    for _, _, _, sv in refs:
+        by_pid[pid_of(sv)].add(sv["u"])
+    for pid, names in by_pid.items():
+        api = C.get_api(pid)
+        if not api.is_configured():
+            continue
+        try:
+            if len(names) <= 40:
+                for n in names:
+                    try:
+                        u = await asyncio.wait_for(api.request("GET", api.upath(n)), 20)
+                        if isinstance(u, dict):
+                            info[(pid, n)] = u
+                    except C.RebeccaError:
+                        pass
+            else:
+                for u in await asyncio.wait_for(api.iter_users(), 180):
+                    if u.get("username") in names:
+                        info[(pid, u["username"])] = u
+        except Exception as e:  # noqa: BLE001
+            log.warning("remind fetch %s: %s", pid, e)
+    now = time.time()
+    updates: list[tuple[str, str, str, dict]] = []
+    for uid, cu, i, sv in refs:
+        u = info.get((pid_of(sv), sv["u"]))
+        if not u:
+            continue
+        expire = int(u.get("expire") or 0)
+        st = u.get("status", "")
+        used, lim = u.get("used_traffic") or 0, u.get("data_limit") or 0
+        r = dict(sv.get("rem") or {})
+        if r.get("exp") != expire:
+            r = {"exp": expire}
+        texts = []
+        if expire and st == "active":
+            left = (expire - now) / 86400
+            due = [d for d in rm["days"] if left <= d and f"d{d}" not in r]
+            if due and left > 0:
+                for d in rm["days"]:
+                    if d >= min(due):
+                        r[f"d{d}"] = 1
+                when = "کمتر از یک روز" if left < 1 else f"{int(left) + (1 if left % 1 > .5 else 0) or 1} روز"
+                texts.append(f"⏰ <b>اعتبار سرویس {esc(sv['u'])}</b> {('تا ' + when + ' دیگر') if left >= 1 else when + ' دیگر'} تمام می‌شود.")
+        if (st == "expired" or (expire and expire < now - 60)) and "x" not in r:
+            r["x"] = 1
+            texts.append(f"⛔ <b>سرویس {esc(sv['u'])}</b> منقضی شد.")
+        if lim:
+            pct = used * 100 / lim
+            if (pct >= 100 or st == "limited") and "l" not in r:
+                r["l"] = r["u"] = 1
+                texts.append(f"📵 <b>حجم سرویس {esc(sv['u'])}</b> تمام شد.")
+            elif pct >= rm["usage"] and "u" not in r:
+                r["u"] = 1
+                texts.append(f"📊 <b>حجم سرویس {esc(sv['u'])}</b> رو به اتمام است ({pct:.0f}٪ مصرف شده؛ {C.fmt_gb(max(0, lim - used))} باقی مانده).")
+        if texts:
+            await _tell(bot, int(uid), "\n\n".join(texts) + "\n\nبرای تمدید دکمه‌ی زیر را بزنید 👇", M([[B("🔄 تمدید سرویس", callback_data=f"rn:{i}")]]))
+            await asyncio.sleep(0.06)
+        if r != (sv.get("rem") or {}):
+            updates.append((uid, sv["u"], sv["pid"], r))
+    if updates:
+        def mut(c):
+            for uid, name, pid, r in updates:
+                cu = c["shop"]["customers"].get(uid)
+                for x in (cu or {}).get("services", []):
+                    if x["u"] == name and x["pid"] == pid:
+                        x["rem"] = r
+        await asyncio.to_thread(C.update_config, mut)
+
+
 async def maintenance_loop(bot: Bot) -> None:
     first = True
+    n = 0
     while True:
         try:
             await maintain(bot, startup=first)
             first = False
+            n += 1
+            if n % 6 == 2:                                  # هر ~۳۰ دقیقه (اولین بار ~۱۰ دقیقه بعد از بالا آمدن)
+                try:
+                    await remind(bot)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    log.exception("shop remind")
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -1155,13 +1297,24 @@ async def show_plan(update: Update, context, pid: str, idx: int | None = None) -
         await show(update, context, "سرویس پیدا نشد.", back_kb())
         return
     head = f"🔄 تمدید <b>{esc(sv['u'])}</b>" if renew else "🛒 خرید"
-    txt = (f"{head}\n\n📦 {esc(p['name'])}\n📐 {esc(_plan_line(tpl))}\n💰 قیمت: <b>{money(p['price'])}</b> تومان\n"
+    price, price_line = p["price"], f"💰 قیمت: <b>{money(p['price'])}</b> تومان\n"
+    dcode = _disc_code(context, pid)
+    if dcode:
+        try:
+            _, off, price = await asyncio.to_thread(code_check, update.effective_user.id, dcode, pid)
+            price_line = f"💰 قیمت: <s>{money(p['price'])}</s> ← <b>{money(price)}</b> تومان\n🏷 کد <code>{esc(dcode)}</code>: {money(off)} تومان تخفیف\n"
+        except ValueError:
+            context.user_data.pop("disc", None)
+            dcode, price = "", p["price"]
+    txt = (f"{head}\n\n📦 {esc(p['name'])}\n📐 {esc(_plan_line(tpl))}\n{price_line}"
            f"👛 موجودی شما: {money(cu.get('balance', 0))} تومان\n\nروش پرداخت را انتخاب کنید:")
     wcb, ccb = (f"rw:{idx}:{pid}", f"rc:{idx}:{pid}") if renew else (f"bw:{pid}", f"bc:{pid}")
     rows = []
-    if cu.get("balance", 0) >= p["price"]:
+    if cu.get("balance", 0) >= price:
         rows.append([B("👛 پرداخت از کیف پول (آنی)", callback_data=wcb)])
     rows.append([B("💳 کارت‌به‌کارت (با رسید)", callback_data=ccb)])
+    if any(d["active"] for d in s["codes"].values()):
+        rows.append([B("🏷 تغییر کد تخفیف" if dcode else "🏷 کد تخفیف دارم", callback_data=f"dc:{pid}:{idx if renew else -1}")])
     await show(update, context, txt, back_kb(rows))
 
 
@@ -1200,9 +1353,15 @@ async def show_service(update: Update, context, idx: int) -> None:
     await show(update, context, txt, back_kb([[B("🖼 QR", callback_data=f"sq:{idx}"), B("🔄 تمدید", callback_data=f"rn:{idx}")], [B("🔙 سرویس‌ها", callback_data="svc")]]))
 
 
+def _disc_code(context, plan_id: str) -> str:
+    d = context.user_data.get("disc")
+    return d[0] if d and d[1] == plan_id else ""
+
+
 async def _launch_card(update: Update, context, kind: str, plan_id: str = "", amount: int = 0, username: str = "") -> None:
     try:
-        o = await asyncio.to_thread(order_new, update.effective_user.id, kind, plan_id, amount, username)
+        o = await asyncio.to_thread(order_new, update.effective_user.id, kind, plan_id, amount, username, _disc_code(context, plan_id))
+        context.user_data.pop("disc", None)
     except ValueError as e:
         await show(update, context, f"❌ {esc(e)}", back_kb())
         return
@@ -1211,7 +1370,8 @@ async def _launch_card(update: Update, context, kind: str, plan_id: str = "", am
 
 async def _launch_wallet(update: Update, context, kind: str, plan_id: str, username: str = "") -> None:
     try:
-        o = await asyncio.to_thread(order_pay_wallet, update.effective_user.id, kind, plan_id, username)
+        o = await asyncio.to_thread(order_pay_wallet, update.effective_user.id, kind, plan_id, username, _disc_code(context, plan_id))
+        context.user_data.pop("disc", None)
     except ValueError as e:
         await show(update, context, f"❌ {esc(e)}", back_kb())
         return
@@ -1264,6 +1424,16 @@ async def on_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if aw and aw[0] == "receipt":
         await _submit_receipt(update, context, aw[1])
+        return
+    if aw and aw[0] == "code":
+        try:
+            c_, _, _ = await asyncio.to_thread(code_check, u.id, text, aw[1])
+        except ValueError as e:
+            await m.reply_html(f"❌ {esc(e)}\nدوباره بفرستید یا از منو برگردید.", reply_markup=back_kb())
+            return
+        context.user_data["disc"] = (c_, aw[1])
+        context.user_data.pop("aw", None)
+        await show_plan(update, context, aw[1], aw[2] if aw[2] >= 0 else None)
         return
     if aw and aw[0] == "amount":
         digits = re.sub(r"\D", "", text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
@@ -1402,6 +1572,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await _launch_wallet(update, context, "renew", p[2], svcs[i]["u"])
         else:
             await _launch_card(update, context, "renew", p[2], 0, svcs[i]["u"])
+    elif cmd == "dc":
+        context.user_data["aw"] = ("code", p[1], int(p[2]))
+        await show(update, context, "🏷 <b>کد تخفیف</b> را بفرستید:", back_kb())
     elif cmd == "tst":
         await give_test(update, context)
     elif cmd == "lnk":
