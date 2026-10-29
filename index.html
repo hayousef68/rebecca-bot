@@ -355,6 +355,10 @@ html{-webkit-tap-highlight-color:transparent}
 @media (prefers-reduced-motion:reduce){
   .skel i{animation:none}.btn.busy::after{animation-duration:1.8s}.toast::after{animation:none;opacity:0}
 }
+/* فروشگاه */
+.card textarea{width:100%;min-height:80px;background:var(--bg);border:1px solid var(--line);border-radius:12px;color:var(--tx);font:inherit;padding:10px 12px;resize:vertical}
+.card textarea:focus{border-color:var(--ac);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 15%,transparent);outline:0}
+.item .body .lg span:first-child{flex:none;color:var(--mu)}
 </style>
 </head>
 <body>
@@ -402,13 +406,13 @@ function h(tag, props = {}, ...kids) {
 // عملیات مالی: برای هر درخواست یک کلید یکتا فرستاده می‌شود. اگر شبکه قطع شد و کاربر دوباره زد، همان کلید دوباره می‌رود
 // و سرور پول را دوباره کم نمی‌کند. بعد از گرفتن هر پاسخ (موفق یا خطا) کلید پاک می‌شود تا خرید بعدی مستقل باشد.
 const _idem = {};
-const _moneyPath = /^\/(rep\/(buy|renew|topup|next-plan)|reps\/[^/?]+\/wallet)(\?|$)/;
+const _moneyPath = /^\/(rep\/(buy|renew|topup|next-plan)|reps\/[^/?]+\/wallet|shop\/customers\/[^/?]+\/wallet)(\?|$)/;
 function _newKey() { try { return crypto.randomUUID().replace(/-/g, ''); } catch { return Date.now().toString(36) + Math.random().toString(36).slice(2, 12); } }
 async function api(path, method = 'GET', body) {
   let r;
   const money = method === 'POST' && _moneyPath.test(path);
   const slot = money ? path.split('?')[0] + '|' + JSON.stringify(body || {}) : '';
-  if (S.panel && !/^\/(state|templates|panels|qr)/.test(path) && path !== '/settings') path += (path.includes('?') ? '&' : '?') + 'panel=' + encodeURIComponent(S.panel);
+  if (S.panel && !/^\/(state|templates|panels|qr|shop)/.test(path) && path !== '/settings') path += (path.includes('?') ? '&' : '?') + 'panel=' + encodeURIComponent(S.panel);
   const headers = { 'Content-Type': 'application/json', 'X-Requested-With': 'rebecca' };
   if (money) headers['Idempotency-Key'] = _idem[slot] || (_idem[slot] = _newKey());
   try {
@@ -474,16 +478,18 @@ const ICONS = {   // آیکون‌های خطی (ثابت و داخلی)
   create: '<path d="M12 5v14M5 12h14"/>',
   users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.8c1.8.7 3 2.4 3 5.2"/>',
   home: '<path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/>',
+  shop: '<path d="M4 9l1.5-5h13L20 9"/><path d="M4 9a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"/><path d="M5 12v8h14v-8M10 20v-5h4v5"/>',
   tpl: '<rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="10" height="6" rx="2"/><path d="M18 14v6M15 17h6"/>',
   set: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/>'
 };
 const svgIcon = k => { const w = document.createElement('span'); w.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k] || ''}</svg>`; return w.firstChild; };
-const TABS = [['create', 'create', 'ساخت'], ['users', 'users', 'کاربران'], ['home', 'home', 'خانه'], ['tpl', 'tpl', 'تمپلت'], ['set', 'set', 'تنظیمات']];
+const TABS = [['create', 'create', 'ساخت'], ['users', 'users', 'کاربران'], ['home', 'home', 'خانه'], ['tpl', 'tpl', 'تمپلت'], ['shop', 'shop', 'فروشگاه'], ['set', 'set', 'تنظیمات']];
 
 function renderNav() {
   const nav = $('#nav'); nav.style.setProperty('--n', TABS.length); nav.replaceChildren(...TABS.map(([k, ic, t]) =>
-    h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k), 'aria-label': t + (k === 'set' && S.pend ? ` (${S.pend} درخواست)` : '') }, svgIcon(ic), t,
-      k === 'set' && S.pend ? h('i', { class: 'nbadge' }, S.pend > 99 ? '99+' : String(S.pend)) : null)));
+    h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k), 'aria-label': t + (k === 'set' && S.pend ? ` (${S.pend} درخواست)` : '') + (k === 'shop' && S.shopPend ? ` (${S.shopPend} مورد)` : '') }, svgIcon(ic), t,
+      k === 'set' && S.pend ? h('i', { class: 'nbadge' }, S.pend > 99 ? '99+' : String(S.pend)) : null,
+      k === 'shop' && S.shopPend ? h('i', { class: 'nbadge' }, S.shopPend > 99 ? '99+' : String(S.shopPend)) : null)));
 }
 /* درخواست‌های افزایش موجودی نماینده: اعلان بالای صفحه + عدد روی «تنظیمات» (هر ۳۰ ثانیه و بعد از هر تأیید/رد) */
 S.pend = 0; S.pendItems = []; S.pendHide = '';
@@ -502,13 +508,14 @@ function renderAlert() {
 }
 async function pollTopups() {
   try { const r = await api('/topups/pending'); S.pend = r.count; S.pendItems = r.items; } catch { return; }
+  try { const sh = await api('/shop/summary'); S.shopPend = sh.pending + sh.failed; } catch {}           // نشان روی تب «فروشگاه»: رسید در انتظار + سفارش ناموفق
   renderNav(); renderAlert();
 }
 async function go(tab) {
   S.tab = tab; renderNav();
   const v = $('#view');
   const sk = setTimeout(() => v.replaceChildren(h('div', { class: 'skel' }, h('i', {}), h('i', {}), h('i', {}))), 160);   // فقط اگر بارگذاری طول کشید
-  try { await ({ create: vCreate, users: vUsers, home: vHome, tpl: vTpl, set: vSet })[tab](); }
+  try { await ({ create: vCreate, users: vUsers, home: vHome, tpl: vTpl, shop: vShop, set: vSet })[tab](); }
   finally { clearTimeout(sk); if (v.querySelector(':scope > .skel')) v.replaceChildren(); }
   v.classList.remove('vin'); void v.offsetWidth; v.classList.add('vin');                    // یک ورود نرم برای کل صفحه، نه برای تک‌تک کارت‌ها
   window.scrollTo(0, 0);
@@ -1504,6 +1511,251 @@ function vTpl() {
 }
 
 /* ───────── تنظیمات ───────── */
+/* ───────── فروشگاه: مدیریت ربات فروش (رسیدها، قیمت پلن‌ها، مشتری‌ها، تنظیمات ربات) ───────── */
+S.shop = { sec: 'rc', st: 'open', kind: '', q: '', off: 0, touched: false, cq: '' }; S.shopPend = 0;
+const SHOP_ST = { new: '⏳ منتظر رسید', pending: '🕓 در انتظار تأیید', processing: '⚙️ در حال انجام', done: '✅ انجام شد', rejected: '❌ رد شد', cancelled: '🚫 لغو شد', failed: '⚠️ نیاز به بررسی', refunded: '↩️ برگشت داده شد', credited: '💰 به کیف پول اضافه شد' };
+const SHOP_KIND = { buy: 'خرید کانفیگ', renew: 'تمدید سرویس', topup: 'شارژ کیف پول' };
+const SHOP_BAD = { rejected: 1, failed: 1, cancelled: 1 }, SHOP_OK = { done: 1, credited: 1, refunded: 1 };
+const fdt = ts => ts ? new Date(ts * 1000).toLocaleString('fa-IR') : '—';
+const who = o => (o.name || 'بدون‌نام') + (o.username ? ' @' + o.username : '') + ' (' + o.uid + ')';
+const lgRow = (k, v) => h('div', { class: 'lg' }, h('span', {}, k), h('span', { style: 'text-align:end;overflow-wrap:anywhere', dir: 'auto' }, v));
+
+async function vShop() {
+  const D = S.shop;
+  let d; try { d = await api('/shop'); } catch (e) { return mount(h('p', { class: 'err' }, e.message)); }
+  S.shopPend = d.counts.pending + d.counts.failed; renderNav();
+  if (!d.has_token && !D.touched) D.sec = 'bot';
+  const fa = n => (+n || 0).toLocaleString('fa-IR');
+  const tile = (label, val, c) => h('div', { style: c ? '--c:var(' + c + ')' : '' }, h('span', {}, label), h('strong', {}, val));
+  const toggle = h('button', { class: 'btn sm' + (d.enabled ? '' : ' pri'), type: 'button' }, d.enabled ? '🔴 بستن فروشگاه' : '🟢 باز کردن فروشگاه');
+  toggle.onclick = () => run(toggle, async () => { await api('/shop/settings', 'POST', { enabled: !d.enabled }); toast(d.enabled ? 'فروشگاه بسته شد' : '✅ فروشگاه باز شد'); await vShop(); });
+  const head = h('div', { class: 'card' },
+    h('h2', {}, '🛒 فروشگاه ربات'),
+    h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px' },
+      h('span', { class: 'pill ' + (d.enabled ? 'ok' : 'bad') }, d.enabled ? 'باز' : 'بسته'),
+      h('span', { class: 'pill ' + (d.has_token ? 'ok' : 'bad') }, d.has_token ? 'ربات فروش متصل' : 'توکن ربات فروش ثبت نشده'), toggle),
+    h('div', { class: 'stat', style: 'margin-bottom:0' },
+      tile('رسید در انتظار', fa(d.counts.pending), '--warn'), tile('سفارش ناموفق', fa(d.counts.failed), '--bad'), tile('مشتری', fa(d.customers)),
+      h('div', { class: 'wide' }, h('span', {}, 'فروش ۲۴ ساعت اخیر'), h('strong', { style: 'font-size:var(--fs-lg);white-space:nowrap' }, fa(d.sales_24h) + ' تومان')),
+      h('div', { class: 'wide' }, h('span', {}, 'موجودی کیف پول مشتری‌ها'), h('strong', { style: 'font-size:var(--fs-lg);white-space:nowrap' }, fa(d.wallet_total) + ' تومان'))));
+  const SECS = [['rc', '🧾 رسیدها' + (S.shopPend ? ' •' : '')], ['pl', '📦 قیمت‌ها'], ['cu', '👥 مشتری‌ها'], ['bot', '🤖 ربات']];
+  const body = h('div');
+  const seg = h('div', { class: 'seg' }, SECS.map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === D.sec ? 'on' : '', onclick: () => { D.sec = k; D.touched = true; draw(); } }, t)));
+  const SEC = { rc: shopReceipts, pl: shopPlans, cu: shopCustomers, bot: shopBot };
+  const draw = async () => {
+    seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === D.sec));
+    body.replaceChildren();
+    try { await SEC[D.sec](d, body, () => vShop()); } catch (e) { body.replaceChildren(h('p', { class: 'err' }, e.message)); }
+  };
+  mount(head, seg, body);
+  await draw();
+}
+
+/* ── رسیدها و سفارش‌ها ── */
+async function shopReceipts(d, body, redraw) {
+  const D = S.shop;
+  const ST = [['open', 'نیازمند اقدام'], ['pending', '🕓 رسید'], ['failed', '⚠️ ناموفق'], ['done', '✅ انجام‌شده'], ['rejected', '❌ ردشده'], ['all', 'همه']];
+  const KD = [['', 'همه'], ['buy', 'خرید'], ['renew', 'تمدید'], ['topup', 'شارژ']];
+  const list = h('div'), more = h('div');
+  const mkChips = (arr, key) => { const row = h('div', { class: 'chips' }); arr.forEach(([k, t]) => { const c = h('button', { type: 'button', class: 'chip' + (D[key] === k ? ' on' : '') }, t); c.onclick = () => { D[key] = k; row.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c)); load(false); }; row.append(c); }); return row; };
+  const q = h('input', { type: 'search', placeholder: 'کد سفارش، نام، @یوزرنیم یا شناسه عددی', value: D.q, autocomplete: 'off' });
+  q.oninput = debounce(() => { D.q = q.value.trim(); load(false); }, 350);
+  let busy = false;
+  const load = async append => {
+    if (busy) return; busy = true;
+    try {
+      if (!append) { D.off = 0; list.replaceChildren(); }
+      const r = await api(`/shop/orders?status=${D.st}&kind=${D.kind}&q=${encodeURIComponent(D.q)}&offset=${D.off}&limit=15`);
+      if (!append && !r.items.length) list.append(empty('search', 'موردی نیست', D.st === 'open' ? 'رسید یا سفارش ناموفقِ بازی ندارید ✅' : 'با این فیلتر نتیجه‌ای پیدا نشد.'));
+      r.items.forEach(o => list.append(shopOrder(o, r.total <= 3 && D.st === 'open', redraw)));
+      D.off += r.items.length;
+      const left = r.total - D.off, mb = left > 0 ? h('button', { class: 'btn', type: 'button' }, `نمایش بیشتر (${left.toLocaleString('fa-IR')} مورد دیگر)`) : null;
+      if (mb) mb.onclick = () => { mb.disabled = true; busy = false; load(true); };
+      more.replaceChildren(...(mb ? [mb] : []));
+    } finally { busy = false; }
+  };
+  body.append(mkChips(ST, 'st'), mkChips(KD, 'kind'), q, h('div', { style: 'height:10px' }), list, more);
+  await load(false);
+}
+
+function shopOrder(o, openIt, redraw) {
+  const hot = o.status === 'pending' || o.status === 'failed';
+  const it = h('details', { class: 'item', open: hot && openIt });
+  const badge = h('span', { class: 'badge', style: SHOP_BAD[o.status] ? 'color:var(--bad)' : SHOP_OK[o.status] ? 'color:var(--ok)' : '' }, SHOP_ST[o.status] || o.status);
+  const done = (r) => {
+    if (r.status === 'done') toast('✅ انجام شد' + (r.result ? ' — ' + r.result : ''));
+    else if (r.status === 'failed') toast('⚠️ انجام سفارش ناموفق بود: ' + (r.err || 'نیاز به بررسی'), true);
+    else toast('✅ ثبت شد');
+  };
+  const rows = [lgRow('👤 مشتری', who(o)), lgRow('📌 نوع', (SHOP_KIND[o.kind] || o.kind) + (o.pname ? ' — ' + o.pname : '') + (o.service ? ' (' + o.service + ')' : '')),
+    lgRow('💰 مبلغ', toman(o.amount)), lgRow('💳 پرداخت', o.method === 'wallet' ? 'کیف پول' : 'کارت‌به‌کارت'), lgRow('🕒 ثبت', fdt(o.rts || o.ts))];
+  if (o.balance != null) rows.push(lgRow('👛 موجودی مشتری', toman(o.balance)));
+  if (o.text) rows.push(lgRow('📝 توضیح مشتری', o.text));
+  if (o.err) rows.push(lgRow('⚠️ علت', o.err + (o.unsure ? ' (نتیجه مبهم؛ اول وضعیت کاربر را در پنل ببینید)' : '')));
+  if (o.reason) rows.push(lgRow('دلیل رد', o.reason));
+  if (o.result) rows.push(lgRow('نتیجه', o.result));
+  const pic = h('div'); const btns = h('div', { class: 'btns' }); let rejBox = null;
+  if (o.receipt) {
+    const rb = h('button', { class: 'btn sm', type: 'button' }, '🖼 دیدن رسید');
+    rb.onclick = () => {
+      if (pic.firstChild) return pic.replaceChildren();
+      const img = h('img', { alt: 'رسید ' + o.id, loading: 'lazy', src: '/api/shop/orders/' + o.id + '/receipt', style: 'max-width:100%;max-height:70vh;border-radius:12px;margin-top:10px;border:1px solid var(--line)' });
+      img.onerror = () => pic.replaceChildren(h('p', { class: 'err' }, 'عکس رسید از تلگرام دریافت نشد (ربات فروش متصل است؟).'));
+      pic.replaceChildren(img);
+    };
+    btns.append(rb);
+  }
+  if (o.status === 'pending') {
+    const ok = h('button', { class: 'btn sm pri', type: 'button' }, '✅ تأیید');
+    ok.onclick = () => { if (confirm(`رسید #${o.id} به مبلغ ${toman(o.amount)} تأیید و سفارش انجام شود؟`)) run(ok, async () => { done(await api(`/shop/orders/${o.id}/approve`, 'POST')); await redraw(); }); };
+    const no = h('button', { class: 'btn sm bad', type: 'button' }, '❌ رد');
+    const box = h('div', { hidden: true, style: 'margin-top:10px' });
+    const sel = h('select', {}, h('option', { value: 'a' }, 'رسید نامعتبر یا ناخوانا است'), h('option', { value: 'b' }, 'مبلغ رسید با مبلغ سفارش یکی نیست'), h('option', { value: 'c' }, 'پرداخت در حساب ما دیده نشد'), h('option', { value: '' }, 'دلیل دلخواه…'));
+    const custom = h('input', { placeholder: 'دلیل رد (به مشتری نمایش داده می‌شود)', maxlength: 200, hidden: true });
+    sel.onchange = () => { custom.hidden = sel.value !== ''; if (!custom.hidden) custom.focus(); };
+    const go2 = h('button', { class: 'btn sm bad', type: 'button', style: 'margin-top:8px' }, 'ثبت رد و اطلاع به مشتری');
+    go2.onclick = () => run(go2, async () => {
+      if (sel.value === '' && !custom.value.trim()) throw new Error('دلیل رد را بنویسید.');
+      await api(`/shop/orders/${o.id}/reject`, 'POST', { reason_key: sel.value || 'a', reason: sel.value === '' ? custom.value.trim() : '' });
+      toast('رد شد و به مشتری اطلاع داده شد'); await redraw();
+    });
+    box.append(field('دلیل رد', sel), custom, go2);
+    no.onclick = () => { box.hidden = !box.hidden; };
+    btns.append(ok, no); rejBox = box;
+  }
+  if (o.status === 'failed') {
+    const rt = h('button', { class: 'btn sm pri', type: 'button' }, '🔁 تلاش مجدد');
+    rt.onclick = () => { if (confirm(o.unsure ? 'نتیجه‌ی قبلی مبهم بود؛ اول در پنل ربکا بررسی کنید که اکانت ساخته نشده باشد. تلاش مجدد؟' : 'انجام سفارش دوباره تلاش شود؟')) run(rt, async () => { done(await api(`/shop/orders/${o.id}/retry`, 'POST')); await redraw(); }); };
+    const cr = h('button', { class: 'btn sm', type: 'button' }, '💰 اعتبار به کیف پول');
+    cr.onclick = () => { if (confirm(`${toman(o.amount)} به کیف پول مشتری اضافه شود و این سفارش بسته شود؟`)) run(cr, async () => { await api(`/shop/orders/${o.id}/credit`, 'POST'); toast('✅ به کیف پول مشتری اضافه شد'); await redraw(); }); };
+    btns.append(rt, cr);
+  }
+  it.append(h('summary', {}, h('span', { class: 'nm' }, `#${o.id} · ${SHOP_KIND[o.kind] || o.kind}`, h('small', { style: 'display:block;color:var(--mu);font-weight:400' }, (o.name || 'بدون‌نام') + ' · ' + fdt(o.rts || o.ts))), h('span', { class: 'sub' }, toman(o.amount))),
+    h('div', { class: 'body' }, h('div', { style: 'margin:10px 0 4px' }, badge), ...rows, btns, rejBox, pic));
+  return it;
+}
+
+/* ── پلن‌ها و قیمت‌ها ── */
+async function shopPlans(d, body, redraw) {
+  const tplOk = new Set(d.templates.map(t => t.name));
+  const tpl = h('select', {}, d.templates.map(t => h('option', { value: t.name }, `${t.name} — ${t.gb || '∞'}GB / ${t.days || '∞'} روز`)));
+  const nm = h('input', { placeholder: 'نام نمایشی برای مشتری (خالی = نام تمپلت)', maxlength: 60 });
+  const price = moneyIn('', 'قیمت (تومان)');
+  const add = h('button', { class: 'btn pri', type: 'button' }, '➕ افزودن پلن');
+  add.onclick = () => run(add, async () => {
+    if (!tpl.value) throw new Error('ابتدا از تب «تمپلت» یک تمپلت بسازید.');
+    if (!(mv(price) > 0)) throw new Error('قیمت را به تومان وارد کنید.');
+    await api('/shop/plans', 'POST', { template: tpl.value, name: nm.value, price: mv(price) }); toast('✅ پلن اضافه شد'); await redraw();
+  });
+  body.append(h('div', { class: 'card' }, h('h2', {}, 'پلن جدید'), field('تمپلتِ پلن (حجم و مدت از همان می‌آید)', tpl), field('نام', nm), field('قیمت', price), h('div', { class: 'btns' }, add)));
+  const card = h('div', { class: 'card' }, h('h2', {}, `پلن‌های فروش (${d.plans.length.toLocaleString('fa-IR')})`));
+  if (!d.plans.length) card.append(empty('search', 'هنوز پلنی ثبت نشده', 'بالا یک تمپلت و قیمت انتخاب کنید تا در ربات فروش نمایش داده شود.'));
+  d.plans.forEach(p => {
+    const nI = h('input', { value: p.name, maxlength: 60 }), pI = moneyIn(p.price, 'قیمت');
+    const act = h('input', { type: 'checkbox', checked: p.active });
+    const warn = !tplOk.has(p.template) ? '⚠️ تمپلت این پلن حذف شده؛ مشتری نمی‌تواند بخرد.' : p.price <= 0 ? '⚠️ قیمت صفر است؛ مشتری نمی‌تواند بخرد.' : '';
+    const sv = h('button', { class: 'btn sm pri', type: 'button' }, 'ذخیره');
+    sv.onclick = () => run(sv, async () => { await api('/shop/plans/' + p.id, 'POST', { name: nI.value, price: mv(pI), active: act.checked }); toast('✅ ذخیره شد'); await redraw(); });
+    const dl = h('button', { class: 'btn sm bad', type: 'button' }, '🗑 حذف');
+    dl.onclick = () => { if (confirm(`پلن «${p.name}» حذف شود؟ (سفارش‌های قبلی دست‌نخورده می‌ماند)`)) run(dl, async () => { await api('/shop/plans/' + p.id + '/delete', 'POST'); toast('حذف شد'); await redraw(); }); };
+    card.append(h('details', { class: 'item' + (p.active ? '' : ' s-disabled') }, h('summary', {}, h('span', { class: 'nm' }, (p.active ? '🟢 ' : '⚪ ') + p.name), h('span', { class: 'sub' }, toman(p.price))),
+      h('div', { class: 'body' }, h('p', { class: 'hint' }, 'تمپلت: ' + p.template), warn ? h('p', { class: 'err' }, warn) : null, field('نام', nI), field('قیمت (تومان)', pI),
+        h('label', { class: 'chk' }, act, 'فعال (در ربات نمایش داده شود)'), h('div', { class: 'btns' }, sv, dl))));
+  });
+  card.append(h('p', { class: 'hint' }, 'این قیمت‌ها فقط برای ربات فروش مشتری است؛ قیمتِ تمپلت‌ها (برای نماینده‌ها) جداست.'));
+  body.append(card);
+}
+
+/* ── مشتری‌ها و کیف پول ── */
+async function shopCustomers(d, body) {
+  const D = S.shop;
+  const list = h('div'), more = h('div'); let off = 0, busy = false;
+  const q = h('input', { type: 'search', placeholder: 'نام، @یوزرنیم یا شناسه عددی', value: D.cq, autocomplete: 'off' });
+  const load = async append => {
+    if (busy) return; busy = true;
+    try {
+      if (!append) { off = 0; list.replaceChildren(); }
+      const r = await api(`/shop/customers?q=${encodeURIComponent(D.cq)}&offset=${off}&limit=20`);
+      if (!append && !r.items.length) list.append(empty('users', 'مشتری‌ای پیدا نشد', 'مشتری‌ها بعد از /start در ربات فروش اینجا نمایش داده می‌شوند.'));
+      r.items.forEach(c => list.append(shopCust(c, d)));
+      off += r.items.length; const left = r.total - off;
+      const mb = left > 0 ? h('button', { class: 'btn', type: 'button' }, `نمایش بیشتر (${left.toLocaleString('fa-IR')} نفر دیگر)`) : null;
+      if (mb) mb.onclick = () => { busy = false; load(true); };
+      more.replaceChildren(...(mb ? [mb] : []));
+    } finally { busy = false; }
+  };
+  q.oninput = debounce(() => { D.cq = q.value.trim(); load(false); }, 350);
+  body.append(q, h('div', { style: 'height:10px' }), list, more);
+  await load(false);
+}
+
+function shopCust(c, d) {
+  const it = h('details', { class: 'item' + (c.banned ? ' s-disabled' : '') });
+  const inner = h('div', { class: 'body' }); let loaded = false;
+  const render = async () => {
+    const r = await api('/shop/customers/' + c.uid);
+    const amt = moneyIn('', 'مبلغ (تومان)'), note = h('input', { placeholder: 'توضیح (اختیاری)', maxlength: 80 });
+    const adj = sign => async () => {
+      const n = mv(amt); if (!(n > 0)) throw new Error('مبلغ را وارد کنید.');
+      if (!confirm(`${toman(n)} ${sign > 0 ? 'به کیف پول این مشتری اضافه' : 'از کیف پول این مشتری کم'} شود؟`)) return;
+      const res = await withCode(code => api(`/shop/customers/${c.uid}/wallet`, 'POST', { amount: n, sign, note: note.value, code }));
+      toast('✅ انجام شد — موجودی: ' + toman(res.balance)); loaded = false; await fill();
+    };
+    const b1 = h('button', { class: 'btn sm pri', type: 'button' }, '➕ شارژ'), b2 = h('button', { class: 'btn sm', type: 'button' }, '➖ کسر');
+    b1.onclick = () => run(b1, adj(1)); b2.onclick = () => run(b2, adj(-1));
+    const ban = h('button', { class: 'btn sm ' + (r.banned ? '' : 'bad'), type: 'button' }, r.banned ? '✅ رفع مسدودی' : '🚫 مسدود کردن');
+    ban.onclick = () => run(ban, async () => { await api(`/shop/customers/${c.uid}/ban`, 'POST', { banned: !r.banned }); toast(r.banned ? 'آزاد شد' : 'مسدود شد'); c.banned = !r.banned; it.classList.toggle('s-disabled', c.banned); loaded = false; await fill(); });
+    inner.replaceChildren(
+      h('div', { class: 'tiles' }, h('div', {}, h('span', {}, 'موجودی'), h('b', {}, toman(r.balance))), h('div', {}, h('span', {}, 'سفارش'), h('b', {}, String(r.orders))), h('div', {}, h('span', {}, 'سرویس'), h('b', {}, String(r.services)))),
+      lgRow('عضویت', fdt(r.joined)), r.service_list.length ? lgRow('سرویس‌ها', r.service_list.join('، ')) : null,
+      field('مبلغ', amt), field('توضیح', note), h('div', { class: 'btns' }, b1, b2, ban),
+      r.recent.length ? h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 4px' }, 'آخرین سفارش‌ها') : null,
+      ...r.recent.map(o => lgRow(`#${o.id} ${SHOP_KIND[o.kind] || o.kind}`, `${toman(o.amount)} · ${SHOP_ST[o.status] || o.status}`)),
+      r.log.length ? h('h2', { style: 'font-size:var(--fs-sm);margin:14px 0 4px' }, 'گردش کیف پول') : null,
+      ...r.log.map(e => h('div', { class: 'lg' }, h('span', {}, e.type, h('small', {}, (e.note || '') + ' · ' + fdt(e.ts))), h('span', { style: 'text-align:end' }, h('b', { class: e.amount > 0 ? 'pos' : 'neg', dir: 'ltr' }, (e.amount > 0 ? '+' : '') + e.amount.toLocaleString('en-US')), h('small', {}, 'موجودی: ' + (+e.balance || 0).toLocaleString('en-US'))))));
+    loaded = true;
+  };
+  const fill = async () => { try { await render(); } catch (e) { inner.replaceChildren(h('p', { class: 'err' }, e.message)); } };
+  it.append(h('summary', {}, h('span', { class: 'nm' }, (c.banned ? '⛔ ' : '') + (c.name || 'بدون‌نام') + (c.username ? ' @' + c.username : '')), h('span', { class: 'sub' }, toman(c.balance))), inner);
+  it.addEventListener('toggle', () => { if (it.open && !loaded) fill(); });
+  return it;
+}
+
+/* ── تنظیمات ربات فروش ── */
+async function shopBot(d, body, redraw) {
+  const i = (v, p = '', extra = {}) => h('input', { value: v ?? '', placeholder: p, autocomplete: 'off', ...extra });
+  const tok = i('', d.has_token ? 'ثبت شده ' + d.token_hint + ' — برای تغییر، توکن جدید را بگذارید' : '123456:ABC… (از @BotFather)', { dir: 'ltr' });
+  const save1 = h('button', { class: 'btn pri', type: 'button' }, 'اتصال / تغییر توکن');
+  save1.onclick = () => run(save1, async () => {
+    if (!tok.value.trim()) throw new Error('توکن ربات فروش را وارد کنید.');
+    const r = await withCode(code => api('/shop/settings', 'POST', { token: tok.value.trim(), code }));
+    toast(`✅ ربات${r.username ? ' @' + r.username : ''} ثبت شد${r.bot_restarted ? ' و ربات ریستارت شد' : ' (ربات را ریستارت کنید: rebecca-bot restart)'}`); await redraw();
+  });
+  const off = d.has_token ? h('button', { class: 'btn bad', type: 'button' }, 'قطع ربات فروش') : null;
+  if (off) off.onclick = () => { if (confirm('ربات فروش قطع شود؟ مشتری‌ها دیگر پاسخی نمی‌گیرند (داده‌ها می‌ماند).')) run(off, async () => { await withCode(code => api('/shop/settings', 'POST', { clear_token: true, code })); toast('قطع شد'); await redraw(); }); };
+  body.append(h('div', { class: 'card' }, h('h2', {}, '🤖 توکن ربات فروش'), field('توکن', tok),
+    h('p', { class: 'hint' }, 'یک ربات جدا از ربات مدیریت (از @BotFather). بعد از ذخیره، ربات یک‌بار ریستارت می‌شود. بعدش داخل ربات فروش /start بزنید تا رسیدها را در تلگرام هم بگیرید.'),
+    h('div', { class: 'btns' }, save1, off)));
+  const num = i(d.card.number, '6037…', { dir: 'ltr', inputmode: 'numeric', maxlength: 24 }), holder = i(d.card.holder, 'نام صاحب کارت', { maxlength: 60 }), bank = i(d.card.bank, 'نام بانک', { maxlength: 60 });
+  const panel = h('select', {}, d.panels.map(p => h('option', { value: p.id, selected: p.id === d.panel }, p.name)));
+  const wel = h('textarea', { rows: 4, maxlength: 1000, placeholder: 'متن خوش‌آمد در /start (خالی = پیش‌فرض)' }); wel.value = d.welcome;
+  const sup = h('textarea', { rows: 3, maxlength: 1000, placeholder: 'متن پشتیبانی (آیدی/راه تماس)' }); sup.value = d.support;
+  const mn = moneyIn(d.min_topup, 'حداقل شارژ'), mx = moneyIn(d.max_topup, 'حداکثر شارژ'), hrs = i(d.receipt_hours, '24', { type: 'number', min: 1, max: 720, dir: 'ltr' });
+  const save2 = h('button', { class: 'btn pri', type: 'button' }, 'ذخیره تنظیمات فروشگاه');
+  save2.onclick = () => run(save2, async () => {
+    const n = Math.round(+hrs.value); if (!(n >= 1 && n <= 720)) throw new Error('مهلت رسید بین ۱ تا ۷۲۰ ساعت باشد.');
+    if (mv(mn) < 1000 || mv(mx) < mv(mn)) throw new Error('حداقل/حداکثر شارژ نامعتبر است (حداقل ۱٬۰۰۰ تومان و حداکثر ≥ حداقل).');
+    await withCode(code => api('/shop/settings', 'POST', { card_number: num.value, card_holder: holder.value, card_bank: bank.value, panel: panel.value, welcome: wel.value, support: sup.value,
+      min_topup: mv(mn), max_topup: mv(mx), receipt_hours: n, code }));
+    toast('✅ ذخیره شد؛ تغییرات فوراً در ربات اعمال می‌شود'); await redraw();
+  });
+  body.append(h('div', { class: 'card' }, h('h2', {}, '💳 کارت و پرداخت'), field('شماره کارت (۱۶ رقم)', num), field('نام صاحب کارت', holder), field('بانک', bank),
+      d.card.number ? null : h('p', { class: 'err' }, 'کارت تنظیم نشده؛ تا آن را نگذارید مشتری نمی‌تواند با کارت‌به‌کارت خرید کند.')),
+    h('div', { class: 'card' }, h('h2', {}, '⚙️ امکانات ربات'), field('پنلی که اکانت مشتری‌ها روی آن ساخته می‌شود', panel),
+      field('حداقل شارژ کیف پول (تومان)', mn), field('حداکثر شارژ کیف پول (تومان)', mx), field('مهلت ارسال رسید (ساعت؛ بعد از آن سفارش لغو می‌شود)', hrs),
+      field('متن خوش‌آمد', wel), field('متن پشتیبانی', sup), h('div', { class: 'btns' }, save2)));
+}
+
 async function vSet() {
   const _pre = p => { p.catch(() => {}); return p; };                                   // درخواست‌های مستقل هم‌زمان شروع می‌شوند، نه پشت‌سرهم
   const pSales = _pre(api('/sales/settings')), pSsl = _pre(api('/ssl')), pReps = _pre(api('/reps'));
