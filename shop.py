@@ -1127,16 +1127,18 @@ def _active_plans() -> list[tuple[dict, dict]]:
     return [(p, tpls[p["template"]]) for p in s["plans"] if p["active"] and p["price"] > 0 and p["template"] in tpls]
 
 
+# عرض دکمه‌های تلگرام هم‌اندازه‌ی حباب پیام است؛ یک خط نامرئی پهن، حباب (و دکمه‌ها) را عریض‌تر می‌کند
+WIDE = "\u3164" * 42
+
+
 def _plans_kb(prefix: str, extra: str = "") -> M | None:
-    """هر پلن یک دکمه‌ی تمام‌عرض با حجم، مدت و قیمت."""
-    rows = [[B(f"📦 {p['name']}  ·  {_plan_line(t)}  ·  {money(p['price'])} تومان", callback_data=f"{prefix}:{extra}{p['id']}")] for p, t in _active_plans()]
+    s = shop_cfg()
+    rows = [[B(f"{p['name']} — {money(p['price'])} تومان", callback_data=f"{prefix}:{extra}{p['id']}")] for p in s["plans"] if p["active"] and p["price"] > 0]
     return M(rows + [[B("🔙 منوی اصلی", callback_data="home")]]) if rows else None
 
 
 def _plans_text(title: str) -> str:
-    """همه‌ی پلن‌ها در یک پیام؛ هر پلن داخل کادر (blockquote) جدا."""
-    boxes = [f"<blockquote>📦 <b>{esc(p['name'])}</b>\n📐 {esc(_plan_line(t))}\n💰 <b>{money(p['price'])}</b> تومان</blockquote>" for p, t in _active_plans()]
-    return f"{title}\n\n" + "\n".join(boxes) + "\n\nپلن را از دکمه‌های زیر انتخاب کنید 👇"
+    return f"{title}\n{WIDE}"
 
 
 async def show_plan(update: Update, context, pid: str, idx: int | None = None) -> None:
@@ -1330,7 +1332,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await home(update, context)
     elif cmd == "buy":
         kb = _plans_kb("bp")
-        await show(update, context, _plans_text("🛒 <b>پلن‌های فروش</b>") if kb else "هنوز پلنی برای فروش تعریف نشده است.", kb or back_kb())
+        await show(update, context, _plans_text("🛒 <b>پلن مورد نظر را انتخاب کنید:</b>") if kb else "هنوز پلنی برای فروش تعریف نشده است.", kb or back_kb())
     elif cmd == "bp":
         await show_plan(update, context, p[1])
     elif cmd == "bw":
