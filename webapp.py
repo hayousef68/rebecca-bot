@@ -3406,6 +3406,19 @@ def _mini_user(init: str, token: str) -> dict:
         raise bad
 
 
+_mini_bot: dict[str, str] = {}
+
+
+async def _mini_bot_name(token: str) -> str:
+    """یوزرنیم ربات فروش (برای لینک‌های خرید/تمدید مینی‌اپ)؛ یک‌بار از تلگرام گرفته و نگه داشته می‌شود."""
+    if token not in _mini_bot:
+        try:
+            _mini_bot[token] = (await asyncio.wait_for(Bot(token).get_me(), 8)).username or ""
+        except Exception:  # noqa: BLE001
+            return ""
+    return _mini_bot[token]
+
+
 class MiniReq(BaseModel):
     init: str = Field(default="", max_length=4096)
 
@@ -3441,4 +3454,5 @@ async def mini_me(r: MiniReq):
     orders = [{"id": o["id"], "kind": shop.KIND_FA.get(o["kind"], o["kind"]), "name": o.get("pname", ""), "amount": o["amount"],
                "status": shop.STATUS_FA.get(o["status"], o["status"]), "ts": o["ts"]} for o in reversed(s["orders"]) if o["uid"] == uid][:10]
     return {"enabled": s["enabled"], "balance": (cu or {}).get("balance", 0), "known": bool(cu), "welcome": s["welcome"], "support": s["support"],
-            "plans": plans, "services": services, "orders": orders}
+            "plans": plans, "services": services, "orders": orders,
+            "bot": await _mini_bot_name(s["token"]), "test": bool(cu) and shop.test_available() and not cu.get("test")}

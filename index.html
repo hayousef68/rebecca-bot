@@ -558,11 +558,14 @@ async function pollTopups() {
 const TAB_KEYS = TABS.map(x => x[0]);
 const VIEWS = { create: () => vCreate(), users: () => vUsers(), home: () => vHome(), tpl: () => vTpl(), shop: () => vShop(), set: () => vSet() };
 let _going = false, _next = null;
+const REMEMBER_TAB = false;      // false = مثل قبل: هر بار که پنل باز یا رفرش می‌شود روی «ساخت» می‌آید؛ true = همان تبِ قبلی باز شود
 function saveTab(tab) {
+  if (!REMEMBER_TAB) return;
   try { history.replaceState(null, '', '#' + tab); } catch {}
   try { localStorage.setItem('rb.tab', tab); } catch {}
 }
 function savedTab() {
+  if (!REMEMBER_TAB) return '';
   let t = (location.hash || '').slice(1);
   if (!TAB_KEYS.includes(t)) { try { t = localStorage.getItem('rb.tab') || ''; } catch { t = ''; } }
   return TAB_KEYS.includes(t) ? t : '';

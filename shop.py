@@ -1247,6 +1247,38 @@ def _menu_reply_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([[MENU_BTN]], resize_keyboard=True, is_persistent=True)
 
 
+async def deep(update: Update, context, arg: str) -> bool:
+    """لینک‌های مینی‌اپ (/start=عمل_مقدار): همان صفحه‌ی ربات را باز می‌کند تا خرید، تمدید و پرداخت با همان منطق امن ربات انجام شود."""
+    k, _, v = arg.partition("_")
+    s, u = shop_cfg(), update.effective_user
+    cu = customer_get(u.id) or {}
+    if k == "buy":
+        kb = _plans_kb("bp")
+        await show(update, context, _plans_text("🛒 <b>پلن مورد نظر را انتخاب کنید:</b>") if kb else "هنوز پلنی برای فروش تعریف نشده است.", kb or back_kb())
+    elif k == "bp" and v:
+        await show_plan(update, context, v)
+    elif k == "rn" and v.isdigit():
+        i, svcs = int(v), cu.get("services") or []
+        kb = _plans_kb("rp", f"{i}:") if i < len(svcs) else None
+        await show(update, context, _plans_text(f"🔄 <b>پلن تمدید برای {esc(svcs[i]['u'])}</b>") if kb else "پلنی برای تمدید تعریف نشده است.", kb or back_kb())
+    elif k == "wt":
+        context.user_data["aw"] = ("amount",)
+        await show(update, context, f"➕ <b>شارژ کیف پول</b>\n\nمبلغ را به <b>تومان</b> بفرستید ({money(s['min_topup'])} تا {money(s['max_topup'])}).", back_kb())
+    elif k == "wal":
+        await show(update, context, f"👛 <b>کیف پول</b>\n\nموجودی: <b>{money(cu.get('balance', 0))}</b> تومان",
+                   back_kb([[B("➕ شارژ با رسید", callback_data="wt"), B("🧾 تراکنش‌ها", callback_data="wh")]]))
+    elif k == "tst":
+        await give_test(update, context)
+    elif k == "lnk":
+        context.user_data["aw"] = ("link",)
+        await show(update, context, "🔗 <b>اتصال سرویس قبلی</b>\n\nلینک ساب (اشتراک) سرویس خود را همین‌جا بفرستید تا به حساب شما وصل شود.", back_kb())
+    elif k == "sup":
+        await show(update, context, "☎️ <b>پشتیبانی</b>\n\n" + (esc(s["support"]) if s["support"] else "پشتیبانی هنوز تنظیم نشده است."), back_kb())
+    else:
+        return False
+    return True
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     u = update.effective_user
     await asyncio.to_thread(customer_touch, u.id, u.full_name, u.username or "")
@@ -1257,6 +1289,9 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await force_join_ok(update, context):          # قبل از نمایش منو و دکمه‌ی دائمی
         return
     await update.effective_message.reply_html("⌨️ برای برگشت به منو، هر وقت دکمه‌ی «🏠 منوی اصلی» پایین صفحه را بزنید.", reply_markup=_menu_reply_kb())
+    arg = (context.args[0] if getattr(context, "args", None) else "")[:40]
+    if arg and await deep(update, context, arg):
+        return
     await home(update, context)
 
 

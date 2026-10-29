@@ -20,6 +20,7 @@ button{font:inherit;border:0;border-radius:10px;padding:8px 14px;background:var(
 button.g{background:transparent;color:var(--bt);border:1px solid var(--bt)}
 .err{color:var(--bad);text-align:center;padding:30px 10px}
 b.n{unicode-bidi:isolate}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 </style>
 </head>
 <body>
@@ -40,23 +41,24 @@ function fail(msg, retry) {
 }
 const ICON = { active: '🟢', disabled: '⚫', expired: '🔴', limited: '🟠', on_hold: '⏳' };
 function draw(d) {
-  const toBot = () => tg ? tg.close() : null;
+  const go = a => { if (!d.bot || !tg) return; tg.openTelegramLink(`https://t.me/${d.bot}?start=${a}`); };      // صفحه‌ی همان عمل در ربات باز می‌شود
+  const bt = (t, a, cls) => d.bot && d.enabled ? h('button', { class: cls || '', onclick: () => go(a) }, t) : null;
   const out = [];
   out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('span', { class: 'mu' }, '👛 موجودی کیف پول'), d.enabled ? null : h('span', { class: 'mu' }, '🔴 فروشگاه بسته است')),
     h('div', { class: 'bal' }, fa(d.balance) + ' تومان'),
-    h('div', { class: 'mu' }, 'برای شارژ یا خرید، برگردید به ربات و دکمه‌ی مربوط را بزنید.'), h('div', { style: 'margin-top:8px' }, h('button', { onclick: toBot }, 'بازگشت به ربات'))));
+    h('div', { class: 'btns' }, bt('➕ شارژ کیف پول', 'wt'), (d.test ? bt('🎁 تست رایگان', 'tst', 'g') : null), bt('🔗 اتصال سرویس قبلی', 'lnk', 'g'), d.bot ? h('button', { class: 'g', onclick: () => go('sup') }, '☎️ پشتیبانی') : null)));
   out.push(h('h2', {}, '🛒 پلن‌ها'));
   if (!d.plans.length) out.push(h('div', { class: 'card mu' }, 'فعلاً پلنی فعال نیست.'));
-  d.plans.forEach(p => out.push(h('div', { class: 'card row' }, h('div', {}, h('div', {}, p.name), h('div', { class: 'mu' }, p.info)), h('b', { class: 'n' }, fa(p.price) + ' تومان'))));
+  d.plans.forEach(p => out.push(h('div', { class: 'card row' }, h('div', {}, h('div', {}, p.name), h('div', { class: 'mu' }, p.info)), h('div', { style: 'text-align:left' }, h('b', { class: 'n' }, fa(p.price) + ' تومان'), h('div', {}, bt('خرید', 'bp_' + p.id))))));
   out.push(h('h2', {}, '🔄 سرویس‌های من'));
   if (!d.services.length) out.push(h('div', { class: 'card mu' }, d.known ? 'سرویسی ندارید.' : 'هنوز در ربات /start نزده‌اید.'));
-  d.services.forEach(s => {
+  d.services.forEach((s, i) => {
     if (!s.ok) return out.push(h('div', { class: 'card' }, h('b', { dir: 'ltr' }, s.name), h('div', { class: 'mu' }, '⚠️ اطلاعات الان در دسترس نیست.')));
     const cp = h('button', { class: 'g', onclick: async () => { try { await navigator.clipboard.writeText(s.sub); } catch { const t = h('textarea', {}); t.value = s.sub; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); } cp.textContent = 'کپی شد ✓'; setTimeout(() => cp.textContent = 'کپی لینک اشتراک', 1500); } }, 'کپی لینک اشتراک');
     out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('b', { dir: 'ltr' }, s.name), h('span', {}, (ICON[s.status] || '❔') + ' ' + s.status)),
       h('div', { class: 'bar' }, h('i', { style: 'width:' + Math.min(100, s.pct) + '%' })),
       h('div', { class: 'mu', dir: 'ltr', style: 'text-align:right' }, `${s.used} / ${s.limit}`), h('div', { class: 'mu' }, '⏳ ' + s.expire),
-      s.sub ? h('div', { style: 'margin-top:8px' }, cp) : null));
+      h('div', { class: 'btns', style: 'margin-top:8px' }, s.sub ? cp : null, bt('🔄 تمدید', 'rn_' + i))));
   });
   out.push(h('h2', {}, '🧾 سفارش‌های اخیر'));
   if (!d.orders.length) out.push(h('div', { class: 'card mu' }, 'سفارشی ندارید.'));
