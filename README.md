@@ -450,6 +450,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/in
 | `shop.py` | ربات فروش مشتری (خرید، رسید، کیف پول مشتری، تمدید) |
 | `webapp.py` | API وب‌پنل (FastAPI) |
 | `index.html` / `login.html` | رابط وب‌پنل و صفحه ورود |
+| `miniapp.html` | مینی‌اپ تلگرام مشتری‌های فروشگاه (`/app`) |
 | `common.py` | کانفیگ، API پنل، کیف پول، نماینده‌ها، Audit، برگشت تمدید، تاریخچه |
 | `sales.py` | گزارش فروش، تاریخ شمسی، بکاپ، تاریخچه کاربر |
 | `ops.py` | کارهای پس‌زمینه (یادآوری، پایش، واریز نشده، تطابق) |

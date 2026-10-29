@@ -546,7 +546,7 @@ async function pollTopups() {
       newS.slice(-2).forEach(x => liveNotify(x.status === 'failed' ? `⚠️ سفارش ناموفق #${x.id} نیاز به بررسی دارد`
         : `${x.kind === 'topup' ? '👛 رسید شارژ کیف پول' : '🧾 رسید جدید'} #${x.id}${x.name ? ' از ' + x.name : ''} — ${fa(x.amount)} تومان`));
       const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
-      if (shopChanged && S.tab === 'shop' && !_going && !typing && !document.querySelector('#view details[open] .btns button:disabled')) { LIVE.seen = now; renderNav(); renderAlert(); await vShop(); return; }
+      if (shopChanged && S.tab === 'shop' && !_going && window.scrollY < 40 && !typing && !document.querySelector('#view details[open] .btns button:disabled')) { LIVE.seen = now; renderNav(); renderAlert(); await vShop(true); return; }
       if (newT.length && S.tab === 'set' && S.setOpen === 'reps' && !_going && !typing) { LIVE.seen = now; renderNav(); renderAlert(); await vSet(); return; }
     }
     LIVE.seen = now;
@@ -1597,18 +1597,25 @@ const txRow = e => {
 const who = o => (o.name || 'بدون‌نام') + (o.username ? ' @' + o.username : '') + ' (' + o.uid + ')';
 const lgRow = (k, v) => h('div', { class: 'lg' }, h('span', {}, k), h('span', { style: 'text-align:end;overflow-wrap:anywhere', dir: 'auto' }, v));
 
-async function vShop() {
-  const D = S.shop;
+async function vShop(keep) {
+  const D = S.shop, y0 = keep ? window.scrollY : 0;
+  // درخواست لیست رسیدها هم‌زمان با خلاصه‌ی فروشگاه می‌رود (قبلاً پشت‌سرهم بود و صفحه دو برابر معطل می‌ماند)
+  D.pre = null;
+  if (D.sec === 'rc') { D.pre = api(`/shop/orders?status=${D.st}&kind=${D.kind}&q=${encodeURIComponent(D.q)}&offset=0&limit=15`); D.pre.catch(() => {}); }
+  // آخرین وضعیت دیده‌شده فوراً نشان داده می‌شود تا بعد از رفرش صفحه خالی نماند؛ بخش‌های قابل‌ویرایش فقط با داده‌ی تازه رسم می‌شوند
+  let snap = null; try { snap = JSON.parse(sessionStorage.getItem('rb.shop') || 'null'); } catch {}
+  if (snap && !keep) mount(h('div', { class: 'card' }, h('h2', {}, '🛒 فروشگاه ربات'), h('p', { class: 'hint' }, `رسید در انتظار: ${(+snap.counts.pending || 0).toLocaleString('fa-IR')} · سفارش ناموفق: ${(+snap.counts.failed || 0).toLocaleString('fa-IR')} · در حال به‌روزرسانی…`)));
   let d; try { d = await api('/shop'); } catch (e) {
-    const rt = h('button', { class: 'btn pri', type: 'button' }, '🔄 تلاش دوباره'); rt.onclick = () => run(rt, () => vShop());
+    const rt = h('button', { class: 'btn pri', type: 'button' }, '🔄 تلاش دوباره'); rt.onclick = () => run(rt, () => vShop(keep));
     return mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message), rt));
   }
+  try { sessionStorage.setItem('rb.shop', JSON.stringify({ counts: d.counts })); } catch {}
   S.shopPend = d.counts.pending + d.counts.failed; renderNav();
   if (!d.has_token && !D.touched) D.sec = 'bot';
   const fa = n => (+n || 0).toLocaleString('fa-IR');
   const tile = (label, val, c) => h('div', { style: c ? '--c:var(' + c + ')' : '' }, h('span', {}, label), h('strong', {}, val));
   const toggle = h('button', { class: 'btn sm' + (d.enabled ? '' : ' pri'), type: 'button' }, d.enabled ? '🔴 بستن فروشگاه' : '🟢 باز کردن فروشگاه');
-  toggle.onclick = () => run(toggle, async () => { await api('/shop/settings', 'POST', { enabled: !d.enabled }); toast(d.enabled ? 'فروشگاه بسته شد' : '✅ فروشگاه باز شد'); await vShop(); });
+  toggle.onclick = () => run(toggle, async () => { await api('/shop/settings', 'POST', { enabled: !d.enabled }); toast(d.enabled ? 'فروشگاه بسته شد' : '✅ فروشگاه باز شد'); await vShop(true); });
   const head = h('div', { class: 'card' },
     h('h2', {}, '🛒 فروشگاه ربات'),
     h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px' },
@@ -1625,10 +1632,11 @@ async function vShop() {
   const draw = async () => {
     seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === D.sec));
     body.replaceChildren();
-    try { await SEC[D.sec](d, body, () => vShop()); } catch (e) { body.replaceChildren(h('p', { class: 'err' }, e.message)); }
+    try { await SEC[D.sec](d, body, () => vShop(true)); } catch (e) { body.replaceChildren(h('p', { class: 'err' }, e.message)); }
   };
   mount(head, seg, body);
   await draw();
+  if (keep) window.scrollTo(0, y0);
 }
 
 /* ── رسیدها و سفارش‌ها ── */
@@ -1645,7 +1653,8 @@ async function shopReceipts(d, body, redraw) {
     if (busy) return; busy = true;
     try {
       if (!append) { D.off = 0; list.replaceChildren(); }
-      const r = await api(`/shop/orders?status=${D.st}&kind=${D.kind}&q=${encodeURIComponent(D.q)}&offset=${D.off}&limit=15`);
+      let r; if (!append && D.pre) { const p = D.pre; D.pre = null; try { r = await p; } catch { r = null; } }
+      if (!r) r = await api(`/shop/orders?status=${D.st}&kind=${D.kind}&q=${encodeURIComponent(D.q)}&offset=${D.off}&limit=15`);
       if (!append && !r.items.length) list.append(empty('search', 'موردی نیست', D.st === 'open' ? 'رسید یا سفارش ناموفقِ بازی ندارید ✅' : 'با این فیلتر نتیجه‌ای پیدا نشد.'));
       r.items.forEach(o => list.append(shopOrder(o, r.total <= 3 && D.st === 'open', redraw)));
       D.off += r.items.length;

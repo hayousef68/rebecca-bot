@@ -3374,7 +3374,12 @@ _mini_hits: dict[int, float] = {}
 
 @app.get("/app", response_class=HTMLResponse)
 async def mini_page():
-    return HTMLResponse(_read_cached(MINI, _mini_cache), headers={
+    try:
+        page = _read_cached(MINI, _mini_cache)
+    except OSError:
+        log.error("miniapp.html کنار webapp.py پیدا نشد: %s", MINI)
+        return HTMLResponse(f"miniapp.html در مسیر {MINI} پیدا نشد؛ فایل را کنار webapp.py بگذارید.", status_code=404)
+    return HTMLResponse(page, headers={
         "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         "Content-Security-Policy": "frame-ancestors https://web.telegram.org https://*.telegram.org"})
 
