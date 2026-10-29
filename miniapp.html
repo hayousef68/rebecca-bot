@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>فروشگاه</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:var(--tg-theme-bg-color,#fff);--tx:var(--tg-theme-text-color,#111);--mu:var(--tg-theme-hint-color,#777);--cd:var(--tg-theme-secondary-bg-color,#f2f2f5);--bt:var(--tg-theme-button-color,#2f80ed);--bx:var(--tg-theme-button-text-color,#fff);--ok:#2ea44f;--bad:#d64545}
+*{box-sizing:border-box}
+body{margin:0;padding:12px 12px calc(20px + env(safe-area-inset-bottom,0px));background:var(--bg);color:var(--tx);font:15px/1.7 system-ui,Tahoma,sans-serif}
+h2{font-size:15px;margin:18px 4px 8px;color:var(--mu);font-weight:600}
+.card{background:var(--cd);border-radius:14px;padding:12px 14px;margin-bottom:8px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.bal{font-size:24px;font-weight:700}
+.mu{color:var(--mu);font-size:13px}
+.bar{height:6px;border-radius:3px;background:#8884;overflow:hidden;margin:6px 0}
+.bar i{display:block;height:100%;background:var(--bt)}
+button{font:inherit;border:0;border-radius:10px;padding:8px 14px;background:var(--bt);color:var(--bx)}
+button.g{background:transparent;color:var(--bt);border:1px solid var(--bt)}
+.err{color:var(--bad);text-align:center;padding:30px 10px}
+b.n{unicode-bidi:isolate}
+</style>
+</head>
+<body>
+<div id="app"><p class="mu" style="text-align:center;padding:40px 0">در حال بارگذاری…</p></div>
+<script>
+const tg = window.Telegram && Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const $a = document.getElementById('app');
+const fa = n => (+n || 0).toLocaleString('fa-IR');
+function h(tag, props, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) { if (v == null || v === false) continue; if (k === 'class') n.className = v; else if (k.startsWith('on')) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v); }
+  for (const c of kids.flat()) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(c));
+  return n;
+}
+function fail(msg, retry) {
+  $a.replaceChildren(h('div', { class: 'err' }, msg, retry ? h('div', { style: 'margin-top:12px' }, h('button', { onclick: load }, '🔄 تلاش دوباره')) : null));
+}
+const ICON = { active: '🟢', disabled: '⚫', expired: '🔴', limited: '🟠', on_hold: '⏳' };
+function draw(d) {
+  const toBot = () => tg ? tg.close() : null;
+  const out = [];
+  out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('span', { class: 'mu' }, '👛 موجودی کیف پول'), d.enabled ? null : h('span', { class: 'mu' }, '🔴 فروشگاه بسته است')),
+    h('div', { class: 'bal' }, fa(d.balance) + ' تومان'),
+    h('div', { class: 'mu' }, 'برای شارژ یا خرید، برگردید به ربات و دکمه‌ی مربوط را بزنید.'), h('div', { style: 'margin-top:8px' }, h('button', { onclick: toBot }, 'بازگشت به ربات'))));
+  out.push(h('h2', {}, '🛒 پلن‌ها'));
+  if (!d.plans.length) out.push(h('div', { class: 'card mu' }, 'فعلاً پلنی فعال نیست.'));
+  d.plans.forEach(p => out.push(h('div', { class: 'card row' }, h('div', {}, h('div', {}, p.name), h('div', { class: 'mu' }, p.info)), h('b', { class: 'n' }, fa(p.price) + ' تومان'))));
+  out.push(h('h2', {}, '🔄 سرویس‌های من'));
+  if (!d.services.length) out.push(h('div', { class: 'card mu' }, d.known ? 'سرویسی ندارید.' : 'هنوز در ربات /start نزده‌اید.'));
+  d.services.forEach(s => {
+    if (!s.ok) return out.push(h('div', { class: 'card' }, h('b', { dir: 'ltr' }, s.name), h('div', { class: 'mu' }, '⚠️ اطلاعات الان در دسترس نیست.')));
+    const cp = h('button', { class: 'g', onclick: async () => { try { await navigator.clipboard.writeText(s.sub); } catch { const t = h('textarea', {}); t.value = s.sub; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); } cp.textContent = 'کپی شد ✓'; setTimeout(() => cp.textContent = 'کپی لینک اشتراک', 1500); } }, 'کپی لینک اشتراک');
+    out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('b', { dir: 'ltr' }, s.name), h('span', {}, (ICON[s.status] || '❔') + ' ' + s.status)),
+      h('div', { class: 'bar' }, h('i', { style: 'width:' + Math.min(100, s.pct) + '%' })),
+      h('div', { class: 'mu', dir: 'ltr', style: 'text-align:right' }, `${s.used} / ${s.limit}`), h('div', { class: 'mu' }, '⏳ ' + s.expire),
+      s.sub ? h('div', { style: 'margin-top:8px' }, cp) : null));
+  });
+  out.push(h('h2', {}, '🧾 سفارش‌های اخیر'));
+  if (!d.orders.length) out.push(h('div', { class: 'card mu' }, 'سفارشی ندارید.'));
+  d.orders.forEach(o => out.push(h('div', { class: 'card row' }, h('div', {}, h('div', {}, `#${o.id} · ${o.kind}${o.name ? ' — ' + o.name : ''}`), h('div', { class: 'mu' }, o.status + ' · ' + new Date(o.ts * 1000).toLocaleDateString('fa-IR'))), h('b', { class: 'n' }, fa(o.amount)))));
+  if (d.support) out.push(h('div', { class: 'card mu', style: 'white-space:pre-wrap' }, '☎️ ' + d.support));
+  $a.replaceChildren(...out);
+}
+async function load() {
+  if (!tg || !tg.initData) return fail('این صفحه فقط داخل تلگرام و از دکمه‌ی ربات فروشگاه باز می‌شود.');
+  let r, d = {};
+  try { r = await fetch('/api/mini/me', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ init: tg.initData }) }); d = await r.json().catch(() => ({})); }
+  catch { return fail('ارتباط با سرور برقرار نشد.', true); }
+  if (!r.ok) return fail(typeof d.detail === 'string' ? d.detail : 'خطا ' + r.status, r.status >= 429);
+  draw(d);
+}
+load();
+</script>
+</body>
+</html>

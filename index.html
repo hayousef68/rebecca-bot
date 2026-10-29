@@ -546,21 +546,47 @@ async function pollTopups() {
       newS.slice(-2).forEach(x => liveNotify(x.status === 'failed' ? `⚠️ سفارش ناموفق #${x.id} نیاز به بررسی دارد`
         : `${x.kind === 'topup' ? '👛 رسید شارژ کیف پول' : '🧾 رسید جدید'} #${x.id}${x.name ? ' از ' + x.name : ''} — ${fa(x.amount)} تومان`));
       const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
-      if (shopChanged && S.tab === 'shop' && !typing && !document.querySelector('#view details[open] .btns button:disabled')) { LIVE.seen = now; renderNav(); renderAlert(); await vShop(); return; }
-      if (newT.length && S.tab === 'set' && S.setOpen === 'reps' && !typing) { LIVE.seen = now; renderNav(); renderAlert(); await vSet(); return; }
+      if (shopChanged && S.tab === 'shop' && !_going && !typing && !document.querySelector('#view details[open] .btns button:disabled')) { LIVE.seen = now; renderNav(); renderAlert(); await vShop(); return; }
+      if (newT.length && S.tab === 'set' && S.setOpen === 'reps' && !_going && !typing) { LIVE.seen = now; renderNav(); renderAlert(); await vSet(); return; }
     }
     LIVE.seen = now;
     renderNav(); renderAlert();
   } finally { LIVE.busy = false; }
 }
-async function go(tab) {
+// ناوبری: هر بار فقط یک رندر اجرا می‌شود و آخرین تبِ انتخاب‌شده در آخر نمایش داده می‌شود؛
+// پاسخ دیررسِ تب قبلی دیگر روی تب جدید نمی‌نشیند (علت صفحه‌ی خالی/پرش بعد از رفرش). تب فعلی در آدرس (#shop) هم ذخیره می‌شود تا رفرش همان‌جا بماند.
+const TAB_KEYS = TABS.map(x => x[0]);
+const VIEWS = { create: () => vCreate(), users: () => vUsers(), home: () => vHome(), tpl: () => vTpl(), shop: () => vShop(), set: () => vSet() };
+let _going = false, _next = null;
+function saveTab(tab) {
+  try { history.replaceState(null, '', '#' + tab); } catch {}
+  try { localStorage.setItem('rb.tab', tab); } catch {}
+}
+function savedTab() {
+  let t = (location.hash || '').slice(1);
+  if (!TAB_KEYS.includes(t)) { try { t = localStorage.getItem('rb.tab') || ''; } catch { t = ''; } }
+  return TAB_KEYS.includes(t) ? t : '';
+}
+async function renderTab(tab) {
   S.tab = tab; renderNav();
   const v = $('#view');
   const sk = setTimeout(() => v.replaceChildren(h('div', { class: 'skel' }, h('i', {}), h('i', {}), h('i', {}))), 160);   // فقط اگر بارگذاری طول کشید
-  try { await ({ create: vCreate, users: vUsers, home: vHome, tpl: vTpl, shop: vShop, set: vSet })[tab](); }
+  try { await VIEWS[tab](); }
+  catch (e) {
+    const rt = h('button', { class: 'btn pri', type: 'button' }, '🔄 تلاش دوباره'); rt.onclick = () => go(tab);
+    mount(h('div', { class: 'card' }, h('p', { class: 'err' }, (e && e.message) || 'خطا در بارگذاری'), rt));
+  }
   finally { clearTimeout(sk); if (v.querySelector(':scope > .skel')) v.replaceChildren(); }
   v.classList.remove('vin'); void v.offsetWidth; v.classList.add('vin');                    // یک ورود نرم برای کل صفحه، نه برای تک‌تک کارت‌ها
   window.scrollTo(0, 0);
+}
+async function go(tab) {
+  if (!VIEWS[tab]) tab = 'home';
+  S.tab = tab; renderNav(); saveTab(tab);
+  if (_going) { _next = tab; return; }
+  _going = true;
+  try { let t = tab; while (t) { _next = null; await renderTab(t); t = _next; } }
+  finally { _going = false; }
 }
 const hasPanel = () => S.st.panels.some(p => p.ok);
 async function refreshState() {
@@ -2433,12 +2459,16 @@ async function vSet() {
 }
 
 (async () => {
-  let me; try { me = await api('/me'); } catch { return; }
+  const retry = msg => { const rt = h('button', { class: 'btn pri', type: 'button' }, '🔄 تلاش دوباره'); rt.onclick = () => location.reload();
+    mount(h('div', { class: 'card' }, h('p', { class: 'err' }, msg || 'ارتباط با سرور برقرار نشد.'), rt)); };
+  let me; try { me = await api('/me'); } catch (e) { return retry(e.message); }       // قبلاً اینجا بی‌صدا خارج می‌شد و صفحه خالی می‌ماند
   if (me.role === 'rep') return repApp(me);
+  const first = savedTab();
+  if (first) S.tab = first;
   renderNav(); pollTopups(); setInterval(() => { if (!document.hidden) pollTopups(); }, 8000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pollTopups(); });
-  try { await refreshState(); await go(hasPanel() ? 'create' : 'set'); }
-  catch (e) { mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
+  try { await refreshState(); } catch (e) { if (!first) return retry(e.message); }    // فروشگاه به وضعیت پنل نیازی ندارد؛ خطای state جلوی باز شدنش را نگیرد
+  await go(first || (hasPanel() ? 'create' : 'set'));
 })();
 </script>
 <script>

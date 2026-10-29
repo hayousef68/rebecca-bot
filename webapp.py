@@ -3363,3 +3363,77 @@ def shop_customer_ban(uid: str, r: ShopBanReq):
     update_config(mut)
     _aud("مسدود/آزاد کردن مشتری فروشگاه", uid, "مسدود" if r.banned else "آزاد", "sys")
     return {"ok": True}
+
+
+# ───────────────────────────── مینی‌اپ تلگرام (مشتری‌های فروشگاه) ─────────────────────────────
+# ورود فقط با امضای initData تلگرام (HMAC با توکن ربات فروش) است؛ بدون کوکی/رمز. این بخش فقط‌خواندنی است و پول جابه‌جا نمی‌کند.
+MINI = os.path.join(C.BASE_DIR, "miniapp.html")
+_mini_cache = {"mtime": 0.0, "data": ""}
+_mini_hits: dict[int, float] = {}
+
+
+@app.get("/app", response_class=HTMLResponse)
+async def mini_page():
+    return HTMLResponse(_read_cached(MINI, _mini_cache), headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": "frame-ancestors https://web.telegram.org https://*.telegram.org"})
+
+
+def _mini_user(init: str, token: str) -> dict:
+    import hashlib
+    import hmac
+    from urllib.parse import parse_qsl
+    bad = HTTPException(401, "نشست نامعتبر است؛ مینی‌اپ را از داخل ربات باز کنید.")
+    if not token or not init:
+        raise bad
+    pairs = dict(parse_qsl(init, keep_blank_values=True))
+    got = pairs.pop("hash", "")
+    chk = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+    key = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    if not got or not hmac.compare_digest(hmac.new(key, chk.encode(), hashlib.sha256).hexdigest(), got):
+        raise bad
+    try:
+        if time.time() - int(pairs.get("auth_date") or 0) > 86400:
+            raise bad
+        u = json.loads(pairs.get("user") or "{}")
+        return {"id": int(u["id"])}
+    except (ValueError, KeyError, TypeError):
+        raise bad
+
+
+class MiniReq(BaseModel):
+    init: str = Field(default="", max_length=4096)
+
+
+@app.post("/api/mini/me")
+async def mini_me(r: MiniReq):
+    s = C.load_config_ro()["shop"]
+    uid = _mini_user(r.init, s["token"])["id"]
+    now = time.time()
+    if now - _mini_hits.get(uid, 0) < 1:
+        raise HTTPException(429, "کمی صبر کنید.")
+    if len(_mini_hits) > 5000:
+        _mini_hits.clear()
+    _mini_hits[uid] = now
+    cu = s["customers"].get(str(uid))
+    if cu and cu["banned"]:
+        raise HTTPException(403, "دسترسی شما به فروشگاه محدود شده است.")
+    plans = [{"id": p["id"], "name": p["name"], "price": p["price"], "info": shop._plan_line(t)} for p, t in shop._active_plans()]
+    svcs = (cu or {}).get("services", [])[:10]
+
+    async def one(sv):
+        try:
+            u, api = await asyncio.wait_for(shop._service_info(sv), 12)
+        except Exception:  # noqa: BLE001
+            u, api = None, None
+        if not u:
+            return {"name": sv["u"], "ok": False}
+        st = u.get("status", "unknown")
+        return {"name": sv["u"], "ok": True, "status": st, "used": C.fmt_gb(u.get("used_traffic", 0) or 0), "limit": C.fmt_gb(u.get("data_limit") or 0),
+                "pct": round((u.get("used_traffic", 0) or 0) * 100 / u["data_limit"]) if u.get("data_limit") else 0,
+                "expire": C.fmt_expire(u.get("expire"), st, u.get("on_hold_expire_duration")), "sub": api.full_sub(u.get("subscription_url", "")) or ""}
+    services = await asyncio.gather(*[one(sv) for sv in svcs])
+    orders = [{"id": o["id"], "kind": shop.KIND_FA.get(o["kind"], o["kind"]), "name": o.get("pname", ""), "amount": o["amount"],
+               "status": shop.STATUS_FA.get(o["status"], o["status"]), "ts": o["ts"]} for o in reversed(s["orders"]) if o["uid"] == uid][:10]
+    return {"enabled": s["enabled"], "balance": (cu or {}).get("balance", 0), "known": bool(cu), "welcome": s["welcome"], "support": s["support"],
+            "plans": plans, "services": services, "orders": orders}

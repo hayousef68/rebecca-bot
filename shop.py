@@ -30,13 +30,14 @@ from collections import defaultdict, deque
 from urllib.parse import unquote, urlsplit
 
 from telegram import (Bot, BotCommand, BotCommandScopeChat, InlineKeyboardButton as B, InlineKeyboardMarkup as M, MenuButtonCommands,
-                      ReplyKeyboardMarkup, Update)
+                      MenuButtonWebApp, ReplyKeyboardMarkup, Update, WebAppInfo)
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 import common as C
 import sales
+import tlsutil
 from common import esc
 
 log = logging.getLogger("rebecca.shop")
@@ -1182,8 +1183,25 @@ def is_adm(update: Update) -> bool:
     return bool(u and C.is_admin(u.id))
 
 
+def mini_url() -> str:
+    """آدرس مینی‌اپ تلگرام؛ فقط وقتی SSL وب‌پنل سالم و دامنه مشخص است (تلگرام فقط https می‌پذیرد)."""
+    c = C.load_config_ro()
+    ss = c.get("ssl") or {}
+    if not ss.get("enabled") or ss.get("error"):
+        return ""
+    dom = ss.get("domain") or ""
+    if not dom:
+        p = C.get_panel(c, c["active_panel"]) or (c["panels"][0] if c["panels"] else None)
+        dom = tlsutil._domain_of(p["panel_url"]) if p else ""
+    if not dom:
+        return ""
+    port = int(c.get("web_port") or 8686)
+    return f"https://{dom}" + ("" if port == 443 else f":{port}") + "/app"
+
+
 def main_kb(admin: bool, uid: int | None = None) -> M:
-    rows = [[B("🛒 خرید کانفیگ", callback_data="buy"), B("🔄 سرویس‌های من", callback_data="svc")],
+    mu = mini_url()
+    rows = ([[B("📱 مینی‌اپ فروشگاه", web_app=WebAppInfo(url=mu))]] if mu else []) + [[B("🛒 خرید کانفیگ", callback_data="buy"), B("🔄 سرویس‌های من", callback_data="svc")],
             [B("👛 کیف پول", callback_data="wal"), B("🧾 سفارش‌های من", callback_data="ords")],
             [B("🔗 اتصال سرویس قبلی (با لینک ساب)", callback_data="lnk")],
             [B("☎️ پشتیبانی", callback_data="sup")]]
@@ -1956,7 +1974,8 @@ async def _setup_menu(bot: Bot) -> None:
     """منوی دستورات (/start و /admin بدون تایپ)، دکمه‌ی منو کنار فیلد پیام و توضیحات صفحه‌ی اول ربات."""
     try:
         await bot.set_my_commands([BotCommand("start", "🏠 منوی اصلی")])
-        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        mu = mini_url()
+        await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="🛍 فروشگاه", web_app=WebAppInfo(url=mu)) if mu else MenuButtonCommands())
         s = shop_cfg()
         await bot.set_my_short_description("خرید و تمدید کانفیگ · کیف پول · اتصال سرویس با لینک ساب")
         await bot.set_my_description((s["welcome"] or "به فروشگاه خوش آمدید.") [:400] + "\n\nبرای شروع دکمه‌ی START را بزنید.")
