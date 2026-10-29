@@ -1131,10 +1131,13 @@ async def post_init(app: Application):
     ]
     runner = shop.Runner()          # ربات فروش مشتری (توکن جدا) داخل همین پروسه؛ خطایش ربات مدیریت را خراب نمی‌کند
     app.bot_data["shop"] = runner
-    try:
-        await runner.sync()
-    except Exception:  # noqa: BLE001
-        log.exception("shop start")
+
+    async def _start_shop():        # در پس‌زمینه: کندی/قطعی تلگرام یا توکن خراب ربات فروش نباید بالا آمدن ربات مدیریت را معطل کند
+        try:
+            await runner.sync()
+        except Exception:  # noqa: BLE001
+            log.exception("shop start")
+    app.bot_data["bg"].append(asyncio.create_task(_start_shop()))
 
 
 async def post_shutdown(app: Application):
