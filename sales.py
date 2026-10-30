@@ -1090,7 +1090,7 @@ async def _live_push(bot, targets: list, msgs: dict) -> int:
             try:
                 bio = io.BytesIO(data)
                 bio.name = name
-                await bot.edit_message_media(chat_id=_chat_id(chat), message_id=int(mid), media=InputMediaDocument(bio, caption=cap))
+                await bot.edit_message_media(chat_id=_chat_id(chat), message_id=int(mid), media=InputMediaDocument(bio, caption=cap), read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
                 done = True
             except Exception as e:  # noqa: BLE001
                 m = str(e).lower()
@@ -1106,7 +1106,7 @@ async def _live_push(bot, targets: list, msgs: dict) -> int:
             try:
                 bio = io.BytesIO(data)
                 bio.name = name
-                sent = await bot.send_document(_chat_id(chat), bio, caption=cap, disable_notification=True)
+                sent = await bot.send_document(_chat_id(chat), bio, caption=cap, disable_notification=True, read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
                 msgs[key] = sent.message_id
                 done = True
             except Exception as e:  # noqa: BLE001
@@ -1239,7 +1239,7 @@ async def send_backup(bot, admin_ids, caption: str) -> int:
         try:
             bio = io.BytesIO(data)
             bio.name = name
-            await bot.send_document(uid, bio, caption=caption)
+            await bot.send_document(uid, bio, caption=caption, read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
             sent += 1
         except Exception as e:  # noqa: BLE001
             log.warning("send backup to %s: %s", uid, e)
