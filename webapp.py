@@ -2753,6 +2753,7 @@ def shop_overview():
             "cards": s["cards"], "welcome": s["welcome"], "support": s["support"], "min_topup": s["min_topup"], "max_topup": s["max_topup"],
             "receipt_hours": s["receipt_hours"], "has_token": bool(tok), "token_hint": ("…" + tok[-6:]) if tok else "",
             "test": s["test"], "force": s["force"], "remind": s["remind"], "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
+            "auto": {k: s["auto"][k] for k in ("enabled", "secret", "unit", "minutes", "max_amount", "daily_max", "must")} | {"log": s["auto"]["log"][-10:]},
             "counts": cnt, "customers": len(s["customers"]), "wallet_total": sum(c["balance"] for c in s["customers"].values()),
             "sales_total": sales_total, "sales_24h": sales_24h}
 
@@ -2774,6 +2775,13 @@ class ShopSettingsReq(BaseModel):
     test_hours: int | None = Field(default=None, ge=1, le=720)
     token: str | None = Field(default=None, max_length=120)
     clear_token: bool = False
+    auto_enabled: bool | None = None
+    auto_regen: bool = False
+    auto_unit: str | None = Field(default=None, pattern="^(rial|toman)$")
+    auto_minutes: int | None = Field(default=None, ge=5, le=240)
+    auto_max: int | None = Field(default=None, ge=1000, le=10 ** 9)
+    auto_daily: int | None = Field(default=None, ge=1000, le=10 ** 10)
+    auto_must: str | None = Field(default=None, max_length=120)
     code: str = Field(default="", max_length=64)
 
 
@@ -2820,8 +2828,9 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
         raise HTTPException(400, "حداقل شارژ نباید از حداکثر بیشتر باشد.")
     token_changed = bool(tok_new and tok_new != cur["shop"]["token"]) or (r.clear_token and bool(cur["shop"]["token"]))
     card_changed = cards_new is not None and digits != ",".join(c["number"] for c in cur["shop"]["cards"])
-    if token_changed or card_changed:        # توکن و شماره کارت = مسیر تغییر مقصد پرداخت/تصاحب ربات؛ با 2FA روشن کد تازه می‌خواهد
-        await _gate_code(request, r.code, None, "تغییر توکن ربات فروش یا شماره کارت", always=True)
+    auto_changed = r.auto_regen or any(x is not None for x in (r.auto_enabled, r.auto_unit, r.auto_minutes, r.auto_max, r.auto_daily, r.auto_must))
+    if token_changed or card_changed or auto_changed:        # توکن، کارت و تأیید خودکار = مسیر تأیید پرداخت/تصاحب ربات؛ با 2FA روشن کد تازه می‌خواهد
+        await _gate_code(request, r.code, None, "تغییر توکن ربات فروش، شماره کارت یا تنظیمات تأیید خودکار", always=True)
     username = ""
     if tok_new and token_changed:
         if not _SHOP_TOKEN_RE.match(tok_new):
@@ -2870,11 +2879,27 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
             sh["token"] = tok_new
         elif r.clear_token:
             sh["token"] = ""
+        au = sh["auto"]
+        if r.auto_regen or (r.auto_enabled and len(au["secret"]) < 24):
+            au["secret"] = secrets.token_urlsafe(32)                 # ۴۳ نویسه؛ با ساخت رمز جدید، رمز قبلی فوراً بی‌اعتبار می‌شود
+        if r.auto_unit is not None:
+            au["unit"] = r.auto_unit
+        if r.auto_minutes is not None:
+            au["minutes"] = r.auto_minutes
+        if r.auto_max is not None:
+            au["max_amount"] = r.auto_max
+        if r.auto_daily is not None:
+            au["daily_max"] = r.auto_daily
+        if r.auto_must is not None:
+            au["must"] = r.auto_must.strip()[:120]
+        if r.auto_enabled is not None:
+            au["enabled"] = r.auto_enabled
     update_config(mut)
     what = [k for k, v in (("وضعیت باز/بسته", r.enabled is not None), ("پنل فروش", r.panel is not None), ("کارت‌ها", cards_new is not None),
                            ("متن‌ها", r.welcome is not None or r.support is not None), ("محدوده شارژ/مهلت رسید", r.min_topup is not None or r.max_topup is not None or r.receipt_hours is not None),
                            ("عضویت اجباری", r.force_enabled is not None or force_list is not None), ("تست رایگان", r.test_enabled is not None or r.test_template is not None or r.test_prefix is not None or r.test_hours is not None),
-                           ("توکن ربات فروش", token_changed)) if v]
+                           ("توکن ربات فروش", token_changed),
+                           ("تأیید خودکار", any(x is not None for x in (r.auto_enabled, r.auto_unit, r.auto_minutes, r.auto_max, r.auto_daily, r.auto_must)) or r.auto_regen)) if v]
     _aud("تنظیمات فروشگاه", "", "، ".join(what) + (f" — " + "، ".join("****" + c["number"][-4:] for c in cards_new) if cards_new else ""), "sys")
     restarted = False
     if token_changed:                         # Runner فقط داخل پروسه‌ی ربات است؛ برای اتصال/قطع ربات فروش ربات مدیریت ریستارت می‌شود
@@ -2887,6 +2912,82 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
         except Exception:  # noqa: BLE001
             log.warning("ریستارت خودکار ربات برای ربات فروش ممکن نشد؛ دستی: rebecca-bot restart")
     return {"ok": True, "bot_restarted": restarted, "username": username}
+
+
+
+# ── وب‌هوک تأیید خودکار (پیامک واریز بانک) ──
+# عمومی است (بدون نشست)؛ فقط با رمز مخفی کار می‌کند. هر خطا یک پاسخ یکسان می‌دهد تا چیزی لو نرود.
+_hook_fails: dict[str, list[float]] = {}
+_hook_ok: list[float] = []
+_HOOK_MAX_BODY = 4096
+
+
+def _hook_text(ctype: str, raw: bytes) -> tuple[str, str]:
+    """(متن پیامک، رمز داخل بدنه). JSON، فرم یا متن ساده."""
+    body = raw.decode("utf-8", "replace")
+    if "json" in ctype:
+        try:
+            d = json.loads(body)
+        except ValueError:
+            d = None
+        if isinstance(d, dict):
+            txt = next((str(d[k]) for k in ("text", "message", "body", "sms", "content", "msg") if isinstance(d.get(k), (str, int))), "")
+            return txt, str(d.get("secret") or d.get("key") or "")
+        return "", ""
+    if "x-www-form-urlencoded" in ctype:
+        from urllib.parse import parse_qs
+        q = parse_qs(body, keep_blank_values=True)
+        pick = lambda *ks: next((q[k][0] for k in ks if q.get(k)), "")  # noqa: E731
+        return pick("text", "message", "body", "sms", "content", "msg"), pick("secret", "key")
+    return body, ""
+
+
+@app.post("/api/shop/sms-hook")
+async def shop_sms_hook(request: Request):
+    deny = JSONResponse({"ok": False}, status_code=403)
+    ip, now = _client_ip(request), time.time()
+    recent = [t for t in _hook_fails.get(ip, []) if now - t < 600]
+    if len(recent) >= 10:
+        return JSONResponse({"ok": False}, status_code=429)
+    au = C.load_config_ro()["shop"]["auto"]
+    try:
+        if not au["enabled"] or len(au["secret"]) < 24:
+            raise PermissionError
+        if int(request.headers.get("content-length") or 0) > _HOOK_MAX_BODY:
+            raise PermissionError
+        raw = b""
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > _HOOK_MAX_BODY:
+                raise PermissionError
+        text, body_key = _hook_text(request.headers.get("content-type", "").lower(), raw)
+        bearer = request.headers.get("authorization", "")
+        got = request.headers.get("x-hook-secret") or (bearer[7:] if bearer.lower().startswith("bearer ") else "") or body_key or request.query_params.get("key", "")
+        if not got or not secrets.compare_digest(got.encode(), au["secret"].encode()):
+            raise PermissionError
+    except PermissionError:
+        _hook_fails[ip] = recent + [now]
+        return deny
+    _hook_fails.pop(ip, None)
+    _hook_ok[:] = [t for t in _hook_ok if now - t < 60] + [now]
+    if len(_hook_ok) > 60:                                           # حداکثر ۶۰ پیامک در دقیقه
+        return JSONResponse({"ok": False}, status_code=429)
+    if not text.strip():
+        return {"ok": True, "res": "empty"}
+    token = C.load_config_ro()["shop"]["token"]
+    if not token:
+        return {"ok": False, "res": "no_shop_token"}
+    async def _run():
+        async with Bot(token) as b:
+            return await shop.auto_confirm(b, text)
+    task = asyncio.create_task(_run())                               # اگر فرستنده‌ی پیامک وسط کار قطع کرد، انجام سفارش نیمه‌کاره نمی‌ماند
+    _bg.add(task)
+    task.add_done_callback(_bg.discard)
+    try:
+        r = await asyncio.wait_for(asyncio.shield(task), 8)
+    except asyncio.TimeoutError:
+        return {"ok": True, "res": "processing"}
+    return {"ok": True, "res": r["res"]}
 
 
 # ── پلن‌ها و قیمت‌ها ──

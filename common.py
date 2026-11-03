@@ -109,7 +109,10 @@ DEFAULT_CFG = {
              "min_topup": 10000, "max_topup": 50000000, "receipt_hours": 24, "customers": {}, "orders": [], "tx": [],
              "test": {"enabled": False, "template": "", "prefix": "test", "hours": 24}, "cards": [],
              "force": {"enabled": False, "channels": []},
-             "codes": {}, "remind": {"enabled": True, "days": [3, 1], "usage": 85}, "bcast": {}},      # عضویت اجباری: channels=[{chat: "@name"|"-100…", link: "https://t.me/…"}]      # تست رایگان: هر مشتری فقط یک‌بار
+             "codes": {}, "remind": {"enabled": True, "days": [3, 1], "usage": 85}, "bcast": {},
+             # تأیید خودکار کارت‌به‌کارت با پیامک واریز بانک (وب‌هوک). seen = هش پیامک‌های مصرف‌شده، log = آخرین رویدادها
+             "auto": {"enabled": False, "secret": "", "unit": "rial", "minutes": 30, "max_amount": 5000000, "daily_max": 50000000,
+                      "must": "", "seen": [], "log": []}},      # عضویت اجباری: channels=[{chat: "@name"|"-100…", link: "https://t.me/…"}]      # تست رایگان: هر مشتری فقط یک‌بار
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
 
@@ -199,6 +202,8 @@ SHOP_TX_MAX = 5000
 SHOP_LOG_MAX = 50
 SHOP_BAL_MAX = 10 ** 10
 SHOP_CARDS_MAX = 5
+SHOP_AUTO_SEEN_MAX = 3000
+SHOP_AUTO_LOG_MAX = 50
 
 
 def parse_force_channels(text: str) -> list[dict]:
@@ -226,6 +231,25 @@ def parse_force_channels(text: str) -> list[dict]:
     if len(out) > 5:
         raise ValueError("حداکثر ۵ کانال.")
     return out
+
+
+def _normalize_shop_auto(raw) -> dict:
+    """تنظیمات تأیید خودکار کارت‌به‌کارت (پیامک بانک). مقدارهای نامعتبر به پیش‌فرض امن برمی‌گردند."""
+    a = copy.deepcopy(DEFAULT_CFG["shop"]["auto"])
+    raw = raw if isinstance(raw, dict) else {}
+    a["secret"] = re.sub(r"[^A-Za-z0-9_-]", "", str(raw.get("secret") or ""))[:128]
+    a["enabled"] = bool(raw.get("enabled")) and len(a["secret"]) >= 24          # بدون رمز وب‌هوک هیچ‌وقت روشن نمی‌شود
+    a["unit"] = "toman" if raw.get("unit") == "toman" else "rial"
+    for k, lo, hi in (("minutes", 5, 240), ("max_amount", 1000, 10 ** 9), ("daily_max", 1000, 10 ** 10)):
+        try:
+            a[k] = min(hi, max(lo, int(raw.get(k, a[k]))))
+        except (TypeError, ValueError):
+            pass
+    a["must"] = str(raw.get("must") or "").strip()[:120]
+    a["seen"] = [x for x in (raw.get("seen") if isinstance(raw.get("seen"), list) else [])
+                 if isinstance(x, dict) and re.fullmatch(r"[0-9a-f]{16,64}", str(x.get("h") or ""))][-SHOP_AUTO_SEEN_MAX:]
+    a["log"] = [x for x in (raw.get("log") if isinstance(raw.get("log"), list) else []) if isinstance(x, dict)][-SHOP_AUTO_LOG_MAX:]
+    return a
 
 
 def _normalize_shop(raw) -> dict:
@@ -293,6 +317,7 @@ def _normalize_shop(raw) -> dict:
     s["remind"] = {"enabled": bool(rm.get("enabled", True)), "days": days or [3, 1], "usage": usage}
     bc = raw.get("bcast") if isinstance(raw.get("bcast"), dict) else {}
     s["bcast"] = {k: bc[k] for k in ("id", "ts", "audience", "text", "total", "sent", "failed", "running", "done_ts") if k in bc}
+    s["auto"] = _normalize_shop_auto(raw.get("auto"))
     plans, seen = [], set()
     for p in raw.get("plans") if isinstance(raw.get("plans"), list) else []:
         try:

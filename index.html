@@ -1983,6 +1983,39 @@ async function shopBot(d, body, redraw) {
     field('تمپلت تست (فقط حجم از تمپلت می‌آید)', tTpl), field('مدت تست (ساعت، ۱ تا ۷۲۰؛ مثلاً ۲ یا ۲۴)', tHrs), field('پیشوند نام کاربری تست (بعدش کد تصادفی می‌آید، مثل test_k7x2q9)', tPre),
     h('p', { class: 'hint' }, 'هر مشتری فقط یک‌بار می‌تواند تست بگیرد. نام تست کد تصادفی است و از شماره‌گذاری اشتراک‌های پنل جداست. بعد از پایان مدت، تست خودکار از پنل (دیتابیس) پاک می‌شود (تا حدود ۷ دقیقه تأخیر)؛ اگر مشتری قبل از پایان تمدیدش کند حذف نمی‌شود. اگر ساخت تستی مبهم ماند، در تب «مشتری‌ها» دکمه‌ی «بازنشانی تست» اجازه‌ی یک تست دیگر می‌دهد.'),
     h('div', { class: 'btns' }, tSave)));
+  // تأیید خودکار کارت‌به‌کارت با پیامک واریز بانک (وب‌هوک)
+  const au = d.auto || {};
+  const hookUrl = location.origin + '/api/shop/sms-hook';
+  const aOn = h('input', { type: 'checkbox', id: 'auon' }); aOn.checked = !!au.enabled;
+  const aMust = i(au.must, 'چند عبارت با کاما: ۴ رقم آخر کارت اول, ۴ رقم آخر کارت دوم', { maxlength: 120 });
+  const aUnit = h('select', {}, h('option', { value: 'rial', selected: au.unit !== 'toman' }, 'ریال (اکثر بانک‌ها)'), h('option', { value: 'toman', selected: au.unit === 'toman' }, 'تومان'));
+  const aMin = i(au.minutes, '30', { type: 'number', min: 5, max: 240, dir: 'ltr' });
+  const aMax = moneyIn(au.max_amount, 'سقف هر سفارش'), aDay = moneyIn(au.daily_max, 'سقف روزانه');
+  const aSave = h('button', { class: 'btn pri', type: 'button' }, 'ذخیره تأیید خودکار');
+  aSave.onclick = () => run(aSave, async () => {
+    if (!(+aMin.value >= 5 && +aMin.value <= 240)) throw new Error('مهلت واریز بین ۵ تا ۲۴۰ دقیقه باشد.');
+    if (aOn.checked && !d.cards.length) throw new Error('اول کارت را تنظیم و ذخیره کنید.');
+    if (aOn.checked && !aMust.value.trim()) { if (!confirm('فیلتر «متن لازم در پیامک» خالی است؛ هر پیامکی که شبیه واریز باشد (حتی جعلی از یک شماره‌ی دیگر) قبول می‌شود. مطمئنید؟')) throw new Error('لغو شد.'); }
+    await withCode(code => api('/shop/settings', 'POST', { auto_enabled: aOn.checked, auto_unit: aUnit.value, auto_minutes: Math.round(+aMin.value), auto_max: mv(aMax), auto_daily: mv(aDay), auto_must: aMust.value.trim(), code }));
+    toast('✅ ذخیره شد'); await redraw();
+  });
+  const aRegen = h('button', { class: 'btn', type: 'button' }, au.secret ? '🔄 ساخت رمز جدید (رمز قبلی باطل می‌شود)' : '🔑 ساخت رمز وب‌هوک');
+  aRegen.onclick = () => run(aRegen, async () => {
+    if (au.secret && !confirm('رمز قبلی فوراً باطل می‌شود و باید در اپ فوروارد پیامک عوض شود. ادامه؟')) throw new Error('لغو شد.');
+    await withCode(code => api('/shop/settings', 'POST', { auto_regen: true, code }));
+    toast('✅ رمز جدید ساخته شد'); await redraw();
+  });
+  const aLog = (au.log || []).slice(-8).reverse().map(x => h('div', { class: 'hint', dir: 'ltr' }, `${new Date(x.ts * 1000).toLocaleString('fa-IR')} — ${x.res}${x.oid ? ' #' + x.oid : ''}${x.amount ? ' · ' + (+x.amount).toLocaleString('en-US') : ''}`));
+  body.append(h('div', { class: 'card' }, h('h2', {}, '⚡ تأیید خودکار کارت‌به‌کارت'),
+    h('label', { class: 'chk', for: 'auon' }, aOn, 'مشتری بتواند «کارت‌به‌کارت (تأیید خودکار)» را انتخاب کند'),
+    h('p', { class: 'hint' }, 'مشتری مبلغ دقیق (قیمت + ۱ تا ۹۹۹ تومان یکتا) را واریز می‌کند، پیامک بانک شما به این وب‌هوک می‌رسد و اگر دقیقاً با یک سفارش باز بخواند، سفارش خودکار انجام می‌شود. هر ابهامی (مبلغ نامطابق، چند سفارش هم‌مبلغ، مهلت تمام‌شده، بالاتر از سقف) خودکار به تأیید دستی ادمین می‌رود. «تأیید دستی با رسید» برای مشتری همیشه هست.'),
+    field('آدرس وب‌هوک (در اپ فوروارد پیامک، روش POST)', h('input', { value: hookUrl, readonly: true, dir: 'ltr', onclick: e => e.target.select() })),
+    au.secret ? field('رمز وب‌هوک (هدر X-Hook-Secret یا Authorization: Bearer … یا پارامتر key)', h('input', { value: au.secret, readonly: true, dir: 'ltr', onclick: e => { e.target.select(); copy(au.secret); } })) : h('p', { class: 'err' }, 'هنوز رمز وب‌هوک ساخته نشده.'),
+    field('متن لازم در پیامک؛ چند مورد با کاما، وجود یکی کافی است (فیلتر ضد پیامک جعلی)', aMust), field('واحد مبلغ در پیامک بانک', aUnit),
+    field('مهلت واریز بعد از ساخت سفارش (دقیقه)', aMin), field('سقف مبلغ هر سفارش خودکار (تومان)', aMax), field('سقف مجموع تأیید خودکار در ۲۴ ساعت (تومان)', aDay),
+    h('p', { class: 'hint' }, '⚠️ هر کسی می‌تواند به گوشی شما پیامک جعلی بفرستد. در اپ فوروارد حتماً فقط پیامک «فرستنده‌ی بانک» را بفرستید و در فیلتر بالا ۴ رقم آخر کارت یا کلمه‌ی خاص بانک را بنویسید. ذخیره‌ی تنظیمات با 2FA (اگر روشن باشد) تأیید می‌شود.'),
+    h('div', { class: 'btns' }, aSave, aRegen),
+    aLog.length ? h('div', {}, h('h3', {}, 'آخرین پیامک‌ها'), ...aLog) : null));
   body.append(h('div', { class: 'card' }, h('h2', {}, '💳 کارت‌ها و پرداخت'), cardsBox, h('div', { class: 'btns' }, addB), h('p', { class: 'hint' }, 'اگر چند کارت بگذارید، مشتری همه‌ی آن‌ها را می‌بیند و به یکی واریز می‌کند. برای ذخیره، پایین همین صفحه «ذخیره تنظیمات فروشگاه» را بزنید.'),
       d.cards.length ? null : h('p', { class: 'err' }, 'کارت تنظیم نشده؛ تا آن را نگذارید مشتری نمی‌تواند با کارت‌به‌کارت خرید کند.')),
     h('div', { class: 'card' }, h('h2', {}, '⚙️ امکانات ربات'), field('پنلی که اکانت مشتری‌ها روی آن ساخته می‌شود', panel),

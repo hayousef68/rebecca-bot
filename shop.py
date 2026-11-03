@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -46,6 +47,8 @@ HTML = ParseMode.HTML
 MAX_OPEN = 3                 # حداکثر سفارش باز (منتظر رسید یا منتظر تأیید) برای هر مشتری
 STUCK_SECONDS = 600          # «در حال انجام» بیشتر از این = نیمه‌کاره مانده
 REMIND_SECONDS = 3 * 3600    # یادآوری رسیدهای بررسی‌نشده به ادمین
+AUTO_GRACE = 900             # تأخیر مجاز پیامک بانک بعد از پایان مهلت سفارش خودکار (ثانیه)
+AUTO_QUARANTINE = 3 * 3600   # مبلغ یکتای هر سفارش خودکار تا این مدت بعد از ساخت برای سفارش دیگری استفاده نمی‌شود
 KIND_FA = {"buy": "خرید کانفیگ", "renew": "تمدید سرویس", "topup": "شارژ کیف پول"}
 STATUS_FA = {"new": "⏳ منتظر رسید", "pending": "🕓 در انتظار تأیید", "processing": "⚙️ در حال انجام", "done": "✅ انجام شد",
              "rejected": "❌ رد شد", "cancelled": "🚫 لغو شد", "failed": "⚠️ نیاز به بررسی ادمین", "refunded": "↩️ مبلغ برگشت داده شد",
@@ -166,7 +169,7 @@ def code_check(uid: int, code: str, plan_id: str) -> tuple[str, int, int]:
     return c, off, int(p["price"]) - off
 
 
-def _build_order(c: dict, uid: int, kind: str, plan_id: str = "", amount: int = 0, username: str = "", code: str = "") -> tuple[dict, dict, dict]:
+def _build_order(c: dict, uid: int, kind: str, plan_id: str = "", amount: int = 0, username: str = "", code: str = "", mode: str = "manual") -> tuple[dict, dict, dict]:
     """اعتبارسنجی و ساخت رکورد سفارش (بدون افزودن به لیست). خروجی: (shop, customer, order)."""
     s = c["shop"]
     cu = s["customers"].get(str(uid))
@@ -206,8 +209,34 @@ def _build_order(c: dict, uid: int, kind: str, plan_id: str = "", amount: int = 
         if any(x["uid"] == uid and x["kind"] == "renew" and x.get("username") == username and x["status"] in ("new", "pending", "processing", "failed") for x in s["orders"]):
             raise ValueError("برای این سرویس یک سفارش تمدید در جریان دارد.")
         o["username"] = username
+    if mode == "auto":
+        _auto_prepare(s, o, int(amount))
+        if kind == "topup":
+            amount = o["pay_amount"]               # کیف پول دقیقاً به اندازه‌ی مبلغ واریزی شارژ می‌شود
     o["amount"] = int(amount)
     return s, cu, o
+
+
+def _auto_prepare(s: dict, o: dict, base: int) -> None:
+    """سفارش را «تأیید خودکار» می‌کند: مبلغ یکتا (۱ تا ۹۹۹ تومان بیشتر) و مهلت واریز. داخل قفل ساخت سفارش اجرا می‌شود."""
+    a = s["auto"]
+    if not a["enabled"]:
+        raise ValueError("تأیید خودکار فعلاً در دسترس نیست؛ «کارت‌به‌کارت با رسید» را انتخاب کنید.")
+    if not s["cards"]:
+        raise ValueError("شماره کارت هنوز توسط ادمین تنظیم نشده است.")
+    if base > a["max_amount"]:
+        raise ValueError(f"مبلغ بیشتر از سقف تأیید خودکار ({money(a['max_amount'])} تومان) است؛ «کارت‌به‌کارت با رسید» را انتخاب کنید.")
+    now = int(time.time())
+    taken = {int(x["pay_amount"]) for x in s["orders"]
+             if x.get("mode") == "auto" and x.get("pay_amount") and (x["status"] in ("new", "pending", "processing") or now - int(x.get("ts") or 0) < AUTO_QUARANTINE)}
+    pool = [d for d in range(1, 1000) if base + d not in taken]
+    if not pool:
+        raise ValueError("ظرفیت تأیید خودکار برای این مبلغ پر است؛ چند دقیقه بعد دوباره امتحان کنید یا «با رسید» پرداخت کنید.")
+    pay = base + secrets.choice(pool)
+    used = sum(int(x.get("pay_amount") or 0) for x in s["orders"] if x.get("auto_ok") and int(x.get("cts") or 0) > now - 86400)
+    if used + pay > a["daily_max"]:
+        raise ValueError("سقف روزانه‌ی تأیید خودکار پر شده است؛ «کارت‌به‌کارت با رسید» را انتخاب کنید.")
+    o.update(mode="auto", base=int(base), pay_amount=int(pay), exp=now + a["minutes"] * 60)
 
 
 def _push(s: dict, o: dict) -> None:
@@ -215,12 +244,12 @@ def _push(s: dict, o: dict) -> None:
     s["orders"] = s["orders"][-C.SHOP_ORDER_MAX:]
 
 
-def order_new(uid: int, kind: str, plan_id: str = "", amount: int = 0, username: str = "", code: str = "") -> dict:
-    """سفارشِ منتظر رسید (کارت‌به‌کارت)."""
+def order_new(uid: int, kind: str, plan_id: str = "", amount: int = 0, username: str = "", code: str = "", mode: str = "manual") -> dict:
+    """سفارشِ منتظر پرداخت (کارت‌به‌کارت). mode=manual: منتظر رسید و تأیید ادمین — mode=auto: تأیید خودکار با پیامک بانک."""
     out: dict = {}
 
     def mut(c):
-        s, _, o = _build_order(c, uid, kind, plan_id, amount, username, code)
+        s, _, o = _build_order(c, uid, kind, plan_id, amount, username, code, mode)
         _push(s, o)
         out.update(o)
     C.update_config(mut)
@@ -947,6 +976,10 @@ def order_text(o: dict, with_status: bool = True) -> str:
         rows.append(f"🏷 کد تخفیف <code>{esc(o['code'])}</code>: {money(o.get('disc', 0))} تومان تخفیف (قیمت اصلی {money(o.get('orig', 0))})")
     if cu:
         rows.append(f"👛 موجودی مشتری: {money(cu['balance'])}")
+    if o.get("mode") == "auto":
+        rows.append(f"⚡ تأیید خودکار — مبلغ واریزی: <b>{money(o.get('pay_amount') or o['amount'])}</b> تومان" + (" ✅ با پیامک بانک تأیید شد" if o.get("auto") else ""))
+    if o.get("hold"):
+        rows.append(f"⚠️ پرداخت پیدا شد ولی تأیید خودکار انجام نشد: {esc(o['hold'])} — لطفاً دستی بررسی کنید.")
     rows.append(f"🕒 {sales.jdatetime(o.get('rts') or o['ts'])}")
     if o.get("text"):
         rows.append(f"📝 {esc(o['text'])}")
@@ -1000,6 +1033,128 @@ async def _after(bot: Bot, oid: str, extra: str) -> None:
         await asyncio.to_thread(order_update, oid, adm=sent)
 
 
+# ═════════════════════════════ تأیید خودکار با پیامک بانک ═════════════════════════════
+# پیامک واریز بانک (با اپ فورواردر روی گوشی ادمین) به وب‌هوک وب‌پنل می‌رسد. تأیید فقط وقتی انجام می‌شود که
+# پیامک «واریز» باشد، مبلغ آن دقیقاً با مبلغ یکتای یک و فقط یک سفارش بازِ خودکار یکی باشد و هنوز مصرف نشده باشد.
+# هر حالت مبهم یا مشکوک (چند سفارش، سقف مبلغ، مشتری مسدود، مبلغ بدون سفارش) تأیید نمی‌شود و به ادمین اعلام می‌شود.
+_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+_DEP_WORDS = ("واریز", "deposit", "variz", "credit")
+_WD_WORDS = ("برداشت", "withdraw", "debit", "کسر", "خرید")
+_AMT_PATS = (r"(?:مبلغ|واریز|deposit|amount|credit)\D{0,25}?(?<!\d)(\d{4,13})(?!\d)",
+             r"[+＋]\s*(?<!\d)(\d{4,13})(?!\d)",
+             r"(?<!\d)(\d{4,13})(?!\d)\s*[+＋]",
+             r"(?<!\d)(\d{4,13})(?!\d)\s*(?:ریال|تومان|تومن|rial|rials|rls|irr|toman)")
+
+
+def sms_norm(text: str) -> str:
+    t = str(text or "").translate(_DIGITS)
+    t = re.sub(r"[\u200c\u200e\u200f\u202a-\u202e\u2066-\u2069]", " ", t)
+    t = re.sub(r"(?<=\d)[,٬،](?=\d)", "", t)                    # جداکننده‌ی هزارگان
+    return t.strip()[:1000]
+
+
+def sms_is_deposit(t: str) -> bool:
+    low = t.lower()
+    dep = any(w in low for w in _DEP_WORDS) or bool(re.search(r"[+＋]\s*\d|\d\s*[+＋]", t))
+    wd = any(w in low for w in _WD_WORDS) or bool(re.search(r"(?<![\w/:.])[-−–]\s*\d{4,}|\d{4,}\s*[-−–](?![\d/:-])", t))
+    return dep and not wd
+
+
+def sms_amounts(t: str, unit: str = "rial") -> list[int]:
+    """مبلغ‌های محتمل پیامک بر حسب تومان (به ترتیب اولویت). عددهای بعد از «مانده/موجودی» نادیده گرفته می‌شود."""
+    t2 = re.sub(r"(?:مانده|موجودی|balance|bal)[^\n]{0,40}", " ", t, flags=re.I)
+    out: list[int] = []
+    for pat in _AMT_PATS:
+        for m in re.finditer(pat, t2, flags=re.I):
+            v = int(m.group(1))
+            v = v if unit == "toman" else (v // 10 if v % 10 == 0 else 0)
+            if v > 0 and v not in out:
+                out.append(v)
+    return out
+
+
+def auto_match(text: str) -> dict:
+    """پیامک را (اتمیک روی config.json) با سفارش‌های باز خودکار تطبیق می‌دهد. خروجی: {res, oid, amount, order?}
+    res: ok | hold | nomatch | late | ambiguous | ignored | dup | disabled | noamount"""
+    now = int(time.time())
+    t = sms_norm(text)
+    h = hashlib.sha256(t.encode("utf-8")).hexdigest()[:32]
+    out: dict = {"res": "ignored", "oid": "", "amount": 0}
+
+    def mut(c):
+        s = c["shop"]
+        a = s["auto"]
+
+        def log(res: str, oid: str = "", amount: int = 0) -> None:
+            out.update(res=res, oid=oid, amount=amount)
+            a["log"] = (a["log"] + [{"ts": now, "res": res, "oid": oid, "amount": amount}])[-C.SHOP_AUTO_LOG_MAX:]
+        if not a["enabled"]:
+            out["res"] = "disabled"
+            return
+        if any(x["h"] == h for x in a["seen"]):
+            out["res"] = "dup"                                       # فوروارد تکراری همان پیامک
+            return
+        a["seen"] = ([x for x in a["seen"] if now - int(x.get("ts") or 0) < 14 * 86400][-(C.SHOP_AUTO_SEEN_MAX - 1):]) + [{"h": h, "ts": now}]
+        musts = [m.strip().lower() for m in re.split(r"[,،|\n]", a["must"]) if m.strip()]          # چند عبارت (مثلاً یکی برای هر بانک)؛ وجود هرکدام کافی است
+        if (musts and not any(m in t.lower() for m in musts)) or not sms_is_deposit(t):
+            log("ignored")
+            return
+        vals = sms_amounts(t, a["unit"])
+        if not vals:
+            log("noamount")
+            return
+        cand = [o for o in s["orders"] if o.get("mode") == "auto" and o["status"] in ("new", "pending") and int(o.get("pay_amount") or 0) in vals
+                and (o["status"] == "pending" or now <= int(o.get("exp") or 0) + AUTO_GRACE)]
+        if not cand:
+            late = [o for o in s["orders"] if o.get("mode") == "auto" and o["status"] == "cancelled" and int(o.get("pay_amount") or 0) in vals and now - int(o.get("ts") or 0) < AUTO_QUARANTINE]
+            log("late", late[-1]["id"], int(late[-1]["pay_amount"])) if late else log("nomatch", "", vals[0])
+            return
+        if len(cand) > 1:
+            log("ambiguous", ",".join(o["id"] for o in cand)[:40], int(cand[0]["pay_amount"]))
+            return
+        o = cand[0]
+        amt = int(o["pay_amount"])
+        cu = s["customers"].get(str(o["uid"])) or {}
+        used = sum(int(x.get("pay_amount") or 0) for x in s["orders"] if x.get("auto_ok") and int(x.get("cts") or 0) > now - 86400)
+        why = "مشتری مسدود است" if cu.get("banned") else "مبلغ از سقف تأیید خودکار بیشتر است" if amt > a["max_amount"] else "سقف روزانه‌ی تأیید خودکار پر شده" if used + amt > a["daily_max"] else ""
+        if why:
+            if o["status"] == "new":
+                o.update(status="pending", rts=now)
+            o["hold"] = why
+            log("hold", o["id"], amt)
+            out["order"] = dict(o)
+            return
+        o.update(status="processing", by=0, cts=now, auto=True, auto_ok=True, sms=h[:12])
+        log("ok", o["id"], amt)
+        out["order"] = dict(o)
+    C.update_config(mut)
+    return out
+
+
+async def auto_confirm(bot: Bot, text: str) -> dict:
+    """ورودی وب‌هوک: تطبیق پیامک + انجام سفارش + اطلاع به مشتری و ادمین. خطایش بالا نمی‌رود مگر خطای ذخیره‌سازی."""
+    r = await asyncio.to_thread(auto_match, text)
+    res, o = r["res"], r.get("order")
+    try:
+        if res == "ok" and o:
+            C.audit_event("تأیید خودکار", "تأیید خودکار کارت‌به‌کارت", o["id"], f"{KIND_FA.get(o['kind'], o['kind'])} — {money(o['pay_amount'])} تومان", amount=int(o["pay_amount"]), cat="wallet")
+            await _tell(bot, o["uid"], f"✅ <b>پرداخت شما شناسایی شد</b>\nمبلغ: <b>{money(o['pay_amount'])}</b> تومان\nسفارش <b>#{o['id']}</b> در حال انجام است…")
+            await fulfil(bot, o["id"])
+        elif res == "hold" and o:
+            await _tell(bot, o["uid"], f"🕓 پرداخت سفارش <b>#{o['id']}</b> دریافت شد و برای بررسی نهایی به ادمین رفت.")
+            if o.get("adm"):
+                await _edit_admin_msgs(bot, o)
+            sent = await _notify_admins(bot, order_text(o) + "\n\n⚠️ <b>پرداخت در حساب دیده شد ولی تأیید خودکار انجام نشد؛ دستی تأیید یا رد کنید.</b>", order_kb(o))
+            await asyncio.to_thread(order_update, o["id"], adm=sent)
+        elif res in ("nomatch", "late", "ambiguous"):
+            why = {"nomatch": "سفارش بازِ خودکاری با این مبلغ پیدا نشد", "late": f"این مبلغ مال سفارش لغوشده‌ی #{r['oid']} است (مهلت تمام شده بود)",
+                   "ambiguous": f"با چند سفارش هم‌خوان بود ({esc(r['oid'])})"}[res]
+            await _notify_admins(bot, f"💳 <b>واریز {money(r['amount'])} تومان دیده شد ولی تأیید خودکار انجام نشد</b>\nعلت: {why}\n\nاگر مال مشتری است، سفارش را از /admin دستی رسیدگی کنید.\n\n<code>{esc(sms_norm(text)[:300])}</code>")
+    except Exception:  # noqa: BLE001
+        log.exception("auto_confirm %s", res)
+    return {k: v for k, v in r.items() if k != "order"}
+
+
 # ═════════════════════════════ نگهداری پس‌زمینه ═════════════════════════════
 async def maintain(bot: Bot, startup: bool = False) -> None:
     now = int(time.time())
@@ -1010,7 +1165,7 @@ async def maintain(bot: Bot, startup: bool = False) -> None:
 
     def mut(c):
         for o in c["shop"]["orders"]:
-            if o["status"] == "new" and now - o["ts"] > hours:
+            if o["status"] == "new" and (now > int(o.get("exp") or 0) + AUTO_GRACE if o.get("mode") == "auto" else now - o["ts"] > hours):
                 o["status"] = "cancelled"
                 stale.append(dict(o))
             elif o["status"] == "processing" and (startup or now - int(o.get("cts") or o["ts"]) > STUCK_SECONDS):
@@ -1025,7 +1180,10 @@ async def maintain(bot: Bot, startup: bool = False) -> None:
     except Exception:  # noqa: BLE001
         log.exception("test cleanup")
     for o in stale:
-        await _tell(bot, o["uid"], f"🚫 سفارش #{o['id']} چون رسید ارسال نشد لغو شد.")
+        if o.get("mode") == "auto":
+            await _tell(bot, o["uid"], f"🚫 سفارش #{o['id']} چون پرداختی با مبلغ دقیق آن شناسایی نشد لغو شد.\nاگر پرداخت کرده‌اید، عکس رسید را برای پشتیبانی بفرستید.")
+        else:
+            await _tell(bot, o["uid"], f"🚫 سفارش #{o['id']} چون رسید ارسال نشد لغو شد.")
     for o in stuck:
         await _after(bot, o["id"], "⚠️ نیمه‌کاره ماند؛ قبل از «تلاش مجدد» وضعیت کاربر را در پنل ببینید.")
     if remind:
@@ -1300,11 +1458,51 @@ def _card_text(o: dict) -> str:
     if not cards:
         return "⚠️ شماره کارت هنوز توسط ادمین تنظیم نشده است."
     out = [f"💳 <b>کارت‌به‌کارت</b>\n\nمبلغ دقیق: <b>{money(o['amount'])}</b> تومان\n" + ("به یکی از کارت‌های زیر واریز کنید:\n" if len(cards) > 1 else "شماره کارت:\n")]
+    return "\n".join(out + _card_lines(cards))
+
+
+def _card_lines(cards: list) -> list[str]:
+    out: list[str] = []
     for i, card in enumerate(cards, 1):
         num = " ".join(card["number"][k:k + 4] for k in range(0, len(card["number"]), 4))
         out.append((f"<b>{i}.</b> " if len(cards) > 1 else "") + f"<code>{esc(num)}</code>\n"
                    + (f"به نام: <b>{esc(card['holder'])}</b>\n" if card["holder"] else "") + (f"بانک: {esc(card['bank'])}\n" if card["bank"] else ""))
-    return "\n".join(out)
+    return out
+
+
+def auto_text(o: dict) -> str:
+    """توضیح کامل پرداخت با تأیید خودکار: مبلغ دقیق، کارت، و اینکه چطور واریز کند تا تأیید شود."""
+    s = shop_cfg()
+    cards = s["cards"]
+    pay, base = int(o["pay_amount"]), int(o.get("base") or o["amount"])
+    what = KIND_FA[o["kind"]] + (f" — {esc(o.get('pname') or '')}" if o.get("pname") else "")
+    extra = pay - base
+    if o["kind"] == "topup":
+        why = f"3️⃣ {money(extra)} تومان اضافه فقط برای شناسایی پرداخت شماست و <b>کل مبلغ واریزی ({money(pay)} تومان)</b> به کیف پول شما اضافه می‌شود."
+    else:
+        why = f"3️⃣ {money(extra)} تومانِ آخرِ مبلغ فقط برای شناسایی پرداخت شماست؛ لطفاً مبلغ را رُند نکنید و کم یا زیاد هم نفرستید."
+    head = (f"⚡ <b>سفارش #{o['id']}</b> — {what}\n\n💳 <b>کارت‌به‌کارت با تأیید خودکار</b>\n\n"
+            f"مبلغ دقیق واریز:\n<b>{money(pay)}</b> تومان\n\n" + ("به یکی از کارت‌های زیر واریز کنید:\n" if len(cards) > 1 else "شماره کارت:\n"))
+    how = (f"\n📌 <b>برای اینکه پرداخت خودکار تأیید شود:</b>\n"
+           f"1️⃣ دقیقاً <b>{money(pay)} تومان</b> را با <b>تمام ارقام</b> واریز کنید؛ حتی یک تومان کم یا زیاد، تأیید خودکار انجام نمی‌شود.\n"
+           f"2️⃣ فقط <b>یک‌بار</b> و با کارت‌به‌کارت یا انتقال بانکی به کارت بالا واریز کنید (دو بار واریز نکنید).\n"
+           f"{why}\n"
+           f"4️⃣ لازم نیست رسید بفرستید؛ معمولاً چند دقیقه بعد از واریز، پیام تأیید می‌گیرید و سفارش خودکار انجام می‌شود.\n\n"
+           f"⏳ مهلت واریز: <b>{s['auto']['minutes']} دقیقه</b> (تا {sales.jdatetime(o['exp'])})\n\n"
+           f"⚠️ اگر مبلغ دیگری واریز کردید یا مهلت تمام شد، دکمه‌ی «🧾 واریز کردم ولی تأیید نشد» را بزنید و عکس رسید بفرستید تا ادمین دستی بررسی کند.")
+    return head + "\n".join(_card_lines(cards)) + how
+
+
+async def ask_auto(update: Update, context, o: dict) -> None:
+    context.user_data.pop("aw", None)
+    await show(update, context, auto_text(o),
+               M([[B("🔄 بررسی وضعیت پرداخت", callback_data=f"ac:{o['id']}")],
+                  [B("🧾 واریز کردم ولی تأیید نشد", callback_data=f"ar:{o['id']}")],
+                  [B("❌ لغو سفارش", callback_data=f"oc:{o['id']}")], [B("🔙 منوی اصلی", callback_data="home")]]))
+
+
+def _auto_ok(s: dict, price: int) -> bool:
+    return bool(s["auto"]["enabled"] and s["cards"] and price <= s["auto"]["max_amount"])
 
 
 async def ask_receipt(update: Update, context, o: dict) -> None:
@@ -1359,13 +1557,18 @@ async def show_plan(update: Update, context, pid: str, idx: int | None = None) -
         except ValueError:
             context.user_data.pop("disc", None)
             dcode, price = "", p["price"]
+    auto = _auto_ok(s, price)
+    how = ("\n\n⚡ <b>خودکار:</b> بدون ارسال رسید؛ مبلغ دقیقِ نمایش‌داده‌شده را واریز کنید تا چند دقیقه بعد خودکار تأیید شود."
+           "\n🧾 <b>دستی:</b> بعد از واریز عکس رسید می‌فرستید و ادمین تأیید می‌کند.") if auto else ""
     txt = (f"{head}\n\n📦 {esc(p['name'])}\n📐 {esc(_plan_line(tpl))}\n{price_line}"
-           f"👛 موجودی شما: {money(cu.get('balance', 0))} تومان\n\nروش پرداخت را انتخاب کنید:")
-    wcb, ccb = (f"rw:{idx}:{pid}", f"rc:{idx}:{pid}") if renew else (f"bw:{pid}", f"bc:{pid}")
+           f"👛 موجودی شما: {money(cu.get('balance', 0))} تومان{how}\n\nروش پرداخت را انتخاب کنید:")
+    wcb, ccb, acb = (f"rw:{idx}:{pid}", f"rc:{idx}:{pid}", f"ra:{idx}:{pid}") if renew else (f"bw:{pid}", f"bc:{pid}", f"ba:{pid}")
     rows = []
     if cu.get("balance", 0) >= price:
         rows.append([B("👛 پرداخت از کیف پول (آنی)", callback_data=wcb)])
-    rows.append([B("💳 کارت‌به‌کارت (با رسید)", callback_data=ccb)])
+    if auto:
+        rows.append([B("⚡ کارت‌به‌کارت (تأیید خودکار)", callback_data=acb)])
+    rows.append([B("💳 کارت‌به‌کارت (تأیید دستی با رسید)" if auto else "💳 کارت‌به‌کارت (با رسید)", callback_data=ccb)])
     if any(d["active"] for d in s["codes"].values()):
         rows.append([B("🏷 تغییر کد تخفیف" if dcode else "🏷 کد تخفیف دارم", callback_data=f"dc:{pid}:{idx if renew else -1}")])
     await show(update, context, txt, back_kb(rows))
@@ -1411,14 +1614,17 @@ def _disc_code(context, plan_id: str) -> str:
     return d[0] if d and d[1] == plan_id else ""
 
 
-async def _launch_card(update: Update, context, kind: str, plan_id: str = "", amount: int = 0, username: str = "") -> None:
+async def _launch_card(update: Update, context, kind: str, plan_id: str = "", amount: int = 0, username: str = "", mode: str = "manual") -> None:
     try:
-        o = await asyncio.to_thread(order_new, update.effective_user.id, kind, plan_id, amount, username, _disc_code(context, plan_id))
+        o = await asyncio.to_thread(order_new, update.effective_user.id, kind, plan_id, amount, username, _disc_code(context, plan_id), mode)
         context.user_data.pop("disc", None)
     except ValueError as e:
         await show(update, context, f"❌ {esc(e)}", back_kb())
         return
-    await ask_receipt(update, context, o)
+    if o.get("mode") == "auto":
+        await ask_auto(update, context, o)
+    else:
+        await ask_receipt(update, context, o)
 
 
 async def _launch_wallet(update: Update, context, kind: str, plan_id: str, username: str = "") -> None:
@@ -1451,7 +1657,8 @@ async def _submit_receipt(update: Update, context, oid: str) -> None:
         await m.reply_html(f"❌ {esc(e)}", reply_markup=back_kb())
         return
     context.user_data.pop("aw", None)
-    await m.reply_html(f"✅ رسید سفارش <b>#{oid}</b> دریافت شد.\nبعد از بررسی ادمین، نتیجه همین‌جا به شما اعلام می‌شود.", reply_markup=back_kb())
+    await m.reply_html(f"✅ رسید سفارش <b>#{oid}</b> دریافت شد.\n" + ("اگر واریز شما در حساب ثبت شود خودکار تأیید می‌شود؛ در غیر این صورت ادمین بررسی می‌کند.\n" if o.get("mode") == "auto" else "")
+                       + "نتیجه همین‌جا به شما اعلام می‌شود.", reply_markup=back_kb())
     sent = await _notify_admins(context.bot, order_text(o), order_kb(o), photo=file_id or None)
     await asyncio.to_thread(order_update, oid, adm=sent)
 
@@ -1493,8 +1700,18 @@ async def on_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not digits:
             await m.reply_html("مبلغ را به <b>تومان</b> و فقط با عدد بفرستید. مثال: <code>200000</code>")
             return
+        amt = int(digits)
+        if _auto_ok(shop_cfg(), amt):
+            if not shop_cfg()["min_topup"] <= amt <= shop_cfg()["max_topup"]:
+                await m.reply_html(f"❌ مبلغ شارژ باید بین {money(shop_cfg()['min_topup'])} و {money(shop_cfg()['max_topup'])} تومان باشد.")
+                return
+            context.user_data.pop("aw", None)
+            await m.reply_html(f"➕ <b>شارژ کیف پول — {money(amt)} تومان</b>\n\n⚡ <b>خودکار:</b> بدون رسید؛ مبلغ دقیق را واریز کنید تا چند دقیقه بعد خودکار تأیید شود.\n"
+                               f"🧾 <b>دستی:</b> عکس رسید می‌فرستید و ادمین تأیید می‌کند.\n\nروش پرداخت را انتخاب کنید:",
+                               reply_markup=M([[B("⚡ تأیید خودکار", callback_data=f"ta:{amt}")], [B("💳 تأیید دستی با رسید", callback_data=f"tm:{amt}")], [B("🔙 منوی اصلی", callback_data="home")]]))
+            return
         try:
-            o = await asyncio.to_thread(order_new, u.id, "topup", "", int(digits))
+            o = await asyncio.to_thread(order_new, u.id, "topup", "", amt)
         except ValueError as e:
             await m.reply_html(f"❌ {esc(e)}")
             return
@@ -1562,6 +1779,26 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _launch_wallet(update, context, "buy", p[1])
     elif cmd == "bc":
         await _launch_card(update, context, "buy", p[1])
+    elif cmd == "ba":
+        await _launch_card(update, context, "buy", p[1], mode="auto")
+    elif cmd in ("ta", "tm"):
+        await _launch_card(update, context, "topup", "", int(p[1]), mode="auto" if cmd == "ta" else "manual")
+    elif cmd == "ar":                                  # واریز کرده ولی خودکار تأیید نشد ← مسیر دستی با رسید
+        o = order_get(p[1])
+        if not o or o["uid"] != u.id or o["status"] != "new":
+            await show(update, context, "این سفارش دیگر منتظر پرداخت نیست.", back_kb())
+        else:
+            context.user_data["aw"] = ("receipt", o["id"])
+            await show(update, context, f"🧾 <b>سفارش #{o['id']}</b>\n\n📸 <b>عکس رسید</b> را همین‌جا بفرستید (یا شماره پیگیری را بنویسید). ادمین بررسی و تأیید می‌کند.",
+                       M([[B("❌ لغو سفارش", callback_data=f"oc:{o['id']}")], [B("🔙 منوی اصلی", callback_data="home")]]))
+    elif cmd == "ac":                                  # بررسی وضعیت سفارش خودکار
+        o = order_get(p[1])
+        if not o or o["uid"] != u.id:
+            await show(update, context, "سفارش پیدا نشد.", back_kb())
+        elif o["status"] == "new":
+            await _ans(q, "هنوز پرداختی با این مبلغ شناسایی نشده. بعد از واریز چند دقیقه صبر کنید.", show_alert=True)
+        else:
+            await show(update, context, order_text(o), back_kb([[B("🧾 سفارش‌ها", callback_data="ords")]]))
     elif cmd == "wal":
         await show(update, context, f"👛 <b>کیف پول</b>\n\nموجودی: <b>{money(cu.get('balance', 0))}</b> تومان",
                    back_kb([[B("➕ شارژ با رسید", callback_data="wt"), B("🧾 تراکنش‌ها", callback_data="wh")]]))
@@ -1581,7 +1818,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not o or o["uid"] != u.id:
             await show(update, context, "سفارش پیدا نشد.", back_kb())
         elif o["status"] == "new":
-            await ask_receipt(update, context, o)
+            await (ask_auto if o.get("mode") == "auto" else ask_receipt)(update, context, o)
         else:
             await show(update, context, order_text(o), back_kb([[B("🧾 سفارش‌ها", callback_data="ords")]]))
     elif cmd == "oc":
@@ -1625,6 +1862,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await _launch_wallet(update, context, "renew", p[2], svcs[i]["u"])
         else:
             await _launch_card(update, context, "renew", p[2], 0, svcs[i]["u"])
+    elif cmd == "ra":
+        i = int(p[1])
+        svcs = cu.get("services") or []
+        if i >= len(svcs):
+            await show(update, context, "سرویس پیدا نشد.", back_kb())
+        else:
+            await _launch_card(update, context, "renew", p[2], 0, svcs[i]["u"], mode="auto")
     elif cmd == "dc":
         context.user_data["aw"] = ("code", p[1], int(p[2]))
         await show(update, context, "🏷 <b>کد تخفیف</b> را بفرستید:", back_kb())
@@ -1661,6 +1905,7 @@ async def admin_home(update: Update, context, prefix: str = "") -> None:
             [B(f"⚠️ سفارش‌های ناموفق ({fail})", callback_data="ad:fail")],
             [B("👥 مشتری‌ها", callback_data="ad:cu"), B("📦 پلن‌ها", callback_data="ad:plans")],
             [B("💳 کارت", callback_data="ad:card"), B("🖥 پنل فروش", callback_data="ad:pn")],
+            [B("⚡ تأیید خودکار: " + ("🟢 روشن" if s["auto"]["enabled"] else "🔴 خاموش"), callback_data="ad:au")],
             [B("✏️ متن خوش‌آمد", callback_data="ad:wel"), B("✏️ متن پشتیبانی", callback_data="ad:sup")],
             [B("🔴 بستن فروشگاه" if s["enabled"] else "🟢 باز کردن فروشگاه", callback_data="ad:tog")],
             [B("🔙 منوی مشتری", callback_data="home")]])
@@ -1762,6 +2007,25 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, p: list) 
         await _tell(context.bot, o["uid"], f"❌ <b>رسید سفارش #{o['id']} رد شد.</b>\nدلیل: {esc(reason)}\n\nاگر پرداخت کرده‌اید با پشتیبانی تماس بگیرید.")
         C.audit_event(f"ادمین فروشگاه ({admin.id})", "رد رسید", o["id"], reason, cat="wallet")
         await _edit_admin_msgs(context.bot, o, f"❌ توسط {esc(admin.full_name)} رد شد.")
+    elif sub in ("au", "aut"):
+        a = s["auto"]
+        if sub == "aut":
+            if not a["enabled"] and len(a["secret"]) < 24:
+                await _ans(q, "ابتدا از وب‌پنل (تنظیمات فروشگاه ← تأیید خودکار) رمز وب‌هوک بسازید.", show_alert=True)
+                return
+            if not a["enabled"] and not s["cards"]:
+                await _ans(q, "ابتدا یک کارت ثبت کنید.", show_alert=True)
+                return
+            await asyncio.to_thread(C.update_config, lambda c: c["shop"]["auto"].update(enabled=not c["shop"]["auto"]["enabled"]))
+            C.audit_event(f"ادمین فروشگاه ({admin.id})", "تغییر تأیید خودکار", "", "روشن" if not a["enabled"] else "خاموش", cat="sys")
+            s = shop_cfg()
+            a = s["auto"]
+        await _ans(q, )
+        lg = "\n".join(f"{sales.jdatetime(x['ts'])} — {x['res']}" + (f" #{x['oid']}" if x.get("oid") else "") + (f" {money(x['amount'])}" if x.get("amount") else "") for x in a["log"][-6:][::-1])
+        txt = (f"⚡ <b>تأیید خودکار کارت‌به‌کارت</b>\n\nوضعیت: {'🟢 روشن' if a['enabled'] else '🔴 خاموش'}\nرمز وب‌هوک: {'✅ ساخته شده' if len(a['secret']) >= 24 else '⚠️ ساخته نشده (از وب‌پنل بسازید)'}\n"
+               f"مهلت واریز: {a['minutes']} دقیقه | سقف هر سفارش: {money(a['max_amount'])} | سقف روزانه: {money(a['daily_max'])}\n\n"
+               f"آخرین رویدادها:\n{lg or 'هنوز پیامکی نرسیده.'}\n\nتنظیم دقیق و آدرس وب‌هوک: وب‌پنل ← تنظیمات فروشگاه.")
+        await show(update, context, txt, _adm_back([[B("🔴 خاموش کردن" if a["enabled"] else "🟢 روشن کردن", callback_data="ad:aut")]]))
     elif sub == "tog":
         await _ans(q, )
         await asyncio.to_thread(C.update_config, lambda c: c["shop"].update(enabled=not c["shop"]["enabled"]))
