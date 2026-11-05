@@ -2043,4 +2043,307 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE, p: list) 
         if not C.get_panel(cfg, p[2]):
             await _ans(q, "پنل پیدا نشد.", show_alert=True)
             return
-        await asyncio.to_thread(C.update_config, lambda c: c["shop"].up
+        await asyncio.to_thread(C.update_config, lambda c: c["shop"].update(panel=p[2]))
+        await _ans(q, "ذخیره شد.")
+        await admin_home(update, context)
+    elif sub == "card":
+        await _ans(q, )
+        context.user_data.pop("aw", None)
+        cards = s["cards"]
+        rows = [[B(f"🗑 حذف {i}. ****{c['number'][-4:]}" + (f" — {c['holder']}" if c["holder"] else ""), callback_data=f"ad:cdel:{i - 1}")] for i, c in enumerate(cards, 1)]
+        if len(cards) < C.SHOP_CARDS_MAX:
+            rows.append([B("➕ افزودن کارت", callback_data="ad:cadd")])
+        txt = "💳 <b>کارت‌های فروشگاه</b>\n\n" + ("\n".join(f"{i}. <code>{c['number']}</code> {esc(c['holder'])} {esc(c['bank'])}" for i, c in enumerate(cards, 1)) or "هنوز کارتی ثبت نشده.") + "\n\nمشتری همه‌ی کارت‌ها را می‌بیند و به یکی از آن‌ها واریز می‌کند."
+        await show(update, context, txt, _adm_back(rows))
+    elif sub == "cadd":
+        await _ans(q, )
+        context.user_data["aw"] = ("a_card",)
+        await show(update, context, "💳 اطلاعات کارت را در <b>سه خط</b> بفرستید:\n\n<code>6037991234567890\nعلی رضایی\nبانک ملی</code>\n\n(خط دوم و سوم اختیاری است)", _adm_back())
+    elif sub == "cdel":
+        i = int(p[2])
+        def _del(c):
+            if 0 <= i < len(c["shop"]["cards"]):
+                c["shop"]["cards"].pop(i)
+                c["shop"]["card"] = dict(c["shop"]["cards"][0]) if c["shop"]["cards"] else {"number": "", "holder": "", "bank": ""}
+        await asyncio.to_thread(C.update_config, _del)
+        await _ans(q, "حذف شد.")
+        await admin_cb(update, context, ["ad", "card"])
+    elif sub in ("wel", "sup"):
+        await _ans(q, )
+        context.user_data["aw"] = ("a_wel" if sub == "wel" else "a_sup",)
+        await show(update, context, "✏️ متن جدید را بفرستید (برای پاک کردن بنویسید <code>-</code>).", _adm_back())
+    elif sub == "plans":
+        await _ans(q, )
+        rows = [[B(("🟢 " if x["active"] else "⚪ ") + f"{x['name']} — {money(x['price'])}", callback_data=f"ad:pl:{x['id']}")] for x in s["plans"]]
+        rows.append([B("➕ پلن جدید", callback_data="ad:pa")])
+        await show(update, context, "📦 <b>پلن‌های فروش</b>\nهر پلن به یک تمپلت وصل است (حجم و مدت از همان می‌آید).", _adm_back(rows))
+    elif sub == "pa":
+        await _ans(q, )
+        tpls = list(C.load_config_ro()["templates"].items())
+        rows = [[B(f"{n} ({_plan_line(t)})", callback_data=f"ad:pat:{i}")] for i, (n, t) in enumerate(tpls[:40])]
+        await show(update, context, "تمپلتِ این پلن را انتخاب کنید:", _adm_back(rows))
+    elif sub == "pat":
+        await _ans(q, )
+        tpls = list(C.load_config_ro()["templates"].keys())
+        i = int(p[2])
+        if i >= len(tpls):
+            return
+        context.user_data["aw"] = ("a_newplan", tpls[i])
+        await show(update, context, f"💰 قیمت پلن «{esc(tpls[i])}» را به <b>تومان</b> بفرستید:", _adm_back())
+    elif sub in ("pl", "pt", "pd", "pdy", "ppr", "prn"):
+        pl = plan_get(s, p[2])
+        if not pl:
+            await _ans(q, "پلن پیدا نشد.", show_alert=True)
+            return
+        if sub == "pt":
+            await asyncio.to_thread(C.update_config, lambda c: plan_get(c["shop"], p[2]).update(active=not pl["active"]))
+        elif sub == "pdy":
+            await asyncio.to_thread(C.update_config, lambda c: c["shop"].update(plans=[x for x in c["shop"]["plans"] if x["id"] != p[2]]))
+            await _ans(q, "حذف شد.")
+            await admin_cb(update, context, ["ad", "plans"])
+            return
+        elif sub in ("ppr", "prn"):
+            await _ans(q, )
+            context.user_data["aw"] = ("a_plprice" if sub == "ppr" else "a_plname", p[2])
+            await show(update, context, "قیمت جدید (تومان) را بفرستید:" if sub == "ppr" else "نام نمایشی جدید را بفرستید:", _adm_back())
+            return
+        elif sub == "pd":
+            await _ans(q, )
+            await show(update, context, f"🗑 پلن «{esc(pl['name'])}» حذف شود؟ (سفارش‌های قبلی دست‌نخورده می‌ماند)",
+                       _adm_back([[B("✅ حذف", callback_data=f"ad:pdy:{p[2]}"), B("❌ نه", callback_data=f"ad:pl:{p[2]}")]]))
+            return
+        await _ans(q, )
+        pl = plan_get(shop_cfg(), p[2])
+        await show(update, context, f"📦 <b>{esc(pl['name'])}</b>\nتمپلت: {esc(pl['template'])}\nقیمت: {money(pl['price'])} تومان\nوضعیت: {'🟢 فعال' if pl['active'] else '⚪ غیرفعال'}",
+                   _adm_back([[B("⚪ غیرفعال/🟢 فعال", callback_data=f"ad:pt:{pl['id']}")], [B("💰 قیمت", callback_data=f"ad:ppr:{pl['id']}"), B("✏️ نام", callback_data=f"ad:prn:{pl['id']}")],
+                              [B("🗑 حذف", callback_data=f"ad:pd:{pl['id']}")], [B("📦 پلن‌ها", callback_data="ad:plans")]]))
+    elif sub == "cu":
+        await _ans(q, )
+        context.user_data["aw"] = ("a_cust",)
+        recent = sorted(s["customers"].items(), key=lambda kv: -kv[1]["joined"])[:6]
+        rows = [[B(f"{c['name'] or 'بدون‌نام'} — {money(c['balance'])}", callback_data=f"ad:c:{uid}")] for uid, c in recent]
+        await show(update, context, "👥 <b>مشتری‌ها</b>\nشناسه‌ی عددی، @یوزرنیم یا بخشی از نام را بفرستید، یا از آخرین‌ها انتخاب کنید:", _adm_back(rows))
+    elif sub == "c":
+        await _ans(q, )
+        await _show_customer(update, context, p[2])
+    elif sub in ("cc", "cd"):
+        await _ans(q, )
+        context.user_data["aw"] = ("a_adj", p[2], 1 if sub == "cc" else -1)
+        await show(update, context, ("➕ مبلغ <b>شارژ</b>" if sub == "cc" else "➖ مبلغ <b>کسر</b>") + " را به تومان بفرستید:", _adm_back())
+    elif sub == "cb":
+        await _ans(q, )
+        uid = p[2]
+        await asyncio.to_thread(C.update_config, lambda c: c["shop"]["customers"][uid].update(banned=not c["shop"]["customers"][uid]["banned"]))
+        await _show_customer(update, context, uid)
+    else:
+        await _ans(q, "؟")
+
+
+async def _show_customer(update: Update, context, uid: str) -> None:
+    cu = customer_get(uid)
+    if not cu:
+        await show(update, context, "مشتری پیدا نشد.", _adm_back())
+        return
+    svcs = ", ".join(x["u"] for x in cu["services"][-10:]) or "—"
+    n_orders = sum(1 for o in shop_cfg()["orders"] if str(o["uid"]) == str(uid))
+    txt = (f"👤 {label(cu, uid)}\n👛 موجودی: <b>{money(cu['balance'])}</b> تومان\n📦 سرویس‌ها: <code>{esc(svcs)}</code>\n🧾 سفارش‌ها: {n_orders}\n"
+           f"📅 عضویت: {sales.jdatetime(cu['joined']) if cu['joined'] else '—'}\n{'⛔ مسدود' if cu['banned'] else '🟢 آزاد'}")
+    await show(update, context, txt, _adm_back([[B("➕ شارژ", callback_data=f"ad:cc:{uid}"), B("➖ کسر", callback_data=f"ad:cd:{uid}")],
+                                               [B("✅ رفع مسدودی" if cu["banned"] else "🚫 مسدود", callback_data=f"ad:cb:{uid}")]]))
+
+
+def _digits(text: str) -> int | None:
+    d = re.sub(r"\D", "", (text or "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
+    return int(d) if d else None
+
+
+async def admin_text(update: Update, context, aw: tuple) -> None:
+    m = update.effective_message
+    text = (m.text or "").strip()
+    kind = aw[0]
+    admin = update.effective_user
+    if not text:
+        await m.reply_html("لطفاً متن بفرستید.")
+        return
+    if kind == "a_card":
+        lines = [x.strip() for x in text.splitlines() if x.strip()]
+        num = re.sub(r"\D", "", (lines[0] if lines else "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")))
+        if len(num) != 16:
+            await m.reply_html("❌ شماره کارت باید ۱۶ رقم باشد؛ دوباره بفرستید.")
+            return
+        card = {"number": num, "holder": lines[1][:60] if len(lines) > 1 else "", "bank": lines[2][:60] if len(lines) > 2 else ""}
+
+        def _add(c):
+            cs = c["shop"]["cards"]
+            if len(cs) >= C.SHOP_CARDS_MAX:
+                raise ValueError(f"حداکثر {C.SHOP_CARDS_MAX} کارت.")
+            if any(x["number"] == num for x in cs):
+                raise ValueError("این کارت قبلاً ثبت شده است.")
+            cs.append(card)
+            c["shop"]["card"] = dict(cs[0])
+        try:
+            await asyncio.to_thread(C.update_config, _add)
+        except ValueError as e:
+            await m.reply_html(f"❌ {esc(e)}", reply_markup=_adm_back())
+            context.user_data.pop("aw", None)
+            return
+        C.audit_event(f"ادمین فروشگاه ({admin.id})", "افزودن کارت فروشگاه", "", f"****{num[-4:]}", cat="sys")
+        context.user_data.pop("aw", None)
+        await m.reply_html("✅ کارت اضافه شد.", reply_markup=_adm_back([[B("💳 کارت‌ها", callback_data="ad:card")]]))
+    elif kind in ("a_wel", "a_sup"):
+        key = "welcome" if kind == "a_wel" else "support"
+        val = "" if text == "-" else text[:1000]
+        await asyncio.to_thread(C.update_config, lambda c: c["shop"].update({key: val}))
+        context.user_data.pop("aw", None)
+        await m.reply_html("✅ ذخیره شد.", reply_markup=_adm_back())
+    elif kind in ("a_newplan", "a_plprice"):
+        price = _digits(text)
+        if not price or price > 10 ** 9:
+            await m.reply_html("❌ قیمت را فقط با عدد (تومان) بفرستید.")
+            return
+        if kind == "a_newplan":
+            def mut(c):
+                ids = {x["id"] for x in c["shop"]["plans"]}
+                n = 1
+                while f"p{n}" in ids:
+                    n += 1
+                c["shop"]["plans"].append({"id": f"p{n}", "name": aw[1][:60], "template": aw[1], "price": price, "active": True})
+        else:
+            def mut(c):
+                pl = plan_get(c["shop"], aw[1])
+                if pl:
+                    pl["price"] = price
+        await asyncio.to_thread(C.update_config, mut)
+        C.audit_event(f"ادمین فروشگاه ({admin.id})", "تغییر پلن فروشگاه", str(aw[1]), f"قیمت: {price:,}", cat="sys")
+        context.user_data.pop("aw", None)
+        await m.reply_html("✅ ذخیره شد.", reply_markup=_adm_back([[B("📦 پلن‌ها", callback_data="ad:plans")]]))
+    elif kind == "a_plname":
+        def mut(c):
+            pl = plan_get(c["shop"], aw[1])
+            if pl:
+                pl["name"] = text[:60]
+        await asyncio.to_thread(C.update_config, mut)
+        context.user_data.pop("aw", None)
+        await m.reply_html("✅ ذخیره شد.", reply_markup=_adm_back([[B("📦 پلن‌ها", callback_data="ad:plans")]]))
+    elif kind == "a_cust":
+        custs = shop_cfg()["customers"]
+        needle = text.lstrip("@").lower()
+        hits = [(uid, c) for uid, c in custs.items() if needle == uid or needle in (c["username"] or "").lower() or needle in (c["name"] or "").lower()][:8]
+        if not hits:
+            await m.reply_html("مشتری‌ای پیدا نشد؛ دوباره امتحان کنید.")
+            return
+        rows = [[B(f"{c['name'] or 'بدون‌نام'} — {money(c['balance'])}", callback_data=f"ad:c:{uid}")] for uid, c in hits]
+        await m.reply_html("نتیجه:", reply_markup=_adm_back(rows))
+    elif kind == "a_adj":
+        uid, sign = aw[1], aw[2]
+        amt = _digits(text)
+        if not amt or amt > 10 ** 9:
+            await m.reply_html("❌ مبلغ را فقط با عدد (تومان) بفرستید.")
+            return
+        try:
+            w = await asyncio.to_thread(wallet_apply, int(uid), sign * amt, "charge" if sign > 0 else "deduct", f"توسط ادمین {admin.id}")
+        except ValueError as e:
+            await m.reply_html(f"❌ {esc(e)}")
+            return
+        context.user_data.pop("aw", None)
+        if sign > 0:
+            await _tell(context.bot, int(uid), f"✅ کیف پول شما <b>{money(amt)}</b> تومان شارژ شد.\nموجودی: <b>{money(w['balance'])}</b> تومان")
+        await m.reply_html(f"✅ انجام شد. موجودی جدید: <b>{money(w['balance'])}</b> تومان", reply_markup=_adm_back([[B("👤 مشتری", callback_data=f"ad:c:{uid}")]]))
+
+
+# ═════════════════════════════ اجرا (داخل پروسه‌ی ربات مدیریت) ═════════════════════════════
+async def _on_error(update, context) -> None:
+    log.error("خطا در ربات فروش", exc_info=context.error)
+    try:
+        if isinstance(update, Update) and update.callback_query:
+            await _ans(update.callback_query, "❌ خطای داخلی؛ دوباره تلاش کنید.", show_alert=True)
+    except TelegramError:
+        pass
+
+
+def build_shop_app(token: str) -> Application:
+    app = Application.builder().token(token).concurrent_updates(True).build()
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CallbackQueryHandler(on_cb))
+    app.add_handler(MessageHandler((filters.TEXT & ~filters.COMMAND) | filters.PHOTO | filters.Document.IMAGE, on_msg))
+    app.add_error_handler(_on_error)
+    return app
+
+
+async def _setup_menu(bot: Bot) -> None:
+    """منوی دستورات (/start و /admin بدون تایپ)، دکمه‌ی منو کنار فیلد پیام و توضیحات صفحه‌ی اول ربات."""
+    try:
+        await bot.set_my_commands([BotCommand("start", "🏠 منوی اصلی")])
+        mu = mini_url()
+        await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="🛍 فروشگاه", web_app=WebAppInfo(url=mu)) if mu else MenuButtonCommands())
+        s = shop_cfg()
+        await bot.set_my_short_description("خرید و تمدید کانفیگ · کیف پول · اتصال سرویس با لینک ساب")
+        await bot.set_my_description((s["welcome"] or "به فروشگاه خوش آمدید.") [:400] + "\n\nبرای شروع دکمه‌ی START را بزنید.")
+    except TelegramError as e:
+        log.warning("shop menu setup: %s", e)
+    for aid in C.load_config_ro().get("admin_ids", []):
+        try:
+            await bot.set_my_commands([BotCommand("start", "🏠 منوی اصلی"), BotCommand("admin", "⚙️ مدیریت فروشگاه")], scope=BotCommandScopeChat(int(aid)))
+        except (TelegramError, ValueError, TypeError):
+            pass
+
+
+class Runner:
+    """ربات فروش را کنار ربات مدیریت (در همان event loop) بالا می‌آورد و با تغییر توکن دوباره راه می‌اندازد."""
+
+    def __init__(self) -> None:
+        self.app: Application | None = None
+        self.token = ""
+        self.task: asyncio.Task | None = None
+        self.username = ""
+        self.error = ""
+        self._lock = asyncio.Lock()
+
+    async def sync(self) -> str:
+        """وضعیت را با config هماهنگ می‌کند. خروجی: یوزرنیم ربات (یا رشته‌ی خالی)."""
+        async with self._lock:
+            want = shop_cfg()["token"]
+            if self.app and want != self.token:
+                await self._stop()
+            if want and not self.app:
+                await self._start(want)
+            return self.username
+
+    async def _start(self, token: str) -> None:
+        self.error = ""
+        app = build_shop_app(token)
+        try:
+            await app.initialize()
+            await app.start()
+            await app.updater.start_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query"])
+        except Exception as e:  # noqa: BLE001
+            self.error = f"{e.__class__.__name__}: {e}"
+            log.error("ربات فروش بالا نیامد: %s", self.error)
+            try:
+                await app.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        self.app, self.token = app, token
+        self.username = getattr(app.bot, "username", "") or ""
+        await _setup_menu(app.bot)
+        self.task = asyncio.create_task(maintenance_loop(app.bot))
+        log.info("✅ Shop bot started (@%s)", self.username)
+
+    async def _stop(self) -> None:
+        if self.task:
+            self.task.cancel()
+            self.task = None
+        app, self.app, self.token, self.username = self.app, None, "", ""
+        if app:
+            try:
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except Exception:  # noqa: BLE001
+                log.exception("shop stop")
+
+    async def stop(self) -> None:
+        async with self._lock:
+            await self._stop()
