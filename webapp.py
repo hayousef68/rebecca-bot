@@ -3467,6 +3467,51 @@ def shop_customer_ban(uid: str, r: ShopBanReq):
 
 
 # ───────────────────────────── مینی‌اپ تلگرام (مشتری‌های فروشگاه) ─────────────────────────────
+# ───────────────────────────── افزودن خودکار به Happ ─────────────────────────────
+# صفحه‌ی عمومی واسط: دکمه‌ی تلگرام اینجا می‌آید و مرورگر را به happ://add/<sub> می‌برد.
+# برای جلوگیری از سوءاستفاده (open redirect) فقط لینک‌هایی که روی دامنه‌ی ساب پنل‌های همین ربات هستند پذیرفته می‌شوند.
+_HAPP_PAGE = """<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>افزودن به Happ</title>
+<style>body{font-family:Tahoma,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center}
+.c{max-width:380px;padding:24px}a.b{display:block;margin:12px 0;padding:14px;border-radius:12px;background:#2563eb;color:#fff;text-decoration:none;font-weight:bold}
+a.s{background:#334155}p{line-height:1.9;color:#94a3b8;font-size:14px}</style></head><body><div class="c">
+<h2>📲 در حال باز کردن Happ…</h2>
+<p>اگر برنامه خودکار باز نشد، دکمه‌ی زیر را بزنید.</p>
+<a class="b" id="go" href="__DEEP__">➕ افزودن اشتراک به Happ</a>
+<p>برنامه را نصب ندارید؟ اول نصب کنید، بعد دوباره دکمه‌ی بالا را بزنید:</p>
+<a class="b s" href="https://play.google.com/store/apps/details?id=com.happproxy">Google Play</a>
+<a class="b s" href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215">App Store</a>
+<p>اگر باز هم باز نشد، لینک این صفحه را در مرورگر اصلی گوشی (Chrome/Safari) باز کنید.</p>
+</div><script>setTimeout(function(){location.href=document.getElementById('go').href},300)</script></body></html>"""
+
+
+def _happ_sub_allowed(sub: str) -> bool:
+    from urllib.parse import urlsplit
+    sp = urlsplit(sub)
+    if sp.scheme not in ("http", "https") or not sp.hostname:
+        return False
+    cfg = C.load_config_ro()
+    for pn in cfg["panels"]:
+        for k in ("sub_url", "panel_url"):
+            u = str(pn.get(k) or "").strip()
+            if u and (urlsplit(u if "://" in u else "//" + u).hostname or "").lower() == sp.hostname.lower():
+                return True
+    return False
+
+
+@app.get("/happ", response_class=HTMLResponse)
+async def happ_redirect(u: str = Query("", max_length=1500)):
+    import base64
+    from html import escape
+    try:
+        sub = base64.urlsafe_b64decode(u + "=" * (-len(u) % 4)).decode()
+    except Exception:  # noqa: BLE001
+        return HTMLResponse("لینک نامعتبر است.", status_code=400)
+    if not _happ_sub_allowed(sub):
+        return HTMLResponse("لینک نامعتبر است.", status_code=400)
+    return HTMLResponse(_HAPP_PAGE.replace("__DEEP__", escape("happ://add/" + sub, quote=True)), headers=_PAGE_HEADERS)
+
+
 # ورود فقط با امضای initData تلگرام (HMAC با توکن ربات فروش) است؛ بدون کوکی/رمز. این بخش فقط‌خواندنی است و پول جابه‌جا نمی‌کند.
 MINI = os.path.join(C.BASE_DIR, "miniapp.html")
 _mini_cache = {"mtime": 0.0, "data": ""}

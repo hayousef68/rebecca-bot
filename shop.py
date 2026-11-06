@@ -731,7 +731,8 @@ async def give_test(update: Update, context) -> None:
                                        reply_markup=back_kb())
     except Exception:  # noqa: BLE001
         log.exception("send test result")
-        await _tell(context.bot, u.id, f"🎁 <b>تست رایگان شما</b>\n\n<code>{esc(res['results'][0]['sub'])}</code>", back_kb())
+        _hu = C.happ_page_url(res["results"][0]["sub"])
+        await _tell(context.bot, u.id, f"🎁 <b>تست رایگان شما</b>\n\n<code>{esc(res['results'][0]['sub'])}</code>", back_kb([[B("📲 افزودن به Happ", url=_hu)]] if _hu else None))
     await _notify_admins(context.bot, f"🎁 تست رایگان: <code>{esc(res['username'])}</code> برای {label(customer_get(u.id), u.id)}")
 
 
@@ -890,7 +891,7 @@ async def fulfil(bot: Bot, oid: str) -> None:
         sent = False
         if o["kind"] == "buy":                 # اگر QR/آلبوم نرفت (مثلاً خطای ساخت تصویر)، حداقل لینک به‌صورت متن
             links = "\n\n".join(f"👤 <b>{esc(r['username'])}</b>\n<code>{esc(r['sub'])}</code>" for r in res["results"])
-            sent = await _tell(bot, uid, f"✅ <b>خرید شما انجام شد</b>\n\n{links}")
+            sent = await _tell(bot, uid, f"✅ <b>خرید شما انجام شد</b>\n\n{links}", C.happ_kb(res["results"][0]["sub"]) if len(res["results"]) == 1 else None)
         if not sent:
             await _notify_admins(bot, f"⚠️ سفارش #{oid} انجام شد (<code>{esc(res['username'])}</code>) ولی ارسال به مشتری ناموفق بود؛ لینک را از ربات مدیریت برای او بفرستید.")
     await _after(bot, oid, f"✅ انجام شد — <code>{esc(res['username'])}</code>")
@@ -1608,7 +1609,8 @@ async def show_service(update: Update, context, idx: int) -> None:
     sub = api.full_sub(u.get("subscription_url", "")) or "نامشخص"
     txt = (f"👤 <b>{esc(sv['u'])}</b>\n{STATUS_ICON.get(st, '❔')} وضعیت: {esc(st)}\n📊 مصرف: {C.fmt_gb(used)} / {C.fmt_gb(lim)}{pct}\n"
            f"⏳ اعتبار: {C.fmt_expire(u.get('expire'), st, u.get('on_hold_expire_duration'))}\n\n🔗 <code>{esc(sub)}</code>")
-    await show(update, context, txt, back_kb([[B("🖼 QR", callback_data=f"sq:{idx}"), B("🔄 تمدید", callback_data=f"rn:{idx}")], [B("🔙 سرویس‌ها", callback_data="svc")]]))
+    hu = C.happ_page_url(sub) if sub != "نامشخص" else ""
+    await show(update, context, txt, back_kb(([[B("📲 افزودن به Happ", url=hu)]] if hu else []) + [[B("🖼 QR", callback_data=f"sq:{idx}"), B("🔄 تمدید", callback_data=f"rn:{idx}")], [B("🔙 سرویس‌ها", callback_data="svc")]]))
 
 
 def _disc_code(context, plan_id: str) -> str:

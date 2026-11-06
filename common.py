@@ -2398,6 +2398,42 @@ def _info_lines(info) -> list[str]:
     return [f"{'└' if i == len(rows) - 1 else '├'} {ic} {lb}: <b>{esc(v)}</b>" for i, (ic, lb, v) in enumerate(rows)]
 
 
+# ═════════════════════ دکمه‌ی «افزودن به Happ» ═════════════════════
+# تلگرام در دکمه‌ها فقط لینک https می‌پذیرد، پس دکمه به صفحه‌ی /happ روی وب‌پنل می‌رود و آن صفحه مرورگر را
+# به happ://add/<لینک اشتراک> می‌برد (تلگرام بسته و Happ باز می‌شود و اشتراک خودکار اضافه می‌شود).
+def public_base_url() -> str:
+    """آدرس https عمومی وب‌پنل؛ فقط وقتی SSL سالم و دامنه مشخص است، وگرنه رشته‌ی خالی."""
+    import tlsutil
+    c = load_config_ro()
+    ss = c.get("ssl") or {}
+    if not ss.get("enabled") or ss.get("error"):
+        return ""
+    dom = ss.get("domain") or ""
+    if not dom:
+        p = get_panel(c, c["active_panel"]) or (c["panels"][0] if c["panels"] else None)
+        dom = tlsutil._domain_of(p["panel_url"]) if p else ""
+    if not dom:
+        return ""
+    port = int(c.get("web_port") or 8686)
+    return f"https://{dom}" + ("" if port == 443 else f":{port}")
+
+
+def happ_page_url(sub: str) -> str:
+    """لینک https صفحه‌ی واسط Happ برای یک لینک اشتراک؛ اگر وب‌پنل https ندارد خالی برمی‌گرداند."""
+    import base64 as _b64
+    base = public_base_url()
+    if not base or not sub:
+        return ""
+    return f"{base}/happ?u=" + _b64.urlsafe_b64encode(sub.encode()).decode().rstrip("=")
+
+
+def happ_kb(sub: str):
+    """کیبورد تک‌دکمه‌ای «افزودن به Happ» (None اگر ممکن نباشد)."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    u = happ_page_url(sub)
+    return InlineKeyboardMarkup([[InlineKeyboardButton("📲 افزودن به Happ", url=u)]]) if u else None
+
+
 async def send_results(bot, chat_id, results: list[dict], header, max_qr: int = 100, send_qr: bool = True):
     """QR هر کاربر را با مشخصات مرتب و لینک قابل‌کپی جداگانه می‌فرستد + فایل متنی لینک‌ها."""
     from telegram.constants import ParseMode
@@ -2420,12 +2456,12 @@ async def send_results(bot, chat_id, results: list[dict], header, max_qr: int = 
     for r, png in zip(with_qr, pngs):
         if png is not None:
             try:
-                await _retry(lambda: bot.send_photo(chat_id, png, caption=caption(r), parse_mode=ParseMode.HTML))
+                await _retry(lambda: bot.send_photo(chat_id, png, caption=caption(r), parse_mode=ParseMode.HTML, reply_markup=happ_kb(r["sub"])))
             except TelegramError as e:
                 log.warning("send_photo failed for %s: %s", r["username"], e)
-                await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML))
+                await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML, reply_markup=happ_kb(r["sub"])))
         else:
-            await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML, disable_web_page_preview=True))
+            await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=happ_kb(r["sub"])))
         await asyncio.sleep(0.5)  # رعایت محدودیت نرخ تلگرام
     if len(results) > 1 or len(results) > len(with_qr):
         txt = "\n".join(f"{r['username']} | {r['sub']}" for r in results)
