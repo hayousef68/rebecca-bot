@@ -1338,7 +1338,48 @@ async function repApp(me) {
     const sendB = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' }, '📨 ارسال درخواست به ادمین');
     sendB.onclick = () => run(sendB, async () => { const v = mv(amt); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.'); await api('/rep/topup', 'POST', { amount: v, note: nt.value.trim() }); toast('✅ درخواست برای ادمین ارسال شد'); await views.wallet(); });
     const lgRow = txRow;
+    // ⚡ شارژ خودکار: مبلغ یکتا + کارت نشان داده می‌شود؛ بعد از واریز، پیامک بانک کیف پول را خودکار شارژ می‌کند
+    const aAmt = moneyIn(0, 'مبلغ شارژ (تومان) مثلاً 1,000,000');
+    const aBox = h('div', {});
+    const aBtn = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' }, '⚡ دریافت مبلغ و کارت برای واریز');
+    let aTimer = null;
+    const aStop = () => { if (aTimer) { clearInterval(aTimer); aTimer = null; } };
+    const aShow = (r) => {
+      aStop();
+      const mmss = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+      const endAt = Date.now() + Math.max(0, (+r.exp || 0) - (+r.now || 0)) * 1000;
+      const left = h('b', { dir: 'ltr' }, '');
+      const msg = h('p', { class: 'hint' }, '⏳ منتظر واریز و تأیید خودکار…');
+      const rial = h('code', { dir: 'ltr', style: 'font-size:20px;cursor:pointer;display:block;margin:6px 0', onclick: () => copy(String(r.pay_rial)) }, String(r.pay_rial));
+      const cancelB = h('button', { class: 'btn sm', type: 'button' }, '✖ لغو');
+      cancelB.onclick = () => run(cancelB, async () => { await api('/rep/topup/' + r.id + '/cancel', 'POST', {}); aStop(); aBox.replaceChildren(); toast('لغو شد'); });
+      aBox.replaceChildren(h('div', { class: 'banner', style: 'margin-top:12px' },
+        h('p', {}, 'دقیقاً این مبلغ را با تمام ارقام (ریال) به یکی از کارت‌ها واریز کنید. برای کپی روی عدد بزنید:'),
+        rial,
+        ...(r.cards || []).map(c => h('div', { class: 'lg' }, h('span', {}, [c.holder, c.bank].filter(Boolean).join(' — ')), h('b', { dir: 'ltr', style: 'cursor:pointer', onclick: () => copy(c.number) }, c.number))),
+        h('p', { class: 'hint' }, 'مبلغ را رُند نکنید و فقط یک‌بار واریز کنید. زمان باقی‌مانده: ', left),
+        msg, cancelB));
+      let n = 0, busy = false;
+      aTimer = setInterval(async () => {
+        if (!aBox.isConnected) return aStop();
+        left.textContent = mmss(Math.max(0, Math.round((endAt - Date.now()) / 1000)));
+        if (++n % 8 || busy) return;
+        busy = true;
+        try {
+          const s = await api('/rep/topup/' + r.id);
+          if (s.status === 'approved') { aStop(); toast('✅ پرداخت شناسایی شد و کیف پول شما شارژ شد'); await views.wallet(); }
+          else if (s.status === 'rejected') { aStop(); msg.textContent = '✖ ' + (s.hold || 'درخواست بسته شد') + ' — اگر واریز کرده‌اید، درخواست دستی ثبت کنید.'; }
+          else if (s.hold) { msg.textContent = '🕓 پرداخت دیده شد و برای بررسی نهایی به ادمین رفت.'; }
+        } catch (e) { /* خطای موقت شبکه؛ دفعه بعد دوباره */ } finally { busy = false; }
+      }, 1000);
+    };
+    aBtn.onclick = () => run(aBtn, async () => { const v = mv(aAmt); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.'); aShow(await api('/rep/topup', 'POST', { amount: v, auto: true })); });
+    const aPend = (w.topups || []).find(t => t.mode === 'auto' && t.status === 'pending' && !t.hold && (+t.exp || 0) > (+w.now || 0));
+    if (aPend) aShow({ id: aPend.id, pay_rial: aPend.pay_amount * 10, exp: aPend.exp, now: w.now, cards: w.auto_cards });
+    const autoCard = w.auto_ok ? h('div', { class: 'card' }, h('h2', {}, '⚡ شارژ خودکار'), field('مبلغ (تومان)', aAmt), aBtn, aBox,
+      h('p', { class: 'hint' }, 'بعد از واریز دقیقِ مبلغ نشان‌داده‌شده، کیف پول شما چند دقیقه بعد خودکار شارژ می‌شود؛ نیازی به ثبت درخواست نیست.')) : null;
     mount(h('div', { class: 'card bigbal' }, h('span', {}, 'موجودی کیف پول'), h('b', {}, toman(w.balance))),
+      autoCard,
       h('div', { class: 'card' }, h('h2', {}, 'درخواست افزایش موجودی'), field('مبلغ', amt), field('توضیح', nt), sendB, h('p', { class: 'hint' }, 'بعد از واریز، درخواست را ثبت کنید؛ ادمین بررسی و کیف پول شما را شارژ می‌کند.')),
       w.topups.length ? h('div', { class: 'card' }, h('h2', {}, 'درخواست‌های من'), ...w.topups.map(t => h('div', { class: 'lg' }, h('span', {}, ST_FA[t.status], h('small', {}, new Date(t.ts * 1000).toLocaleString('fa-IR'))), h('b', { dir: 'ltr' }, t.amount.toLocaleString('en-US'))))) : null,
       w.log.length ? h('div', { class: 'card' }, h('h2', {}, 'تراکنش‌های اخیر'), ...w.log.map(lgRow)) : null);

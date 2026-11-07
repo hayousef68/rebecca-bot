@@ -498,9 +498,13 @@ def _normalize(data: dict) -> dict:
     for t in (cfg.get("topups") if isinstance(cfg.get("topups"), list) else []):
         try:
             if isinstance(t, dict) and str(t.get("rid")) in reps:
-                tu.append({"id": str(t["id"]), "rid": str(t["rid"]), "amount": max(0, int(t.get("amount") or 0)), "note": str(t.get("note") or "")[:200],
-                           "ts": int(t.get("ts") or 0), "status": t.get("status") if t.get("status") in ("pending", "approved", "rejected") else "pending",
-                           "done": int(t.get("done") or 0)})
+                _tr = {"id": str(t["id"]), "rid": str(t["rid"]), "amount": max(0, int(t.get("amount") or 0)), "note": str(t.get("note") or "")[:200],
+                       "ts": int(t.get("ts") or 0), "status": t.get("status") if t.get("status") in ("pending", "approved", "rejected") else "pending",
+                       "done": int(t.get("done") or 0)}
+                if t.get("mode") == "auto":                       # شارژ خودکار با پیامک بانک
+                    _tr.update(mode="auto", base=max(0, int(t.get("base") or 0)), pay_amount=max(0, int(t.get("pay_amount") or 0)),
+                               exp=int(t.get("exp") or 0), hold=str(t.get("hold") or "")[:120], auto_ok=bool(t.get("auto_ok")), cts=int(t.get("cts") or 0))
+                tu.append(_tr)
         except (TypeError, ValueError, KeyError):
             continue
     cfg["topups"] = tu[-TOPUP_MAX:]
@@ -1552,6 +1556,20 @@ def topup_resolve(tid: str, approve: bool, amount: int | None = None) -> dict:
     audit_event("ادمین وب‌پنل", "بررسی درخواست افزایش موجودی", out.get("rid", ""), "تأیید شد" if out.get("status") == "approved" else "رد شد",
                 amount=out.get("amount", 0) if out.get("status") == "approved" else None)
     return out
+
+
+def topup_credit_in(c: dict, t: dict, amt: int, note: str = "شارژ خودکار") -> None:
+    """داخل update_config: کیف پول نماینده را شارژ و درخواست را «تأیید» می‌کند (شارژ خودکار با پیامک بانک).
+    بررسی سقف و وضعیت قبل از فراخوانی انجام شده؛ اینجا فقط اعمال می‌شود."""
+    rid = t["rid"]
+    c["reps"][rid]["balance"] += int(amt)
+    _wlog(c, rid, "topup", int(amt), note)
+    c["wallet_income"].append({"ts": time.time(), "rid": rid, "amount": int(amt)})
+    c["wallet_tx"].append({"id": "topup:" + t["id"], "ts": time.time(), "rid": rid, "kind": "topup", "amount": int(amt),
+                           "balance": c["reps"][rid]["balance"], "state": "done", "user": "", "alerted": False})
+    t["amount"] = int(amt)
+    t["status"] = "approved"
+    t["done"] = int(time.time())
 
 
 def rep_owner(cfg: dict, pid: str, username: str) -> str | None:

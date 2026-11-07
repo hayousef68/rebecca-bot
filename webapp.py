@@ -922,17 +922,26 @@ async def rep_wallet(rep=Depends(rep_guard)):
             "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t["price"], "kind": t.get("kind", "single")} for n, t in _rep_templates(cfg, rp).items()],
             "sales": await asyncio.to_thread(sales.rep_daily_sales, rid, 7),
             "log": list(reversed(rp["log"]))[:30],
-            "topups": [t for t in reversed(cfg["topups"]) if t["rid"] == rid][:15]}
+            "topups": [t for t in reversed(cfg["topups"]) if t["rid"] == rid][:15],
+            "auto_ok": bool(cfg["shop"]["auto"]["enabled"] and cfg["shop"]["cards"]), "auto_cards": [dict(x) for x in cfg["shop"]["cards"]], "now": int(time.time())}
 
 
 class RepTopupReq(BaseModel):
     amount: int = Field(ge=1000, le=10 ** 10)
     note: str = Field(default="", max_length=200)
+    auto: bool = False
 
 
 @app.post("/api/rep/topup")
 async def rep_topup(r: RepTopupReq, rep=Depends(rep_guard)):
     rid = rep[0]
+    if r.auto:                                                         # شارژ خودکار با پیامک بانک
+        try:
+            rec = await asyncio.to_thread(shop.rep_topup_auto_new, rid, r.amount, r.note)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "id": rec["id"], "auto": True, "pay_amount": rec["pay_amount"], "pay_rial": rec["pay_amount"] * 10,
+                "exp": rec["exp"], "now": int(time.time()), "cards": rec["cards"]}
     try:
         rec = await asyncio.to_thread(C.topup_add, rid, r.amount, r.note)
     except ValueError as e:
@@ -943,6 +952,33 @@ async def rep_topup(r: RepTopupReq, rep=Depends(rep_guard)):
         await _notify_admins(cfg, f"💰 <b>درخواست افزایش موجودی</b>\nنماینده: <b>{C.esc(rp['label'] or rp['name'])}</b> ({C.esc(rp['name'])})\nمبلغ: <b>{r.amount:,}</b> تومان"
                          + (f"\nتوضیح: {C.esc(r.note)}" if r.note else "") + "\n\nاز وب‌پنل ← تنظیمات ← نماینده‌ها بررسی کنید.")
     return {"ok": True, "id": rec["id"]}
+
+
+@app.get("/api/rep/topup/{tid}")
+async def rep_topup_status(tid: str, rep=Depends(rep_guard)):
+    rid = rep[0]
+    cfg = load_config()
+    t = next((x for x in cfg["topups"] if x["id"] == tid and x["rid"] == rid), None)
+    if not t:
+        raise HTTPException(404, "درخواست پیدا نشد.")
+    return {"status": t["status"], "hold": t.get("hold", ""), "amount": t["amount"], "exp": t.get("exp", 0), "now": int(time.time()),
+            "balance": cfg["reps"][rid]["balance"]}
+
+
+@app.post("/api/rep/topup/{tid}/cancel")
+async def rep_topup_cancel(tid: str, rep=Depends(rep_guard)):
+    rid = rep[0]
+
+    def mut(c):
+        t = next((x for x in c["topups"] if x["id"] == tid and x["rid"] == rid), None)
+        if not t or t["status"] != "pending" or t.get("mode") != "auto" or t.get("hold"):
+            raise ValueError("این درخواست قابل لغو نیست.")
+        t.update(status="rejected", done=int(time.time()), hold="لغو توسط نماینده")
+    try:
+        await asyncio.to_thread(C.update_config, mut)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
 
 
 async def _next_rep_name(cfg: dict, rp: dict) -> tuple[str, str]:

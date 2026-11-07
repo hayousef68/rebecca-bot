@@ -210,14 +210,50 @@ def _build_order(c: dict, uid: int, kind: str, plan_id: str = "", amount: int = 
             raise ValueError("برای این سرویس یک سفارش تمدید در جریان دارد.")
         o["username"] = username
     if mode == "auto":
-        _auto_prepare(s, o, int(amount))
+        _auto_prepare(s, o, int(amount), c)
         if kind == "topup":
             amount = o["pay_amount"]               # کیف پول دقیقاً به اندازه‌ی مبلغ واریزی شارژ می‌شود
     o["amount"] = int(amount)
     return s, cu, o
 
 
-def _auto_prepare(s: dict, o: dict, base: int) -> None:
+def _rep_taken(c: dict | None, now: int) -> set:
+    """مبلغ‌های یکتای درخواست‌های شارژ خودکارِ نماینده‌ها که هنوز باز یا در قرنطینه‌اند (تداخل با سفارش‌های فروشگاه نشود)."""
+    return {int(t["pay_amount"]) for t in ((c or {}).get("topups") or [])
+            if t.get("mode") == "auto" and t.get("pay_amount") and (t["status"] == "pending" or now - int(t.get("ts") or 0) < AUTO_QUARANTINE)}
+
+
+def _rep_used(c: dict | None, now: int) -> int:
+    """جمع شارژهای خودکارِ نماینده‌ها در ۲۴ ساعت اخیر (در سقف روزانه‌ی تأیید خودکار حساب می‌شود)."""
+    return sum(int(t.get("pay_amount") or 0) for t in ((c or {}).get("topups") or []) if t.get("auto_ok") and int(t.get("cts") or 0) > now - 86400)
+
+
+def rep_topup_auto_new(rid: str, base: int, note: str = "") -> dict:
+    """درخواست شارژ خودکار کیف پول نماینده: مبلغ یکتا (۱ تا ۹۹۹ تومان بیشتر) + مهلت. تأیید با پیامک بانک (همان وب‌هوک فروشگاه)."""
+    out: dict = {}
+
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        s = c["shop"]
+        if int(base) < s["min_topup"] or int(base) > s["max_topup"]:
+            raise ValueError(f"مبلغ شارژ خودکار باید بین {money(s['min_topup'])} و {money(s['max_topup'])} تومان باشد.")
+        if sum(1 for t in c["topups"] if t["rid"] == rid and t["status"] == "pending") >= 5:
+            raise ValueError("۵ درخواست در انتظار دارید؛ یکی را لغو کنید یا صبر کنید.")
+        o: dict = {}
+        _auto_prepare(s, o, int(base), c)
+        rec = {"id": "t" + secrets.token_hex(4), "rid": rid, "amount": int(o["pay_amount"]), "note": (str(note).strip() or "شارژ خودکار")[:200],
+               "ts": int(time.time()), "status": "pending", "done": 0, "mode": "auto", "base": int(base), "pay_amount": int(o["pay_amount"]),
+               "exp": int(o["exp"]), "hold": "", "auto_ok": False, "cts": 0}
+        c["topups"].append(rec)
+        out.update(rec)
+        out["cards"] = [dict(x) for x in s["cards"]]
+    C.update_config(mut)
+    C.audit_event("نماینده", "درخواست شارژ خودکار", rid, f"مبلغ: {money(out['pay_amount'])} تومان")
+    return out
+
+
+def _auto_prepare(s: dict, o: dict, base: int, c: dict | None = None) -> None:
     """سفارش را «تأیید خودکار» می‌کند: مبلغ یکتا (۱ تا ۹۹۹ تومان بیشتر) و مهلت واریز. داخل قفل ساخت سفارش اجرا می‌شود."""
     a = s["auto"]
     if not a["enabled"]:
@@ -228,12 +264,12 @@ def _auto_prepare(s: dict, o: dict, base: int) -> None:
         raise ValueError(f"مبلغ بیشتر از سقف تأیید خودکار ({money(a['max_amount'])} تومان) است؛ «کارت‌به‌کارت با رسید» را انتخاب کنید.")
     now = int(time.time())
     taken = {int(x["pay_amount"]) for x in s["orders"]
-             if x.get("mode") == "auto" and x.get("pay_amount") and (x["status"] in ("new", "pending", "processing") or now - int(x.get("ts") or 0) < AUTO_QUARANTINE)}
+             if x.get("mode") == "auto" and x.get("pay_amount") and (x["status"] in ("new", "pending", "processing") or now - int(x.get("ts") or 0) < AUTO_QUARANTINE)} | _rep_taken(c, now)
     pool = [d for d in range(1, 1000) if base + d not in taken]
     if not pool:
         raise ValueError("ظرفیت تأیید خودکار برای این مبلغ پر است؛ چند دقیقه بعد دوباره امتحان کنید یا «با رسید» پرداخت کنید.")
     pay = base + secrets.choice(pool)
-    used = sum(int(x.get("pay_amount") or 0) for x in s["orders"] if x.get("auto_ok") and int(x.get("cts") or 0) > now - 86400)
+    used = sum(int(x.get("pay_amount") or 0) for x in s["orders"] if x.get("auto_ok") and int(x.get("cts") or 0) > now - 86400) + _rep_used(c, now)
     if used + pay > a["daily_max"]:
         raise ValueError("سقف روزانه‌ی تأیید خودکار پر شده است؛ «کارت‌به‌کارت با رسید» را انتخاب کنید.")
     o.update(mode="auto", base=int(base), pay_amount=int(pay), exp=now + a["minutes"] * 60)
@@ -1107,6 +1143,28 @@ def auto_match(text: str) -> dict:
             return
         cand = [o for o in s["orders"] if o.get("mode") == "auto" and o["status"] in ("new", "pending") and int(o.get("pay_amount") or 0) in vals
                 and (o["status"] == "pending" or now <= int(o.get("exp") or 0) + AUTO_GRACE)]
+        rcand = [x for x in c["topups"] if x.get("mode") == "auto" and x["status"] == "pending" and not x.get("hold")
+                 and int(x.get("pay_amount") or 0) in vals and now <= int(x.get("exp") or 0) + AUTO_GRACE]
+        if rcand:                                                   # شارژ خودکار کیف پول نماینده
+            if cand or len(rcand) > 1:
+                log("ambiguous", ",".join([x["id"] for x in cand] + [x["id"] for x in rcand])[:40], int(vals[0]))
+                return
+            rt = rcand[0]
+            amt = int(rt["pay_amount"])
+            rp = c["reps"].get(rt["rid"]) or {}
+            used = sum(int(x.get("pay_amount") or 0) for x in s["orders"] if x.get("auto_ok") and int(x.get("cts") or 0) > now - 86400) + _rep_used(c, now)
+            why = ("نماینده مسدود است" if rp.get("blocked") else "مبلغ از سقف تأیید خودکار بیشتر است" if amt > a["max_amount"]
+                   else "سقف روزانه‌ی تأیید خودکار پر شده" if used + amt > a["daily_max"]
+                   else "سقف موجودی کیف پول رد می‌شود" if int(rp.get("balance") or 0) + amt > C.WALLET_MAX else "")
+            if why:
+                rt["hold"] = why
+                log("hold", rt["id"], amt)
+            else:
+                C.topup_credit_in(c, rt, amt, "شارژ خودکار با پیامک بانک")
+                rt.update(auto_ok=True, cts=now)
+                log("ok", rt["id"], amt)
+            out["topup"] = dict(rt)
+            return
         if not cand:
             late = [o for o in s["orders"] if o.get("mode") == "auto" and o["status"] == "cancelled" and int(o.get("pay_amount") or 0) in vals and now - int(o.get("ts") or 0) < AUTO_QUARANTINE]
             log("late", late[-1]["id"], int(late[-1]["pay_amount"])) if late else log("nomatch", "", vals[0])
@@ -1117,7 +1175,7 @@ def auto_match(text: str) -> dict:
         o = cand[0]
         amt = int(o["pay_amount"])
         cu = s["customers"].get(str(o["uid"])) or {}
-        used = sum(int(x.get("pay_amount") or 0) for x in s["orders"] if x.get("auto_ok") and int(x.get("cts") or 0) > now - 86400)
+        used = sum(int(x.get("pay_amount") or 0) for x in s["orders"] if x.get("auto_ok") and int(x.get("cts") or 0) > now - 86400) + _rep_used(c, now)
         why = "مشتری مسدود است" if cu.get("banned") else "مبلغ از سقف تأیید خودکار بیشتر است" if amt > a["max_amount"] else "سقف روزانه‌ی تأیید خودکار پر شده" if used + amt > a["daily_max"] else ""
         if why:
             if o["status"] == "new":
@@ -1138,6 +1196,16 @@ async def auto_confirm(bot: Bot, text: str) -> dict:
     r = await asyncio.to_thread(auto_match, text)
     res, o = r["res"], r.get("order")
     try:
+        tp = r.get("topup")
+        if tp:                                                      # شارژ خودکار کیف پول نماینده
+            _rp = C.load_config_ro()["reps"].get(tp["rid"]) or {}
+            who = esc(_rp.get("label") or _rp.get("name") or tp["rid"])
+            if res == "ok":
+                C.audit_event("تأیید خودکار", "شارژ خودکار کیف پول نماینده", tp["rid"], f"{money(tp['amount'])} تومان", amount=int(tp["amount"]), cat="wallet")
+                await _notify_admins(bot, f"✅ <b>شارژ خودکار نماینده</b>\nنماینده: <b>{who}</b>\nمبلغ: <b>{money(tp['amount'])}</b> تومان")
+            elif res == "hold":
+                await _notify_admins(bot, f"⚠️ <b>واریز نماینده {who} دیده شد ولی شارژ خودکار انجام نشد</b>\nمبلغ: <b>{money(tp['pay_amount'])}</b> تومان\nعلت: {esc(tp.get('hold') or '')}\n\nاز وب‌پنل ← نماینده‌ها، درخواست را دستی تأیید یا رد کنید.")
+            return {k: v for k, v in r.items() if k not in ("order", "topup")}
         if res == "ok" and o:
             C.audit_event("تأیید خودکار", "تأیید خودکار کارت‌به‌کارت", o["id"], f"{KIND_FA.get(o['kind'], o['kind'])} — {money(o['pay_amount'])} تومان", amount=int(o["pay_amount"]), cat="wallet")
             await _tell(bot, o["uid"], f"✅ <b>پرداخت شما شناسایی شد</b>\nمبلغ: <b>{money(o['pay_amount'])}</b> تومان\nسفارش <b>#{o['id']}</b> در حال انجام است…")
@@ -1166,6 +1234,9 @@ async def maintain(bot: Bot, startup: bool = False) -> None:
     remind: list[dict] = []
 
     def mut(c):
+        for t in c["topups"]:                                       # شارژ خودکار نماینده که مهلتش تمام شد
+            if t.get("mode") == "auto" and t["status"] == "pending" and not t.get("hold") and now > int(t.get("exp") or 0) + AUTO_GRACE:
+                t.update(status="rejected", done=now, hold="مهلت واریز تمام شد")
         for o in c["shop"]["orders"]:
             if o["status"] == "new" and (now > int(o.get("exp") or 0) + AUTO_GRACE if o.get("mode") == "auto" else now - o["ts"] > hours):
                 o["status"] = "cancelled"
