@@ -318,21 +318,35 @@ def _zp_hosts(z: dict) -> tuple[str, str]:
     return z["api_base"] or "https://payment.zarinpal.com", "https://payment.zarinpal.com"
 
 
-async def _zp_call(z: dict, path: str, body: dict) -> dict:
+async def _zp_call(z: dict, path: str, body: dict, attempts: int = 3) -> dict:
+    """تماس با API زرین‌پال. خطای شبکه، HTTP 5xx و پاسخ غیر-JSON تا `attempts` بار با فاصله‌ی فزاینده تکرار می‌شود
+    (verify تکراری بی‌خطر است: کد ۱۰۱ می‌دهد و zp_paid از شارژ دوباره جلوگیری می‌کند). پاسخ JSON زرین‌پال (حتی خطا) هرگز تکرار نمی‌شود."""
     api, _ = _zp_hosts(z)
     kw: dict = {"timeout": httpx.Timeout(20, connect=10), "headers": {"Accept": "application/json", "User-Agent": "ZarinPal Rest Api v4"}}
     if z["proxy"]:
         kw["proxy"] = z["proxy"]
-    try:
-        async with httpx.AsyncClient(**kw) as cl:
-            r = await cl.post(api + path, json={"merchant_id": z["merchant_id"], **body})
-    except httpx.HTTPError as e:
-        raise ValueError(f"ارتباط با زرین‌پال برقرار نشد ({e.__class__.__name__}). اگر سرور شما خارج از ایران است، در تنظیمات درگاه «آدرس API» یا «پروکسی» بگذارید.") from e
-    try:
-        j = r.json()
-    except ValueError:
-        raise ValueError(f"پاسخ نامعتبر از زرین‌پال (HTTP {r.status_code}). اگر سرور خارج از ایران است ممکن است IP مسدود باشد.") from None
-    return j if isinstance(j, dict) else {}
+    last: ValueError | None = None
+    for i in range(max(1, attempts)):
+        if i:
+            await asyncio.sleep(1.5 * i)
+        try:
+            async with httpx.AsyncClient(**kw) as cl:
+                r = await cl.post(api + path, json={"merchant_id": z["merchant_id"], **body})
+        except httpx.HTTPError as e:
+            last = ValueError(f"ارتباط با زرین‌پال برقرار نشد ({e.__class__.__name__}). اگر سرور شما خارج از ایران است، در تنظیمات درگاه «آدرس API» یا «پروکسی» بگذارید.")
+            log.warning("zp call %s تلاش %d/%d: %s", path, i + 1, attempts, e.__class__.__name__)
+            continue
+        if r.status_code >= 500:
+            last = ValueError(f"خطای موقت سرور زرین‌پال (HTTP {r.status_code}).")
+            log.warning("zp call %s تلاش %d/%d: HTTP %s", path, i + 1, attempts, r.status_code)
+            continue
+        try:
+            j = r.json()
+        except ValueError:
+            last = ValueError(f"پاسخ نامعتبر از زرین‌پال (HTTP {r.status_code}). اگر سرور خارج از ایران است ممکن است IP مسدود باشد.")
+            continue
+        return j if isinstance(j, dict) else {}
+    raise last or ValueError("ارتباط با زرین‌پال برقرار نشد.")
 
 
 def _zp_error(j: dict) -> ValueError:
@@ -566,6 +580,48 @@ async def zp_finish(bot: Bot | None, authority: str, status: str) -> dict:
     except Exception:  # noqa: BLE001
         log.exception("zp_finish notify %s", rec["id"])
     return out
+
+
+async def zp_unverified(z: dict) -> list[dict]:
+    """تراکنش‌هایی که مشتری پرداخت کرده ولی verify نشده‌اند (مثلاً مرورگر هیچ‌وقت به callback برنگشته)."""
+    j = await _zp_call(z, "/pg/v4/payment/unVerified.json", {})
+    d = j.get("data")
+    if not isinstance(d, dict) or d.get("code") != 100:
+        raise _zp_error(j)
+    au = d.get("authorities")
+    return [x for x in au if isinstance(x, dict)] if isinstance(au, list) else []
+
+
+async def zp_reconcile(bot: Bot | None) -> int:
+    """پرداخت‌های «پرداخت‌شده ولی verify‌نشده» را از زرین‌پال می‌گیرد و با رکوردهای خودمان تطبیق می‌دهد؛ همان مسیر callback
+    (verify سمت سرور ← اعمال اتمیک یک‌باره ← اطلاع‌رسانی) را اجرا می‌کند. خروجی: تعداد پرداخت‌های نجات‌یافته."""
+    z = C.load_config_ro()["shop"]["zp"]
+    if not z["merchant_id"] or not (z["bot_enabled"] or z["rep_enabled"]):
+        return 0
+    try:
+        items = await zp_unverified(z)
+    except ValueError as e:
+        log.warning("zp reconcile: %s", e)
+        return 0
+    done = 0
+    for it in items[:20]:
+        au = re.sub(r"[^A-Za-z0-9]", "", str(it.get("authority") or ""))[:64]
+        rec = await asyncio.to_thread(_zp_lookup, au) if au else None
+        if not rec or rec["paid"]:
+            continue                                         # متعلق به این ربات نیست یا قبلاً اعمال شده
+        try:
+            paid = int(it.get("amount") or 0)
+        except (TypeError, ValueError):
+            paid = 0
+        if paid and paid != int(rec["amount"]) * 10:         # مبلغ نامنطبق: خودکار اعمال نمی‌کنیم؛ ادمین ببیند
+            log.error("zp reconcile: مبلغ نامنطبق %s (زرین‌پال %s ریال، رکورد %s تومان)", rec["id"], paid, rec["amount"])
+            await asyncio.to_thread(C.update_config, lambda c, r=rec, p=paid: _zp_log(c, "mismatch", r["id"], p // 10))
+            continue
+        r = await zp_finish(bot, au, "OK")
+        if r.get("res") in ("ok", "hold"):
+            done += 1
+            log.info("zp reconcile: پرداخت %s %s شد (کد پیگیری %s)", rec["id"], r["res"], r.get("ref"))
+    return done
 
 
 def _push(s: dict, o: dict) -> None:
@@ -1661,6 +1717,12 @@ async def maintenance_loop(bot: Bot) -> None:
     while True:
         try:
             await maintain(bot, startup=first)
+            try:
+                await zp_reconcile(bot)                     # نجات پرداخت‌هایی که callback‌شان نرسید (هر ~۵ دقیقه)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.exception("zp reconcile")
             first = False
             n += 1
             if n % 6 == 2:                                  # هر ~۳۰ دقیقه (اولین بار ~۱۰ دقیقه بعد از بالا آمدن)
