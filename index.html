@@ -958,9 +958,39 @@ function userItem(u, parent, tab) {
     } catch (e) { repLoaded = false; repSel.replaceChildren(h('option', { value: '' }, 'خطا در دریافت نمایندگان')); }
   };
   d.addEventListener('toggle', () => { if (d.open) loadReps(); });
+  /* ─── فعال‌سازی با تیک تأیید (+ گزینه‌ی «واریز نشده») و ثبت «واریز نشده» در هر زمان ─── */
+  const defH = () => S.st.unpaid_hours || 24;
+  const hoursInp = () => h('input', { type: 'number', min: 1, max: 8760, value: defH(), dir: 'ltr', inputmode: 'numeric' });
+  const actBox = (() => {
+    if (u.status !== 'disabled') return act('⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد');
+    const idc = 'ac' + Math.random().toString(36).slice(2, 8), idu = 'au' + Math.random().toString(36).slice(2, 8);
+    const okC = h('input', { type: 'checkbox', id: idc });
+    const unC = h('input', { type: 'checkbox', id: idu }), unH = hoursInp();
+    const unRow = h('div', { class: 'uh', hidden: true }, 'غیرفعال شدن خودکار بعد از', unH, 'ساعت');
+    unC.addEventListener('change', () => { unRow.hidden = !unC.checked; });
+    const unBox = h('div', { class: 'unpaid-opt', hidden: true }, h('label', { class: 'chk', for: idu }, unC, '💸 واریز نشده (اگر پرداخت نشد، خودکار غیرفعال شود)'), unRow);
+    const go = h('button', { class: 'btn sm pri', type: 'button', disabled: true }, '✅ فعال‌سازی');
+    okC.addEventListener('change', () => { unBox.hidden = !okC.checked; go.disabled = !okC.checked; if (!okC.checked) { unC.checked = false; unRow.hidden = true; } });
+    go.onclick = () => run(go, async () => {
+      const hrs = Math.max(1, Math.round(+unH.value) || defH());
+      const r = await api(P + 'toggle', 'POST', unC.checked ? { unpaid: true, unpaid_hours: hrs } : undefined);
+      toast(unC.checked ? `✅ فعال شد · ${hrs} ساعت دیگر اگر واریز نشود غیرفعال می‌شود` : 'وضعیت تغییر کرد'); swap(r, 'more'); });
+    return h('div', { style: 'flex:1 1 100%' }, h('label', { class: 'chk', for: idc }, okC, 'تأیید فعال‌سازی این کاربر'), unBox, h('div', { class: 'btns', style: 'margin-top:8px' }, go));
+  })();
+  const unpaidNow = (() => {
+    if (u.status === 'disabled') return null;
+    const hI = hoursInp(), b = h('button', { class: 'btn sm', type: 'button' }, u.unpaid_due ? '💸 تغییر مهلت' : '💸 ثبت واریز نشده');
+    b.onclick = () => { const hrs = Math.max(1, Math.round(+hI.value) || defH());
+      if (!confirm(`«${u.username}» «واریز نشده» ثبت شود؟\n\nاگر تا ${hrs} ساعت دیگر «✅ واریز شد» نزنید، خودکار غیرفعال می‌شود.`)) return;
+      run(b, async () => { const r = await api(P + 'unpaid', 'POST', { hours: hrs }); toast(`💸 ثبت شد · ${hrs} ساعت دیگر اگر واریز نشود غیرفعال می‌شود`); swap(r, 'more'); }); };
+    return h('div', { class: 'unpaid-opt' }, h('b', { style: 'font-size:var(--fs-sm)' }, '💸 واریز نشده (هر زمان)'),
+      h('div', { class: 'uh' }, 'غیرفعال شدن خودکار بعد از', hI, 'ساعت'), h('div', { class: 'btns', style: 'margin-top:6px' }, b));
+  })();
   const paneMore = h('div', {}, h('div', { class: 'btns', style: 'margin-top:0' },
     act('🔗 لینک جدید', P + 'revoke', 'لینک جدید ساخته شد'),
-    act(u.status === 'disabled' ? '✅ فعال‌سازی' : '⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد'), del),
+    u.status === 'disabled' ? null : actBox, del),
+    u.status === 'disabled' ? h('div', { class: 'unpaid-opt', style: 'border-style:solid' }, actBox) : null,
+    unpaidNow,
     h('p', { class: 'hint' }, '«لینک جدید» لینک اشتراک قبلی را از کار می‌اندازد.'),
     h('div', { class: 'psec', style: 'margin-top:12px' }, h('b', {}, '👤 تخصیص به نماینده')),
     h('div', { class: 'btns', style: 'margin-top:6px;align-items:stretch' }, repSel, repOk, u.rep_id ? repRm : null),
