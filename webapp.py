@@ -923,6 +923,7 @@ async def rep_wallet(rep=Depends(rep_guard)):
             "sales": await asyncio.to_thread(sales.rep_daily_sales, rid, 7),
             "log": list(reversed(rp["log"]))[:30],
             "topups": [t for t in reversed(cfg["topups"]) if t["rid"] == rid][:15],
+            "zp_ok": shop.zp_ok(cfg["shop"], "rep", 1000), "zp_max": cfg["shop"]["zp"]["max_amount"],
             "auto_ok": bool(cfg["shop"]["auto"]["enabled"] and cfg["shop"]["cards"]), "auto_cards": [dict(x) for x in cfg["shop"]["cards"]], "now": int(time.time())}
 
 
@@ -930,11 +931,19 @@ class RepTopupReq(BaseModel):
     amount: int = Field(ge=1000, le=10 ** 10)
     note: str = Field(default="", max_length=200)
     auto: bool = False
+    zp: bool = False
 
 
 @app.post("/api/rep/topup")
 async def rep_topup(r: RepTopupReq, rep=Depends(rep_guard)):
     rid = rep[0]
+    if r.zp:                                                           # پرداخت آنلاین زرین‌پال
+        try:
+            rec = await asyncio.to_thread(shop.rep_topup_zp_new, rid, r.amount, r.note)
+            rec = await shop.zp_start_topup(rec)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "id": rec["id"], "zp": True, "url": rec["zp_url"]}
     if r.auto:                                                         # شارژ خودکار با پیامک بانک
         try:
             rec = await asyncio.to_thread(shop.rep_topup_auto_new, rid, r.amount, r.note)
@@ -1408,7 +1417,7 @@ async def reps_list():
     return {"reps": [{"id": i, "name": r["name"], "label": r["label"], "blocked": r["blocked"], "locked": r["locked"], "fails": r["fails"], "locked_at": r["locked_at"],
                       "count": cnt.get(i, 0), "created": r["created"], "balance": r["balance"], "tpls": r["tpls"], "panel": r["panel"], "next_plan": bool(r.get("next_plan"))}
                      for i, r in cfg["reps"].items()],
-            "topups": [{**t, "rep": cfg["reps"][t["rid"]]["label"] or cfg["reps"][t["rid"]]["name"]} for t in cfg["topups"] if t["status"] == "pending"]}
+            "topups": [{**t, "rep": cfg["reps"][t["rid"]]["label"] or cfg["reps"][t["rid"]]["name"]} for t in cfg["topups"] if C.topup_for_admin(t)]}
 
 
 @app.get("/api/topups/pending", dependencies=[Depends(guard)])
@@ -1416,7 +1425,7 @@ async def topups_pending():
     """درخواست‌های افزایش موجودی در انتظار؛ سبک و مناسب polling برای اعلان بالای صفحه و عدد تب تنظیمات."""
     cfg = C.load_config_ro()
     items = [{"id": t["id"], "rid": t["rid"], "rep": (cfg["reps"].get(t["rid"], {}).get("label") or cfg["reps"].get(t["rid"], {}).get("name") or t["rid"]),
-              "amount": t.get("amount", 0), "ts": t.get("ts", 0)} for t in cfg["topups"] if t.get("status") == "pending"]
+              "amount": t.get("amount", 0), "ts": t.get("ts", 0)} for t in cfg["topups"] if C.topup_for_admin(t)]
     return {"count": len(items), "items": items[-20:]}
 
 
@@ -2269,7 +2278,7 @@ async def health(request: Request):
 
     pend = [t for t in cfg["wallet_tx"] if t["state"] == "pending" and t["kind"] == "purchase"]
     stale = [t for t in pend if time.time() - t["ts"] > 600]
-    tops = sum(1 for t in cfg["topups"] if t.get("status") == "pending")
+    tops = sum(1 for t in cfg["topups"] if C.topup_for_admin(t))
     neg = [r for r in cfg["reps"].values() if r["balance"] < 0]
     lv = "bad" if (stale or neg) else ("warn" if (pend or tops) else "ok")
     bits = [f"موجودی کل نماینده‌ها {sum(r['balance'] for r in cfg['reps'].values()):,} تومان"]
@@ -2759,7 +2768,7 @@ def live():
     cfg = C.load_config_ro()
     reps = cfg["reps"]
     top = [{"id": t["id"], "rep": (reps.get(t["rid"], {}).get("label") or reps.get(t["rid"], {}).get("name") or t["rid"]),
-            "amount": t.get("amount", 0), "ts": t.get("ts", 0)} for t in cfg["topups"] if t.get("status") == "pending"]
+            "amount": t.get("amount", 0), "ts": t.get("ts", 0)} for t in cfg["topups"] if C.topup_for_admin(t)]
     s = cfg["shop"]
     custs = s["customers"]
     items = [{"id": o["id"], "kind": o.get("kind", ""), "status": o["status"], "amount": int(o.get("amount") or 0),
@@ -2776,6 +2785,18 @@ def shop_summary():
     return {"pending": cnt["pending"], "failed": cnt["failed"], "enabled": s["enabled"], "has_token": bool(s["token"])}
 
 
+def _mask_proxy(px: str) -> str:
+    m = re.fullmatch(r"(https?://)(?:[^@/]*@)?(.+)", px or "")
+    return (m.group(1) + ("***@" if "@" in px else "") + m.group(2)) if m else ""
+
+
+def _zp_view(z: dict) -> dict:
+    mid = z["merchant_id"]
+    return {"bot_enabled": z["bot_enabled"], "rep_enabled": z["rep_enabled"], "has_merchant": bool(mid), "merchant_hint": ("…" + mid[-6:]) if mid else "",
+            "sandbox": z["sandbox"], "base_url": z["base_url"], "default_base": C.public_base_url(), "api_base": z["api_base"], "proxy": _mask_proxy(z["proxy"]),
+            "max_amount": z["max_amount"], "log": z["log"][-10:]}
+
+
 @app.get("/api/shop", dependencies=[Depends(guard)])
 def shop_overview():
     cfg = C.load_config_ro()
@@ -2790,6 +2811,7 @@ def shop_overview():
             "receipt_hours": s["receipt_hours"], "has_token": bool(tok), "token_hint": ("…" + tok[-6:]) if tok else "",
             "test": s["test"], "force": s["force"], "remind": s["remind"], "plans": s["plans"], "templates": [{"name": n, "gb": t["gb"], "days": t["days"], "price": t.get("price", 0)} for n, t in cfg["templates"].items()],
             "auto": {k: s["auto"][k] for k in ("enabled", "secret", "unit", "minutes", "max_amount", "daily_max", "must")} | {"log": s["auto"]["log"][-10:]},
+            "zp": _zp_view(s["zp"]),
             "counts": cnt, "customers": len(s["customers"]), "wallet_total": sum(c["balance"] for c in s["customers"].values()),
             "sales_total": sales_total, "sales_24h": sales_24h}
 
@@ -2818,6 +2840,14 @@ class ShopSettingsReq(BaseModel):
     auto_max: int | None = Field(default=None, ge=1000, le=10 ** 9)
     auto_daily: int | None = Field(default=None, ge=1000, le=10 ** 10)
     auto_must: str | None = Field(default=None, max_length=120)
+    zp_bot: bool | None = None
+    zp_rep: bool | None = None
+    zp_merchant: str | None = Field(default=None, max_length=80)
+    zp_sandbox: bool | None = None
+    zp_base: str | None = Field(default=None, max_length=120)
+    zp_api: str | None = Field(default=None, max_length=120)
+    zp_proxy: str | None = Field(default=None, max_length=200)
+    zp_max: int | None = Field(default=None, ge=1000, le=10 ** 9)
     code: str = Field(default="", max_length=64)
 
 
@@ -2865,8 +2895,29 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
     token_changed = bool(tok_new and tok_new != cur["shop"]["token"]) or (r.clear_token and bool(cur["shop"]["token"]))
     card_changed = cards_new is not None and digits != ",".join(c["number"] for c in cur["shop"]["cards"])
     auto_changed = r.auto_regen or any(x is not None for x in (r.auto_enabled, r.auto_unit, r.auto_minutes, r.auto_max, r.auto_daily, r.auto_must))
-    if token_changed or card_changed or auto_changed:        # توکن، کارت و تأیید خودکار = مسیر تأیید پرداخت/تصاحب ربات؛ با 2FA روشن کد تازه می‌خواهد
-        await _gate_code(request, r.code, None, "تغییر توکن ربات فروش، شماره کارت یا تنظیمات تأیید خودکار", always=True)
+    zp_new = (r.zp_merchant or "").strip()
+    if "…" in zp_new:                                      # مقدار نمایشیِ مخفی‌شده دوباره فرستاده شده؛ تغییری نیست
+        zp_new = ""
+    zp_px = (r.zp_proxy or "").strip()
+    if "***" in zp_px:
+        zp_px = None
+    zp_vals = (r.zp_bot, r.zp_rep, r.zp_sandbox, r.zp_base, r.zp_api, r.zp_max)
+    zp_changed = bool(zp_new) or zp_px is not None and r.zp_proxy is not None or any(x is not None for x in zp_vals)
+    if zp_new and not C._ZP_MERCHANT_RE.fullmatch(zp_new):
+        raise HTTPException(400, "مرچنت‌کد زرین‌پال باید ۳۶ نویسه به شکل xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx باشد.")
+    for _lab, _v in (("آدرس بازگشت", r.zp_base), ("آدرس API", r.zp_api)):
+        if _v is not None and _v.strip() and not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d{2,5})?/?", _v.strip()):
+            raise HTTPException(400, f"{_lab} باید به شکل https://example.com باشد (بدون مسیر).")
+    if zp_px and not re.fullmatch(r"https?://\S+", zp_px):
+        raise HTTPException(400, "پروکسی باید به شکل http://host:port یا http://user:pass@host:port باشد.")
+    if zp_changed and (r.zp_bot or r.zp_rep):
+        cz = cur["shop"]["zp"]
+        if not (zp_new or cz["merchant_id"]):
+            raise HTTPException(400, "اول مرچنت‌کد زرین‌پال را وارد کنید.")
+        if not ((r.zp_base or "").strip() or cz["base_url"] or C.public_base_url()):
+            raise HTTPException(400, "آدرس بازگشت درگاه مشخص نیست؛ SSL/دامنه‌ی وب‌پنل را فعال کنید یا «آدرس بازگشت» را (مثل https://panel.example.com:8686) بنویسید.")
+    if token_changed or card_changed or auto_changed or zp_changed:        # توکن، کارت، تأیید خودکار و درگاه آنلاین = مسیر تأیید پرداخت؛ با 2FA روشن کد تازه می‌خواهد
+        await _gate_code(request, r.code, None, "تغییر توکن ربات فروش، شماره کارت، تأیید خودکار یا درگاه آنلاین", always=True)
     username = ""
     if tok_new and token_changed:
         if not _SHOP_TOKEN_RE.match(tok_new):
@@ -2930,12 +2981,30 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
             au["must"] = r.auto_must.strip()[:120]
         if r.auto_enabled is not None:
             au["enabled"] = r.auto_enabled
+        zp = sh["zp"]
+        if zp_new:
+            zp["merchant_id"] = zp_new
+        if r.zp_sandbox is not None:
+            zp["sandbox"] = r.zp_sandbox
+        if r.zp_base is not None:
+            zp["base_url"] = r.zp_base.strip().rstrip("/")
+        if r.zp_api is not None:
+            zp["api_base"] = r.zp_api.strip().rstrip("/")
+        if r.zp_proxy is not None and zp_px is not None:
+            zp["proxy"] = zp_px
+        if r.zp_max is not None:
+            zp["max_amount"] = r.zp_max
+        if r.zp_bot is not None:
+            zp["bot_enabled"] = r.zp_bot
+        if r.zp_rep is not None:
+            zp["rep_enabled"] = r.zp_rep
     update_config(mut)
     what = [k for k, v in (("وضعیت باز/بسته", r.enabled is not None), ("پنل فروش", r.panel is not None), ("کارت‌ها", cards_new is not None),
                            ("متن‌ها", r.welcome is not None or r.support is not None), ("محدوده شارژ/مهلت رسید", r.min_topup is not None or r.max_topup is not None or r.receipt_hours is not None),
                            ("عضویت اجباری", r.force_enabled is not None or force_list is not None), ("تست رایگان", r.test_enabled is not None or r.test_template is not None or r.test_prefix is not None or r.test_hours is not None),
                            ("توکن ربات فروش", token_changed),
-                           ("تأیید خودکار", any(x is not None for x in (r.auto_enabled, r.auto_unit, r.auto_minutes, r.auto_max, r.auto_daily, r.auto_must)) or r.auto_regen)) if v]
+                           ("تأیید خودکار", any(x is not None for x in (r.auto_enabled, r.auto_unit, r.auto_minutes, r.auto_max, r.auto_daily, r.auto_must)) or r.auto_regen),
+                           ("درگاه زرین‌پال" + (" (مرچنت‌کد عوض شد)" if zp_new else ""), zp_changed)) if v]
     _aud("تنظیمات فروشگاه", "", "، ".join(what) + (f" — " + "، ".join("****" + c["number"][-4:] for c in cards_new) if cards_new else ""), "sys")
     restarted = False
     if token_changed:                         # Runner فقط داخل پروسه‌ی ربات است؛ برای اتصال/قطع ربات فروش ربات مدیریت ریستارت می‌شود
@@ -2949,6 +3018,90 @@ async def shop_settings(r: ShopSettingsReq, request: Request):
             log.warning("ریستارت خودکار ربات برای ربات فروش ممکن نشد؛ دستی: rebecca-bot restart")
     return {"ok": True, "bot_restarted": restarted, "username": username}
 
+
+
+# ── درگاه آنلاین زرین‌پال ──
+@app.post("/api/shop/zp/test", dependencies=[Depends(guard)])
+async def shop_zp_test():
+    """تست اتصال: یک درخواست پرداخت ۱٬۰۰۰ تومانی می‌سازد (پولی کم نمی‌شود؛ پرداخت نشود خودش منقضی می‌شود)."""
+    cfg = C.load_config_ro()
+    z = cfg["shop"]["zp"]
+    if not z["merchant_id"]:
+        raise HTTPException(400, "اول مرچنت‌کد را ذخیره کنید.")
+    base = shop.zp_base_url(cfg)
+    if not base:
+        raise HTTPException(400, "آدرس بازگشت مشخص نیست.")
+    try:
+        await shop.zp_request(1000, "تست اتصال", z, base)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+_zp_hits: dict[str, list[float]] = {}
+_ZP_PAGE = """<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>نتیجه پرداخت</title><style>body{margin:0;font-family:Tahoma,Vazirmatn,sans-serif;background:#0f1419;color:#e8eaed;display:flex;min-height:100vh;align-items:center;justify-content:center}
+.c{max-width:420px;width:90%;background:#18202a;border-radius:16px;padding:28px;text-align:center;box-shadow:0 8px 30px #0006}
+.i{font-size:54px}h1{font-size:19px;margin:10px 0}p{color:#aab4c0;line-height:1.9;font-size:14px}code{direction:ltr;display:inline-block;background:#0f1419;padding:3px 8px;border-radius:6px}
+a.b{display:inline-block;margin-top:14px;background:#3b82f6;color:#fff;text-decoration:none;padding:10px 22px;border-radius:10px;font-size:14px}</style></head>
+<body><div class="c"><div class="i">__ICON__</div><h1>__TITLE__</h1><p>__BODY__</p>__BTN__</div></body></html>"""
+
+
+def _zp_page(r: dict) -> HTMLResponse:
+    from html import escape
+    res, kind, amt = r.get("res"), r.get("kind"), int(r.get("amount") or 0)
+    ref = f"<br>کد پیگیری: <code>{escape(str(r.get('ref') or ''))}</code>" if r.get("ref") else ""
+    money = f"<br>مبلغ: <b>{amt:,}</b> تومان" if amt else ""
+    if res in ("ok", "paid"):
+        icon, title = "✅", "پرداخت با موفقیت انجام شد"
+        body = ("کیف پول شما شارژ شد." if kind == "rep" else "سفارش شما در حال انجام است؛ نتیجه را داخل ربات تلگرام می‌گیرید.") + money + ref
+    elif res == "hold":
+        icon, title, body = "🕓", "پرداخت دریافت شد", "پرداخت شما ثبت شد و برای بررسی نهایی به ادمین رفت؛ نگران نباشید، پول از بین نمی‌رود." + money + ref
+    elif res == "cancelled":
+        icon, title, body = "✖️", "پرداخت انجام نشد", "پرداخت لغو شد یا ناموفق بود. اگر مبلغی از حساب شما کسر شده، ظرف چند دقیقه به حسابتان برمی‌گردد."
+    elif res == "failed":
+        icon, title, body = "⚠️", "تأیید پرداخت ممکن نشد", escape(str(r.get("msg") or "")) + "<br>اگر پول از حساب شما کسر شده، چند دقیقه بعد همین صفحه را دوباره باز کنید یا با پشتیبانی تماس بگیرید."
+    elif res == "unknown":
+        icon, title, body = "❔", "پرداخت پیدا نشد", "این لینک نامعتبر یا منقضی است."
+    else:
+        icon, title, body = "⚠️", "خطا در پردازش", escape(str(r.get("msg") or "خطای موقت؛ چند دقیقه بعد دوباره امتحان کنید."))
+    btn = ""
+    if kind == "rep":
+        btn = '<a class="b" href="/">بازگشت به پنل</a>'
+    elif r.get("bot"):
+        btn = f'<a class="b" href="https://t.me/{escape(str(r["bot"]))}">بازگشت به ربات</a>'
+    html = _ZP_PAGE.replace("__ICON__", icon).replace("__TITLE__", title).replace("__BODY__", body).replace("__BTN__", btn)
+    return HTMLResponse(html, headers=_PAGE_HEADERS)
+
+
+@app.get("/pay/zp/callback")
+async def zp_callback(request: Request):
+    """بازگشت مرورگر از درگاه. عمومی است؛ ولی هیچ‌چیز از پارامترها باور نمی‌شود: فقط Authority شناخته‌شده + verify سمت سرور."""
+    ip, now = _client_ip(request), time.time()
+    recent = [t for t in _zp_hits.get(ip, []) if now - t < 600]
+    if len(recent) >= 40:
+        return HTMLResponse("تعداد درخواست زیاد است؛ چند دقیقه بعد دوباره امتحان کنید.", status_code=429)
+    _zp_hits[ip] = recent + [now]
+    authority = request.query_params.get("Authority", "")[:64]
+    status = request.query_params.get("Status", "")[:8]
+    token = C.load_config_ro()["shop"]["token"]
+
+    async def _run():
+        if token:
+            async with Bot(token) as b:
+                return await shop.zp_finish(b, authority, status)
+        return await shop.zp_finish(None, authority, status)
+    task = asyncio.create_task(_run())                               # اگر مرورگر وسط کار بسته شد، شارژ/انجام سفارش نیمه‌کاره نمی‌ماند
+    _bg.add(task)
+    task.add_done_callback(_bg.discard)
+    try:
+        r = await asyncio.wait_for(asyncio.shield(task), 45)
+    except asyncio.TimeoutError:
+        r = {"res": "error", "msg": "پردازش پرداخت کمی طول کشید؛ چند دقیقه بعد وضعیت را داخل ربات یا پنل ببینید."}
+    except Exception:  # noqa: BLE001
+        log.exception("zp callback")
+        r = {"res": "error", "msg": "خطای غیرمنتظره؛ اگر پول کسر شده با پشتیبانی تماس بگیرید."}
+    return _zp_page(r)
 
 
 # ── وب‌هوک تأیید خودکار (پیامک واریز بانک) ──
