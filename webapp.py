@@ -1765,6 +1765,8 @@ async def users(search: str = "", status: str = "", offset: int = Query(0, ge=0)
 
 
 class EditReq(BaseModel):
+    unpaid: bool = False                                             # فقط برای toggle: بعد از فعال‌سازی «واریز نشده» ثبت شود
+    unpaid_hours: int | None = Field(default=None, ge=1, le=24 * 365)
     gb: float | None = Field(default=None, ge=0, le=100000)
     days: int | None = Field(default=None, ge=0, le=36500)
     add_gb: float | None = Field(default=None, gt=0, le=100000)     # افزودن حجم به حجم فعلی
@@ -1870,6 +1872,21 @@ async def user_next_plans(uname: str, r: NextPlansReq, api: RebeccaClient = Depe
     return _slim(res, api)
 
 
+class UnpaidReq(BaseModel):
+    hours: int | None = Field(default=None, ge=1, le=24 * 365)       # خالی = مهلت پیش‌فرض تنظیمات
+
+
+@app.post("/api/user/{uname}/unpaid", dependencies=[Depends(guard)])
+async def user_unpaid(uname: str, r: UnpaidReq | None = None, api: RebeccaClient = Depends(P)):
+    """هر زمان: کاربر را «واریز نشده» می‌کند؛ بعد از مهلت اگر «واریز شد» نخورد خودکار غیرفعال می‌شود."""
+    cur = await api.request("GET", api.upath(uname))
+    if cur.get("status") == "disabled":
+        raise HTTPException(400, "کاربر غیرفعال است؛ «واریز نشده» برای کاربر فعال/در انتظار معنی دارد (موقع فعال‌سازی هم می‌توانید بزنید).")
+    due = await asyncio.to_thread(C.unpaid_mark, api.pid, uname, r.hours if r else None)
+    _aud("ثبت واریز نشده برای کاربر", uname, f"مهلت تا غیرفعال‌سازی: {r.hours if r and r.hours else load_config()['unpaid']['hours']} ساعت")
+    return _slim(await api.request("GET", api.upath(uname)), api)
+
+
 @app.post("/api/user/{uname}/paid", dependencies=[Depends(guard)])
 async def user_paid(uname: str, api: RebeccaClient = Depends(P)):
     """«واریز شد»: شمارش معکوس غیرفعال‌سازی لغو می‌شود."""
@@ -1947,7 +1964,13 @@ async def user_action(uname: str, action: str, body: EditReq | None = None, api:
         cur = await api.request("GET", p)
         new = "active" if cur.get("status") == "disabled" else "disabled"
         res = await api.request("PUT", p, json={"status": new})
-        _aud("فعال‌سازی کاربر" if new == "active" else "غیرفعال‌سازی کاربر", uname)
+        b = body or EditReq()
+        if new == "active" and b.unpaid:                       # فعال‌سازی «واریز نشده» ← شمارش معکوس غیرفعال‌سازی
+            await asyncio.to_thread(C.unpaid_mark, api.pid, uname, b.unpaid_hours)
+        else:                                                  # فعال‌سازی عادی یا غیرفعال‌سازی ← علامت قبلی پاک شود
+            await asyncio.to_thread(C.unpaid_clear, api.pid, uname)
+        _aud("فعال‌سازی کاربر" if new == "active" else "غیرفعال‌سازی کاربر", uname,
+             f"واریز نشده: {b.unpaid_hours or load_config()['unpaid']['hours']} ساعت" if (new == "active" and b.unpaid) else "")
         return _slim(res, api)
     if action == "edit":
         b = body or EditReq()
