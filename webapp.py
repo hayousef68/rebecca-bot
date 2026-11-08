@@ -3078,6 +3078,9 @@ def _zp_page(r: dict) -> HTMLResponse:
 async def zp_callback(request: Request):
     """بازگشت مرورگر از درگاه. عمومی است؛ ولی هیچ‌چیز از پارامترها باور نمی‌شود: فقط Authority شناخته‌شده + verify سمت سرور."""
     ip, now = _client_ip(request), time.time()
+    if len(_zp_hits) > 2000:                                         # جلوگیری از رشد بی‌پایان حافظه (IP‌های قدیمی)
+        for k in [k for k, v in _zp_hits.items() if not v or now - v[-1] >= 600]:
+            del _zp_hits[k]
     recent = [t for t in _zp_hits.get(ip, []) if now - t < 600]
     if len(recent) >= 40:
         return HTMLResponse("تعداد درخواست زیاد است؛ چند دقیقه بعد دوباره امتحان کنید.", status_code=429)
