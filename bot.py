@@ -310,8 +310,14 @@ async def confirm_step(update, context):
             f"📂 سرویس: {esc(cr['services'].get(cr['service_id'], cr['service_id']))}")
     qr_on = cr.setdefault("qr", True)
     text += f"\n🖼 ارسال QR همراه لینک: <b>{'روشن ✅' if qr_on else 'خاموش ⛔'}</b>"
-    kb = cancel_kb([[B(f"🖼 QR همراه لینک: {'✅ بله' if qr_on else '⛔ خیر (فقط لینک)'}", callback_data="c:qr")],
-                    [B("✅ شروع ساخت", callback_data="c:go")]])
+    rows = [[B(f"🖼 QR همراه لینک: {'✅ بله' if qr_on else '⛔ خیر (فقط لینک)'}", callback_data="c:qr")]]
+    if len(names) == 1:                                   # «واریز نشده» فقط برای ساخت تکی
+        up_on = cr.setdefault("unpaid", False)
+        hrs = load_config()["unpaid"]["hours"]
+        text += f"\n💸 واریز نشده: <b>{f'روشن ✅ ({hrs} ساعت تا غیرفعال‌سازی خودکار)' if up_on else 'خاموش ⛔'}</b>"
+        rows.append([B(f"💸 واریز نشده: {'✅ روشن' if up_on else '⛔ خاموش'}", callback_data="c:unp")])
+    rows.append([B("✅ شروع ساخت", callback_data="c:go")])
+    kb = cancel_kb(rows)
     await show(update, context, text, kb)
     return C_CONFIRM
 
@@ -325,6 +331,18 @@ async def create_toggle_qr(update, context):
         await show(update, context, "⚠️ نشست منقضی شد. دوباره شروع کنید.", main_kb())
         return END
     cr["qr"] = not cr.get("qr", True)
+    return await confirm_step(update, context)
+
+
+@admin_only
+async def create_toggle_unpaid(update, context):
+    q = update.callback_query
+    await q.answer()
+    cr = context.user_data.get("cr")
+    if not cr or "names" not in cr:
+        await show(update, context, "⚠️ نشست منقضی شد. دوباره شروع کنید.", main_kb())
+        return END
+    cr["unpaid"] = not cr.get("unpaid", False)
     return await confirm_step(update, context)
 
 
@@ -354,6 +372,8 @@ async def create_go(update, context):
     await progress(0, len(names))
     results, failed = await C.create_users(get_api(cr["pid"]), names, tpl, cr["service_id"], on_progress=progress)
     context.user_data.clear()
+    if results and len(names) == 1 and cr.get("unpaid"):
+        await asyncio.to_thread(C.unpaid_mark, cr["pid"], results[0]["username"], None)
 
     if not results:
         reason = failed[0][1] if failed else "نامشخص"
@@ -810,6 +830,7 @@ async def user_action(update, context):
             cur = await api.request("GET", p)
             new = "active" if cur.get("status") == "disabled" else "disabled"
             await api.request("PUT", p, json={"status": new})
+            await asyncio.to_thread(C.unpaid_clear, pid, uname)
             _aud(update, "فعال‌سازی کاربر" if new == "active" else "غیرفعال‌سازی کاربر", uname)
             await q.answer(f"وضعیت: {new}")
         else:
@@ -1180,7 +1201,7 @@ def build_app() -> Application:
             C_START: [cb(create_start, pattern=r"^c:single$"), MessageHandler(txt, create_start)],
             C_COUNT: [MessageHandler(txt, create_count)],
             C_SERVICE: [cb(create_service, pattern=r"^srv:\d+$")],
-            C_CONFIRM: [cb(create_go, pattern=r"^c:go$"), cb(create_toggle_qr, pattern=r"^c:qr$")],
+            C_CONFIRM: [cb(create_go, pattern=r"^c:go$"), cb(create_toggle_qr, pattern=r"^c:qr$"), cb(create_toggle_unpaid, pattern=r"^c:unp$")],
             T_NAME: [MessageHandler(txt, tpl_new_name)], T_GB: [MessageHandler(txt, tpl_new_gb)],
             T_DAYS: [MessageHandler(txt, tpl_new_days)], T_EDIT: [MessageHandler(txt, tpl_edit_value)],
             D_USER: [MessageHandler(txt, db_user)], D_PASS: [MessageHandler(txt, db_pass)],
