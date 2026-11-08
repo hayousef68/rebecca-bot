@@ -36,6 +36,8 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+import httpx
+
 import common as C
 import sales
 import tlsutil
@@ -49,6 +51,8 @@ STUCK_SECONDS = 600          # «در حال انجام» بیشتر از این
 REMIND_SECONDS = 3 * 3600    # یادآوری رسیدهای بررسی‌نشده به ادمین
 AUTO_GRACE = 900             # تأخیر مجاز پیامک بانک بعد از پایان مهلت سفارش خودکار (ثانیه)
 AUTO_QUARANTINE = 3 * 3600   # مبلغ یکتای هر سفارش خودکار تا این مدت بعد از ساخت برای سفارش دیگری استفاده نمی‌شود
+ZP_MINUTES = 30              # اعتبار لینک پرداخت زرین‌پال (دقیقه)
+ZP_GRACE = 1800              # بعد از پایان اعتبار، پرداختِ دیررسیده هنوز پذیرفته و انجام می‌شود (ثانیه)
 KIND_FA = {"buy": "خرید کانفیگ", "renew": "تمدید سرویس", "topup": "شارژ کیف پول"}
 STATUS_FA = {"new": "⏳ منتظر رسید", "pending": "🕓 در انتظار تأیید", "processing": "⚙️ در حال انجام", "done": "✅ انجام شد",
              "rejected": "❌ رد شد", "cancelled": "🚫 لغو شد", "failed": "⚠️ نیاز به بررسی ادمین", "refunded": "↩️ مبلغ برگشت داده شد",
@@ -213,6 +217,15 @@ def _build_order(c: dict, uid: int, kind: str, plan_id: str = "", amount: int = 
         _auto_prepare(s, o, int(amount), c)
         if kind == "topup":
             amount = o["pay_amount"]               # کیف پول دقیقاً به اندازه‌ی مبلغ واریزی شارژ می‌شود
+    elif mode == "zp":
+        z = s["zp"]
+        if not (z["bot_enabled"] and z["merchant_id"]):
+            raise ValueError("پرداخت آنلاین فعلاً در دسترس نیست؛ «کارت‌به‌کارت» را انتخاب کنید.")
+        if not zp_base_url(c):
+            raise ValueError("آدرس بازگشت درگاه تنظیم نشده است؛ به پشتیبانی اطلاع دهید.")
+        if not 1000 <= int(amount) <= z["max_amount"]:
+            raise ValueError(f"مبلغ پرداخت آنلاین باید بین {money(1000)} و {money(z['max_amount'])} تومان باشد.")
+        o.update(mode="zp", method="zp", exp=int(time.time()) + ZP_MINUTES * 60, zp_auth="", zp_url="", zp_paid=False)
     o["amount"] = int(amount)
     return s, cu, o
 
@@ -238,7 +251,7 @@ def rep_topup_auto_new(rid: str, base: int, note: str = "") -> dict:
         s = c["shop"]
         if int(base) < s["min_topup"] or int(base) > s["max_topup"]:
             raise ValueError(f"مبلغ شارژ خودکار باید بین {money(s['min_topup'])} و {money(s['max_topup'])} تومان باشد.")
-        if sum(1 for t in c["topups"] if t["rid"] == rid and t["status"] == "pending") >= 5:
+        if sum(1 for t in c["topups"] if t["rid"] == rid and C.topup_for_admin(t)) >= 5:
             raise ValueError("۵ درخواست در انتظار دارید؛ یکی را لغو کنید یا صبر کنید.")
         o: dict = {}
         _auto_prepare(s, o, int(base), c)
@@ -273,6 +286,286 @@ def _auto_prepare(s: dict, o: dict, base: int, c: dict | None = None) -> None:
     if used + pay > a["daily_max"]:
         raise ValueError("سقف روزانه‌ی تأیید خودکار پر شده است؛ «کارت‌به‌کارت با رسید» را انتخاب کنید.")
     o.update(mode="auto", base=int(base), pay_amount=int(pay), exp=now + a["minutes"] * 60)
+
+
+# ═════════════════════════════ درگاه آنلاین زرین‌پال ═════════════════════════════
+# جریان: ساخت سفارش/درخواست (mode=zp) ← درخواست به زرین‌پال و گرفتن Authority ← مشتری در درگاه پرداخت می‌کند ←
+# زرین‌پال مرورگر را به /pay/zp/callback برمی‌گرداند ← verify سمت سرور ← فقط اگر verify موفق بود، یک‌بار (اتمیک) سفارش «در حال انجام»
+# یا کیف پول نماینده شارژ می‌شود. تکرار callback/refresh/verify دوباره (کد ۱۰۱) هیچ‌وقت دوباره شارژ نمی‌کند (zp_paid).
+_ZP_ERR = {-9: "اطلاعات درخواست نامعتبر است (مبلغ یا آدرس بازگشت).", -10: "مرچنت‌کد یا IP سرور مورد قبول زرین‌پال نیست.",
+           -11: "درخواست مرچنت یافت نشد یا مرچنت غیرفعال است.", -12: "تعداد تلاش بیش از حد؛ کمی بعد دوباره امتحان کنید.",
+           -15: "درگاه پذیرنده در حالت تعلیق است.", -16: "سطح تأیید پذیرنده برای این عملیات کافی نیست.",
+           -50: "مبلغ پرداخت‌شده با مبلغ درخواست یکی نیست.", -51: "پرداخت ناموفق بود.", -52: "خطای غیرمنتظره‌ی زرین‌پال.",
+           -53: "این پرداخت متعلق به این پذیرنده نیست.", -54: "درخواست پرداخت نامعتبر یا منقضی است."}
+
+
+def zp_base_url(c: dict | None = None) -> str:
+    """آدرس عمومی وب‌پنل برای بازگشت از درگاه (اول مقدار دستیِ ادمین، بعد آدرس https وب‌پنل)."""
+    z = ((c or C.load_config_ro())["shop"]).get("zp") or {}
+    return z.get("base_url") or C.public_base_url()
+
+
+def zp_ok(s: dict, who: str, amount: int) -> bool:
+    """آیا پرداخت آنلاین برای «bot» (مشتری ربات) یا «rep» (نماینده) فعال و مجاز است؟"""
+    z = s.get("zp") or {}
+    return bool(z.get("merchant_id") and z.get("bot_enabled" if who == "bot" else "rep_enabled") and zp_base_url()
+                and 1000 <= int(amount) <= z.get("max_amount", 0))
+
+
+def _zp_hosts(z: dict) -> tuple[str, str]:
+    if z["sandbox"]:
+        return z["api_base"] or "https://sandbox.zarinpal.com", "https://sandbox.zarinpal.com"
+    return z["api_base"] or "https://payment.zarinpal.com", "https://payment.zarinpal.com"
+
+
+async def _zp_call(z: dict, path: str, body: dict) -> dict:
+    api, _ = _zp_hosts(z)
+    kw: dict = {"timeout": httpx.Timeout(20, connect=10), "headers": {"Accept": "application/json", "User-Agent": "ZarinPal Rest Api v4"}}
+    if z["proxy"]:
+        kw["proxy"] = z["proxy"]
+    try:
+        async with httpx.AsyncClient(**kw) as cl:
+            r = await cl.post(api + path, json={"merchant_id": z["merchant_id"], **body})
+    except httpx.HTTPError as e:
+        raise ValueError(f"ارتباط با زرین‌پال برقرار نشد ({e.__class__.__name__}). اگر سرور شما خارج از ایران است، در تنظیمات درگاه «آدرس API» یا «پروکسی» بگذارید.") from e
+    try:
+        j = r.json()
+    except ValueError:
+        raise ValueError(f"پاسخ نامعتبر از زرین‌پال (HTTP {r.status_code}). اگر سرور خارج از ایران است ممکن است IP مسدود باشد.") from None
+    return j if isinstance(j, dict) else {}
+
+
+def _zp_error(j: dict) -> ValueError:
+    er = j.get("errors")
+    er = er if isinstance(er, dict) else {}
+    code = er.get("code")
+    msg = _ZP_ERR.get(code) if isinstance(code, int) else None
+    return ValueError(f"زرین‌پال: {msg or er.get('message') or 'خطای نامشخص'} (کد {code})")
+
+
+async def zp_request(amount: int, desc: str, z: dict, base: str) -> tuple[str, str]:
+    """درخواست پرداخت جدید (مبلغ به تومان). خروجی: (authority, لینک درگاه)."""
+    j = await _zp_call(z, "/pg/v4/payment/request.json", {"amount": int(amount) * 10, "callback_url": base + "/pay/zp/callback", "description": desc[:200]})
+    d = j.get("data")
+    if not isinstance(d, dict) or d.get("code") != 100 or not d.get("authority"):
+        raise _zp_error(j)
+    au = re.sub(r"[^A-Za-z0-9]", "", str(d["authority"]))[:64]
+    return au, f"{_zp_hosts(z)[1]}/pg/StartPay/{au}"
+
+
+async def zp_verify(amount: int, authority: str, z: dict) -> tuple[int, str, str]:
+    """تأیید پرداخت سمت سرور. خروجی: (کد, ref_id, شماره کارت ماسک‌شده). کد ۱۰۰ = موفق، ۱۰۱ = قبلاً verify شده."""
+    j = await _zp_call(z, "/pg/v4/payment/verify.json", {"amount": int(amount) * 10, "authority": authority})
+    d = j.get("data")
+    if isinstance(d, dict) and d.get("code") in (100, 101):
+        return int(d["code"]), str(d.get("ref_id") or "")[:40], str(d.get("card_pan") or "")[:24]
+    raise _zp_error(j)
+
+
+def _zp_log(c: dict, res: str, rid: str = "", amount: int = 0, ref: str = "") -> None:
+    zl = c["shop"]["zp"]
+    zl["log"] = (zl["log"] + [{"ts": int(time.time()), "res": res, "oid": rid, "amount": int(amount), "ref": ref}])[-C.ZP_LOG_MAX:]
+
+
+async def zp_start_order(o: dict) -> dict:
+    """بعد از ساخت سفارش zp: از زرین‌پال لینک پرداخت می‌گیرد و در سفارش ذخیره می‌کند. اگر نشد، سفارش لغو می‌شود."""
+    cfg = C.load_config_ro()
+    z, base = cfg["shop"]["zp"], zp_base_url(cfg)
+    what = KIND_FA.get(o["kind"], o["kind"]) + (f" — {o.get('pname')}" if o.get("pname") else "")
+    try:
+        au, url = await zp_request(int(o["amount"]), f"{what} #{o['id']}", z, base)
+    except ValueError as e:
+        await asyncio.to_thread(order_update, o["id"], status="cancelled", err=str(e)[:200])
+        raise
+    return await asyncio.to_thread(order_update, o["id"], zp_auth=au, zp_url=url) or o
+
+
+def rep_topup_zp_new(rid: str, amount: int, note: str = "") -> dict:
+    """درخواست شارژ آنلاین کیف پول نماینده (هنوز Authority ندارد؛ بعدش zp_start_topup صدا زده می‌شود)."""
+    out: dict = {}
+
+    def mut(c):
+        if rid not in c["reps"]:
+            raise ValueError("نماینده پیدا نشد.")
+        z = c["shop"]["zp"]
+        if not (z["rep_enabled"] and z["merchant_id"]) or not zp_base_url(c):
+            raise ValueError("پرداخت آنلاین فعلاً برای نماینده‌ها فعال نیست.")
+        if not 1000 <= int(amount) <= z["max_amount"]:
+            raise ValueError(f"مبلغ پرداخت آنلاین باید بین {money(1000)} و {money(z['max_amount'])} تومان باشد.")
+        _now = int(time.time())
+        if sum(1 for t in c["topups"] if t["rid"] == rid and t["status"] == "pending" and (C.topup_for_admin(t) or int(t.get("exp") or 0) > _now)) >= 5:
+            raise ValueError("۵ درخواست در انتظار دارید؛ کمی صبر کنید یا ادمین رسیدگی کند.")
+        rec = {"id": "t" + secrets.token_hex(4), "rid": rid, "amount": int(amount), "note": (str(note).strip() or "شارژ آنلاین زرین‌پال")[:200],
+               "ts": int(time.time()), "status": "pending", "done": 0, "mode": "zp", "exp": int(time.time()) + ZP_MINUTES * 60,
+               "hold": "", "zp_auth": "", "zp_paid": False, "zp_ref": "", "cts": 0}
+        c["topups"].append(rec)
+        out.update(rec)
+    C.update_config(mut)
+    return out
+
+
+async def zp_start_topup(rec: dict) -> dict:
+    cfg = C.load_config_ro()
+    z, base = cfg["shop"]["zp"], zp_base_url(cfg)
+    rp = cfg["reps"].get(rec["rid"]) or {}
+    try:
+        au, url = await zp_request(int(rec["amount"]), f"شارژ کیف پول نماینده {rp.get('label') or rp.get('name') or ''}".strip(), z, base)
+    except ValueError as e:
+        def fail(c):
+            t = next((x for x in c["topups"] if x["id"] == rec["id"]), None)
+            if t and t["status"] == "pending" and not t.get("zp_auth"):
+                t.update(status="rejected", done=int(time.time()), hold=str(e)[:120])
+        await asyncio.to_thread(C.update_config, fail)
+        raise
+
+    def attach(c):
+        t = next((x for x in c["topups"] if x["id"] == rec["id"]), None)
+        if t:
+            t["zp_auth"] = au
+    await asyncio.to_thread(C.update_config, attach)
+    C.audit_event("نماینده", "درخواست شارژ آنلاین زرین‌پال", rec["rid"], f"مبلغ: {money(rec['amount'])} تومان")
+    return {**rec, "zp_auth": au, "zp_url": url}
+
+
+def _zp_lookup(authority: str) -> dict | None:
+    cfg = C.load_config_ro()
+    for o in cfg["shop"]["orders"]:
+        if o.get("mode") == "zp" and o.get("zp_auth") == authority:
+            return {"kind": "order", "id": o["id"], "amount": int(o["amount"]), "paid": bool(o.get("zp_paid")), "uid": o["uid"], "status": o["status"]}
+    for t in cfg["topups"]:
+        if t.get("mode") == "zp" and t.get("zp_auth") == authority:
+            return {"kind": "rep", "id": t["id"], "amount": int(t["amount"]), "paid": bool(t.get("zp_paid")), "rid": t["rid"], "status": t["status"]}
+    return None
+
+
+def _zp_cancel(rec: dict) -> None:
+    """مشتری در درگاه انصراف داد (Status=NOK): فقط رکوردِ هنوز پرداخت‌نشده بسته می‌شود."""
+    def mut(c):
+        if rec["kind"] == "order":
+            o = _find(c["shop"], rec["id"])
+            if o and o["status"] == "new" and not o.get("zp_paid"):
+                o.update(status="cancelled", err="پرداخت در درگاه انجام نشد یا لغو شد")
+        else:
+            t = next((x for x in c["topups"] if x["id"] == rec["id"]), None)
+            if t and t["status"] == "pending" and not t.get("zp_paid"):
+                t.update(status="rejected", done=int(time.time()), hold="پرداخت در درگاه انجام نشد یا لغو شد")
+        _zp_log(c, "cancel", rec["id"], rec["amount"])
+    C.update_config(mut)
+
+
+def _zp_apply(rec: dict, ref: str, card: str) -> dict:
+    """اتمیک و فقط یک‌بار: پرداخت تأییدشده را روی سفارش/کیف پول اعمال می‌کند. خروجی: {res: ok|hold|dup|gone, ...}"""
+    out: dict = {"res": "gone"}
+    now = int(time.time())
+
+    def mut(c):
+        s = c["shop"]
+        if rec["kind"] == "order":
+            o = _find(s, rec["id"])
+            if not o:
+                return
+            if o.get("zp_paid"):
+                out.update(res="dup", order=dict(o))
+                return
+            cu = s["customers"].get(str(o["uid"])) or {}
+            o.update(zp_paid=True, zp_ref=ref, zp_card=card, cts=now, paid=True)
+            if o["status"] in ("new", "cancelled"):            # پرداخت دیررسیده (سفارش لغو شده بود) هم انجام می‌شود؛ پول گرفته شده است
+                if cu.get("banned"):
+                    o.update(status="pending", rts=now, hold="مشتری مسدود است")
+                    out.update(res="hold", order=dict(o))
+                else:
+                    o.update(status="processing", by=0, err="")
+                    out.update(res="ok", order=dict(o))
+            else:                                               # وضعیتِ غیرمنتظره (مثلاً دستی رسیدگی شده): فقط ثبت و اطلاع به ادمین
+                out.update(res="odd", order=dict(o))
+            _zp_log(c, out["res"], o["id"], o["amount"], ref)
+        else:
+            t = next((x for x in c["topups"] if x["id"] == rec["id"]), None)
+            if not t:
+                return
+            if t.get("zp_paid"):
+                out.update(res="dup", topup=dict(t))
+                return
+            rp = c["reps"].get(t["rid"])
+            if not rp:
+                t.update(zp_paid=True, zp_ref=ref, cts=now, status="pending", hold="نماینده پیدا نشد")
+                out.update(res="hold", topup=dict(t))
+            else:
+                amt = int(t["amount"])
+                why = "نماینده مسدود است" if rp.get("blocked") else "سقف موجودی کیف پول رد می‌شود" if int(rp.get("balance") or 0) + amt > C.WALLET_MAX else ""
+                if why:
+                    t.update(zp_paid=True, zp_ref=ref, cts=now, status="pending", hold=why)
+                    out.update(res="hold", topup=dict(t))
+                else:
+                    C.topup_credit_in(c, t, amt, "شارژ آنلاین با زرین‌پال")
+                    t.update(zp_paid=True, zp_ref=ref, cts=now, hold="")
+                    out.update(res="ok", topup=dict(t))
+            _zp_log(c, out["res"], t["id"], t["amount"], ref)
+    C.update_config(mut)
+    return out
+
+
+_bot_names: dict[str, str] = {}
+
+
+async def zp_finish(bot: Bot | None, authority: str, status: str) -> dict:
+    """ورودی callback درگاه. خروجی برای صفحه‌ی نتیجه: {res: ok|paid|hold|cancelled|failed|error|unknown, kind, amount, ref, msg, bot}.
+    verify همیشه سمت سرور انجام می‌شود؛ پارامتر Status فقط برای «انصراف» استفاده می‌شود و هیچ‌وقت به‌تنهایی پرداخت را موفق نمی‌کند."""
+    authority = re.sub(r"[^A-Za-z0-9]", "", authority or "")[:64]
+    rec = await asyncio.to_thread(_zp_lookup, authority) if authority else None
+    if not rec:
+        return {"res": "unknown"}
+    base = {"kind": rec["kind"], "amount": rec["amount"]}
+    if rec["paid"]:
+        return {**base, "res": "paid"}
+    if status != "OK":
+        await asyncio.to_thread(_zp_cancel, rec)
+        return {**base, "res": "cancelled"}
+    z = C.load_config_ro()["shop"]["zp"]
+    if not z["merchant_id"]:
+        return {**base, "res": "error", "msg": "درگاه تنظیم نشده است."}
+    try:
+        code, ref, card = await zp_verify(rec["amount"], authority, z)
+    except ValueError as e:
+        log.warning("zp verify %s: %s", rec["id"], e)
+        await asyncio.to_thread(C.update_config, lambda c: _zp_log(c, "verify_fail", rec["id"], rec["amount"]))
+        return {**base, "res": "failed", "msg": str(e)}
+    r = await asyncio.to_thread(_zp_apply, rec, ref, card)
+    res = r["res"]
+    out = {**base, "res": "paid" if res == "dup" else "ok" if res in ("ok", "odd") else res, "ref": ref}
+    try:
+        if rec["kind"] == "order":
+            o = r.get("order")
+            if res == "ok" and o and bot:
+                C.audit_event("زرین‌پال", "پرداخت آنلاین سفارش", o["id"], f"{KIND_FA.get(o['kind'], o['kind'])} — {money(o['amount'])} تومان — کد پیگیری {ref}", amount=int(o["amount"]), cat="wallet")
+                await _tell(bot, o["uid"], f"✅ <b>پرداخت آنلاین شما تأیید شد</b>\nمبلغ: <b>{money(o['amount'])}</b> تومان\nکد پیگیری: <code>{esc(ref)}</code>\nسفارش <b>#{o['id']}</b> در حال انجام است…")
+                await fulfil(bot, o["id"])
+            elif res == "hold" and o and bot:
+                await _tell(bot, o["uid"], f"🕓 پرداخت سفارش <b>#{o['id']}</b> دریافت شد و برای بررسی نهایی به ادمین رفت.")
+                sent = await _notify_admins(bot, order_text(o) + "\n\n⚠️ <b>پرداخت زرین‌پال انجام شد ولی انجام خودکار ممکن نبود؛ دستی تأیید یا رد کنید.</b>", order_kb(o))
+                await asyncio.to_thread(order_update, o["id"], adm=sent)
+            elif res == "odd" and o and bot:
+                await _notify_admins(bot, f"⚠️ پرداخت زرین‌پال برای سفارش #{o['id']} رسید ولی وضعیت سفارش «{STATUS_FA.get(o['status'], o['status'])}» بود؛ دستی بررسی کنید.\nکد پیگیری: <code>{esc(ref)}</code> — {money(o['amount'])} تومان")
+            if bot:
+                if bot.token not in _bot_names:
+                    try:
+                        _bot_names[bot.token] = (await bot.get_me()).username or ""
+                    except TelegramError:
+                        _bot_names[bot.token] = ""
+                out["bot"] = _bot_names[bot.token]
+        else:
+            t = r.get("topup")
+            if t:
+                rp = C.load_config_ro()["reps"].get(t["rid"]) or {}
+                who = esc(rp.get("label") or rp.get("name") or t["rid"])
+                if res == "ok":
+                    C.audit_event("زرین‌پال", "شارژ آنلاین کیف پول نماینده", t["rid"], f"{money(t['amount'])} تومان — کد پیگیری {ref}", amount=int(t["amount"]), cat="wallet")
+                    await _main_bot_note(f"✅ <b>شارژ آنلاین نماینده (زرین‌پال)</b>\nنماینده: <b>{who}</b>\nمبلغ: <b>{money(t['amount'])}</b> تومان\nکد پیگیری: <code>{esc(ref)}</code>")
+                elif res == "hold":
+                    await _main_bot_note(f"⚠️ <b>پرداخت زرین‌پال نماینده {who} انجام شد ولی شارژ خودکار نشد</b>\nمبلغ: <b>{money(t['amount'])}</b> تومان\nعلت: {esc(t.get('hold') or '')}\nکد پیگیری: <code>{esc(ref)}</code>\n\nاز وب‌پنل ← نماینده‌ها، درخواست را دستی تأیید کنید.")
+    except Exception:  # noqa: BLE001
+        log.exception("zp_finish notify %s", rec["id"])
+    return out
 
 
 def _push(s: dict, o: dict) -> None:
@@ -901,7 +1194,7 @@ async def fulfil(bot: Bot, oid: str) -> None:
     uid = o["uid"]
     try:
         if o["kind"] == "topup":
-            w = await asyncio.to_thread(wallet_apply, uid, o["amount"], "topup", f"شارژ با رسید #{oid}", "topup:" + oid)
+            w = await asyncio.to_thread(wallet_apply, uid, o["amount"], "topup", f"شارژ آنلاین #{oid}" if o.get("mode") == "zp" else f"شارژ با رسید #{oid}", "topup:" + oid)
             await asyncio.to_thread(order_update, oid, status="done", dts=int(time.time()), result=f"موجودی: {money(w['balance'])}")
             await _tell(bot, uid, f"✅ <b>کیف پول شما شارژ شد</b>\nمبلغ: <b>{money(o['amount'])}</b> تومان\nموجودی فعلی: <b>{money(w['balance'])}</b> تومان")
             await _after(bot, oid, f"✅ شارژ انجام شد — موجودی مشتری: {money(w['balance'])}")
@@ -946,7 +1239,7 @@ async def _on_fail(bot: Bot, oid: str, why: str, clean: bool) -> None:
     if o["method"] == "wallet":
         await _tell(bot, uid, f"⚠️ سفارش #{oid} با مشکل روبه‌رو شد و ادمین آن را بررسی می‌کند. مبلغ شما حفظ شده و از بین نمی‌رود.")
     else:
-        await _tell(bot, uid, f"⚠️ رسید شما تأیید شد ولی انجام سفارش #{oid} با مشکل روبه‌رو شد. ادمین موضوع را پیگیری می‌کند؛ نیازی به پرداخت دوباره نیست.")
+        await _tell(bot, uid, f"⚠️ پرداخت شما تأیید شد ولی انجام سفارش #{oid} با مشکل روبه‌رو شد. ادمین موضوع را پیگیری می‌کند؛ نیازی به پرداخت دوباره نیست.")
     await _after(bot, oid, f"⚠️ ناموفق: {esc(why)}" + (" (نتیجه مبهم؛ اول وضعیت پنل را بررسی کنید)" if not clean else ""))
 
 
@@ -1015,6 +1308,8 @@ def order_text(o: dict, with_status: bool = True) -> str:
         rows.append(f"👛 موجودی مشتری: {money(cu['balance'])}")
     if o.get("mode") == "auto":
         rows.append(f"⚡ تأیید خودکار — مبلغ واریزی: <code>{int(o.get('pay_amount') or o['amount']) * 10}</code> ریال" + (" ✅ با پیامک بانک تأیید شد" if o.get("auto") else ""))
+    if o.get("mode") == "zp":
+        rows.append("💳 پرداخت آنلاین زرین‌پال" + (f" ✅ کد پیگیری: <code>{esc(o.get('zp_ref') or '')}</code>" if o.get("zp_paid") else ""))
     if o.get("hold"):
         rows.append(f"⚠️ پرداخت پیدا شد ولی تأیید خودکار انجام نشد: {esc(o['hold'])} — لطفاً دستی بررسی کنید.")
     rows.append(f"🕒 {sales.jdatetime(o.get('rts') or o['ts'])}")
@@ -1237,8 +1532,11 @@ async def maintain(bot: Bot, startup: bool = False) -> None:
         for t in c["topups"]:                                       # شارژ خودکار نماینده که مهلتش تمام شد
             if t.get("mode") == "auto" and t["status"] == "pending" and not t.get("hold") and now > int(t.get("exp") or 0) + AUTO_GRACE:
                 t.update(status="rejected", done=now, hold="مهلت واریز تمام شد")
+            elif t.get("mode") == "zp" and t["status"] == "pending" and not t.get("zp_paid") and now > int(t.get("exp") or 0) + ZP_GRACE:
+                t.update(status="rejected", done=now, hold="پرداخت آنلاین انجام نشد")      # اگر بعداً پرداخت شود، callback همچنان شارژ می‌کند
         for o in c["shop"]["orders"]:
-            if o["status"] == "new" and (now > int(o.get("exp") or 0) + AUTO_GRACE if o.get("mode") == "auto" else now - o["ts"] > hours):
+            if o["status"] == "new" and (now > int(o.get("exp") or 0) + AUTO_GRACE if o.get("mode") == "auto"
+                                         else now > int(o.get("exp") or 0) + ZP_GRACE if o.get("mode") == "zp" else now - o["ts"] > hours):
                 o["status"] = "cancelled"
                 stale.append(dict(o))
             elif o["status"] == "processing" and (startup or now - int(o.get("cts") or o["ts"]) > STUCK_SECONDS):
@@ -1253,7 +1551,9 @@ async def maintain(bot: Bot, startup: bool = False) -> None:
     except Exception:  # noqa: BLE001
         log.exception("test cleanup")
     for o in stale:
-        if o.get("mode") == "auto":
+        if o.get("mode") == "zp":
+            await _tell(bot, o["uid"], f"🚫 سفارش #{o['id']} چون پرداخت آنلاین انجام نشد لغو شد.\nاگر پول از حساب شما کم شده، چند دقیقه صبر کنید؛ در غیر این صورت با پشتیبانی تماس بگیرید.")
+        elif o.get("mode") == "auto":
             await _tell(bot, o["uid"], f"🚫 سفارش #{o['id']} چون پرداختی با مبلغ دقیق آن شناسایی نشد لغو شد.\nاگر پرداخت کرده‌اید، عکس رسید را برای پشتیبانی بفرستید.")
         else:
             await _tell(bot, o["uid"], f"🚫 سفارش #{o['id']} چون رسید ارسال نشد لغو شد.")
@@ -1497,7 +1797,7 @@ async def deep(update: Update, context, arg: str) -> bool:
         await show(update, context, f"➕ <b>شارژ کیف پول</b>\n\nمبلغ را به <b>تومان</b> بفرستید ({money(s['min_topup'])} تا {money(s['max_topup'])}).", back_kb())
     elif k == "wal":
         await show(update, context, f"👛 <b>کیف پول</b>\n\nموجودی: <b>{money(cu.get('balance', 0))}</b> تومان",
-                   back_kb([[B("➕ شارژ با رسید", callback_data="wt"), B("🧾 تراکنش‌ها", callback_data="wh")]]))
+                   back_kb([[B("➕ شارژ کیف پول", callback_data="wt"), B("🧾 تراکنش‌ها", callback_data="wh")]]))
     elif k == "tst":
         await give_test(update, context)
     elif k == "lnk":
@@ -1632,17 +1932,24 @@ async def show_plan(update: Update, context, pid: str, idx: int | None = None) -
             context.user_data.pop("disc", None)
             dcode, price = "", p["price"]
     auto = _auto_ok(s, price)
+    zpo = zp_ok(s, "bot", price)
     how = ("\n\n⚡ <b>خودکار:</b> بدون ارسال رسید؛ مبلغ دقیقِ نمایش‌داده‌شده را واریز کنید تا چند دقیقه بعد خودکار تأیید شود."
            "\n🧾 <b>دستی:</b> بعد از واریز عکس رسید می‌فرستید و ادمین تأیید می‌کند.") if auto else ""
+    if zpo:
+        how = "\n\n💳 <b>آنلاین:</b> پرداخت با کارت بانکی از درگاه زرین‌پال؛ بعد از پرداخت سفارش آنی انجام می‌شود." + how
     txt = (f"{head}\n\n📦 {esc(p['name'])}\n📐 {esc(_plan_line(tpl))}\n{price_line}"
            f"👛 موجودی شما: {money(cu.get('balance', 0))} تومان{how}\n\nروش پرداخت را انتخاب کنید:")
     wcb, ccb, acb = (f"rw:{idx}:{pid}", f"rc:{idx}:{pid}", f"ra:{idx}:{pid}") if renew else (f"bw:{pid}", f"bc:{pid}", f"ba:{pid}")
+    zcb = f"rz:{idx}:{pid}" if renew else f"bz:{pid}"
     rows = []
     if cu.get("balance", 0) >= price:
         rows.append([B("👛 پرداخت از کیف پول (آنی)", callback_data=wcb)])
+    if zpo:
+        rows.append([B("💳 پرداخت آنلاین (زرین‌پال)", callback_data=zcb)])
     if auto:
         rows.append([B("⚡ کارت‌به‌کارت (تأیید خودکار)", callback_data=acb)])
-    rows.append([B("💳 کارت‌به‌کارت (تأیید دستی با رسید)" if auto else "💳 کارت‌به‌کارت (با رسید)", callback_data=ccb)])
+    if s["cards"] or not zpo:
+        rows.append([B("💳 کارت‌به‌کارت (تأیید دستی با رسید)" if auto else "💳 کارت‌به‌کارت (با رسید)", callback_data=ccb)])
     if any(d["active"] for d in s["codes"].values()):
         rows.append([B("🏷 تغییر کد تخفیف" if dcode else "🏷 کد تخفیف دارم", callback_data=f"dc:{pid}:{idx if renew else -1}")])
     await show(update, context, txt, back_kb(rows))
@@ -1700,6 +2007,28 @@ async def _launch_card(update: Update, context, kind: str, plan_id: str = "", am
         await ask_auto(update, context, o)
     else:
         await ask_receipt(update, context, o)
+
+
+async def ask_zp(update: Update, context, o: dict) -> None:
+    what = KIND_FA[o["kind"]] + (f" — {esc(o.get('pname') or '')}" if o.get("pname") else "")
+    left = max(1, (int(o.get("exp") or 0) - int(time.time())) // 60)
+    await show(update, context,
+               f"💳 <b>پرداخت آنلاین — سفارش #{o['id']}</b>\n📌 {what}\n💰 مبلغ: <b>{money(o['amount'])}</b> تومان\n\n"
+               f"1️⃣ روی «رفتن به درگاه پرداخت» بزنید و با کارت بانکی پرداخت کنید.\n2️⃣ بعد از پرداخت موفق، به همین ربات برگردید؛ سفارش خودکار انجام می‌شود و پیام تأیید می‌گیرید.\n\n"
+               f"⏳ لینک پرداخت حدود {left} دقیقه معتبر است.",
+               M([[B("💳 رفتن به درگاه پرداخت", url=o["zp_url"])], [B("🔄 بررسی وضعیت", callback_data=f"zc:{o['id']}")],
+                  [B("❌ لغو سفارش", callback_data=f"oc:{o['id']}")], [B("🔙 منوی اصلی", callback_data="home")]]))
+
+
+async def _launch_zp(update: Update, context, kind: str, plan_id: str = "", amount: int = 0, username: str = "") -> None:
+    try:
+        o = await asyncio.to_thread(order_new, update.effective_user.id, kind, plan_id, amount, username, _disc_code(context, plan_id), "zp")
+        context.user_data.pop("disc", None)
+        o = await zp_start_order(o)
+    except ValueError as e:
+        await show(update, context, f"❌ {esc(e)}", back_kb())
+        return
+    await ask_zp(update, context, o)
 
 
 async def _launch_wallet(update: Update, context, kind: str, plan_id: str, username: str = "") -> None:
@@ -1776,14 +2105,19 @@ async def on_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await m.reply_html("مبلغ را به <b>تومان</b> و فقط با عدد بفرستید. مثال: <code>200000</code>")
             return
         amt = int(digits)
-        if _auto_ok(shop_cfg(), amt):
-            if not shop_cfg()["min_topup"] <= amt <= shop_cfg()["max_topup"]:
-                await m.reply_html(f"❌ مبلغ شارژ باید بین {money(shop_cfg()['min_topup'])} و {money(shop_cfg()['max_topup'])} تومان باشد.")
+        _s = shop_cfg()
+        _auto, _zp = _auto_ok(_s, amt), zp_ok(_s, "bot", amt)
+        if _auto or _zp:
+            if not _s["min_topup"] <= amt <= _s["max_topup"]:
+                await m.reply_html(f"❌ مبلغ شارژ باید بین {money(_s['min_topup'])} و {money(_s['max_topup'])} تومان باشد.")
                 return
             context.user_data.pop("aw", None)
-            await m.reply_html(f"➕ <b>شارژ کیف پول — {money(amt)} تومان</b>\n\n⚡ <b>خودکار:</b> بدون رسید؛ مبلغ دقیق را واریز کنید تا چند دقیقه بعد خودکار تأیید شود.\n"
-                               f"🧾 <b>دستی:</b> عکس رسید می‌فرستید و ادمین تأیید می‌کند.\n\nروش پرداخت را انتخاب کنید:",
-                               reply_markup=M([[B("⚡ تأیید خودکار", callback_data=f"ta:{amt}")], [B("💳 تأیید دستی با رسید", callback_data=f"tm:{amt}")], [B("🔙 منوی اصلی", callback_data="home")]]))
+            how = (("💳 <b>آنلاین:</b> پرداخت با کارت بانکی از درگاه زرین‌پال؛ بعد از پرداخت کیف پول آنی شارژ می‌شود.\n" if _zp else "")
+                   + ("⚡ <b>خودکار:</b> بدون رسید؛ مبلغ دقیق را واریز کنید تا چند دقیقه بعد خودکار تأیید شود.\n" if _auto else "")
+                   + ("🧾 <b>دستی:</b> عکس رسید می‌فرستید و ادمین تأیید می‌کند.\n" if _s["cards"] else ""))
+            rows = ([[B("💳 پرداخت آنلاین (زرین‌پال)", callback_data=f"tz:{amt}")]] if _zp else []) + ([[B("⚡ تأیید خودکار", callback_data=f"ta:{amt}")]] if _auto else []) \
+                + ([[B("💳 تأیید دستی با رسید", callback_data=f"tm:{amt}")]] if _s["cards"] else []) + [[B("🔙 منوی اصلی", callback_data="home")]]
+            await m.reply_html(f"➕ <b>شارژ کیف پول — {money(amt)} تومان</b>\n\n{how}\nروش پرداخت را انتخاب کنید:", reply_markup=M(rows))
             return
         try:
             o = await asyncio.to_thread(order_new, u.id, "topup", "", amt)
@@ -1858,6 +2192,25 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _launch_card(update, context, "buy", p[1], mode="auto")
     elif cmd in ("ta", "tm"):
         await _launch_card(update, context, "topup", "", int(p[1]), mode="auto" if cmd == "ta" else "manual")
+    elif cmd == "bz":
+        await _launch_zp(update, context, "buy", p[1])
+    elif cmd == "tz":
+        await _launch_zp(update, context, "topup", "", int(p[1]))
+    elif cmd == "rz":
+        i = int(p[1])
+        svcs = cu.get("services") or []
+        if i >= len(svcs):
+            await show(update, context, "سرویس پیدا نشد.", back_kb())
+        else:
+            await _launch_zp(update, context, "renew", p[2], 0, svcs[i]["u"])
+    elif cmd == "zc":                                  # بررسی وضعیت پرداخت آنلاین
+        o = order_get(p[1])
+        if not o or o["uid"] != u.id:
+            await show(update, context, "سفارش پیدا نشد.", back_kb())
+        elif o["status"] == "new":
+            await _ans(q, "هنوز پرداختی ثبت نشده. بعد از پرداخت در درگاه، چند ثانیه صبر کنید و دوباره بزنید.", show_alert=True)
+        else:
+            await show(update, context, order_text(o), back_kb([[B("🧾 سفارش‌ها", callback_data="ords")]]))
     elif cmd == "ar":                                  # واریز کرده ولی خودکار تأیید نشد ← مسیر دستی با رسید
         o = order_get(p[1])
         if not o or o["uid"] != u.id or o["status"] != "new":
@@ -1876,7 +2229,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await show(update, context, order_text(o), back_kb([[B("🧾 سفارش‌ها", callback_data="ords")]]))
     elif cmd == "wal":
         await show(update, context, f"👛 <b>کیف پول</b>\n\nموجودی: <b>{money(cu.get('balance', 0))}</b> تومان",
-                   back_kb([[B("➕ شارژ با رسید", callback_data="wt"), B("🧾 تراکنش‌ها", callback_data="wh")]]))
+                   back_kb([[B("➕ شارژ کیف پول", callback_data="wt"), B("🧾 تراکنش‌ها", callback_data="wh")]]))
     elif cmd == "wt":
         context.user_data["aw"] = ("amount",)
         await show(update, context, f"➕ <b>شارژ کیف پول</b>\n\nمبلغ را به <b>تومان</b> بفرستید ({money(s['min_topup'])} تا {money(s['max_topup'])}).", back_kb())
@@ -1893,7 +2246,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not o or o["uid"] != u.id:
             await show(update, context, "سفارش پیدا نشد.", back_kb())
         elif o["status"] == "new":
-            await (ask_auto if o.get("mode") == "auto" else ask_receipt)(update, context, o)
+            if o.get("mode") == "zp" and o.get("zp_url"):
+                await ask_zp(update, context, o)
+            else:
+                await (ask_auto if o.get("mode") == "auto" else ask_receipt)(update, context, o)
         else:
             await show(update, context, order_text(o), back_kb([[B("🧾 سفارش‌ها", callback_data="ords")]]))
     elif cmd == "oc":
