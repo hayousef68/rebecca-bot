@@ -1333,6 +1333,7 @@ async function repApp(me) {
     let w; try { w = await refreshBal(); } catch (e) { return mount(h('div', { class: 'card' }, h('p', { class: 'err' }, e.message))); }
     const TYPE_FA = { charge: '➕ شارژ ادمین', deduct: '➖ کسر ادمین', topup: '✅ افزایش موجودی', purchase: '🛒 خرید اکانت', refund: '↩️ بازگشت وجه' };
     const ST_FA = { pending: '⏳ در انتظار بررسی', approved: '✅ تأیید شد', rejected: '✖ رد شد' };
+    const stFa = t => (t.mode === 'zp' && t.status === 'pending' && !t.zp_paid) ? '⏳ منتظر پرداخت' : (t.mode === 'zp' && t.status === 'rejected' && !t.zp_paid) ? '✖ پرداخت انجام نشد' : ST_FA[t.status];
     const amt = moneyIn(0, 'مبلغ (تومان) مثلاً 1,000,000');
     const nt = h('input', { placeholder: 'توضیح / شماره پیگیری واریز (اختیاری)', maxlength: 200 });
     const sendB = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' }, '📨 ارسال درخواست به ادمین');
@@ -1376,12 +1377,25 @@ async function repApp(me) {
     aBtn.onclick = () => run(aBtn, async () => { const v = mv(aAmt); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.'); aShow(await api('/rep/topup', 'POST', { amount: v, auto: true })); });
     const aPend = (w.topups || []).find(t => t.mode === 'auto' && t.status === 'pending' && !t.hold && (+t.exp || 0) > (+w.now || 0));
     if (aPend) aShow({ id: aPend.id, pay_rial: aPend.pay_amount * 10, exp: aPend.exp, now: w.now, cards: w.auto_cards });
+    // 💳 پرداخت آنلاین (زرین‌پال): انتقال به درگاه؛ بعد از پرداخت موفق کیف پول فوراً شارژ می‌شود
+    const zAmt = moneyIn(0, 'مبلغ شارژ (تومان) مثلاً 1,000,000');
+    const zBtn = h('button', { class: 'btn pri', type: 'button', style: 'width:100%;margin-top:12px' }, '💳 پرداخت آنلاین و شارژ فوری');
+    zBtn.onclick = () => run(zBtn, async () => {
+      const v = mv(zAmt); if (!(v >= 1000)) throw new Error('حداقل مبلغ ۱٬۰۰۰ تومان است.');
+      if (w.zp_max && v > w.zp_max) throw new Error('حداکثر مبلغ پرداخت آنلاین ' + (+w.zp_max).toLocaleString('en-US') + ' تومان است.');
+      const r = await api('/rep/topup', 'POST', { amount: v, zp: true });
+      if (!r.url) throw new Error('لینک درگاه ساخته نشد.');
+      location.href = r.url;
+    });
+    const zpCard = w.zp_ok ? h('div', { class: 'card' }, h('h2', {}, '💳 پرداخت آنلاین (زرین‌پال)'), field('مبلغ (تومان)', zAmt), zBtn,
+      h('p', { class: 'hint' }, 'با کارت بانکی از درگاه امن زرین‌پال پرداخت می‌کنید و بعد از پرداخت موفق، کیف پول شما فوراً و خودکار شارژ می‌شود؛ نیازی به ثبت درخواست یا تأیید ادمین نیست.')) : null;
     const autoCard = w.auto_ok ? h('div', { class: 'card' }, h('h2', {}, '⚡ شارژ خودکار'), field('مبلغ (تومان)', aAmt), aBtn, aBox,
       h('p', { class: 'hint' }, 'بعد از واریز دقیقِ مبلغ نشان‌داده‌شده، کیف پول شما چند دقیقه بعد خودکار شارژ می‌شود؛ نیازی به ثبت درخواست نیست.')) : null;
     mount(h('div', { class: 'card bigbal' }, h('span', {}, 'موجودی کیف پول'), h('b', {}, toman(w.balance))),
+      zpCard,
       autoCard,
       h('div', { class: 'card' }, h('h2', {}, 'درخواست افزایش موجودی'), field('مبلغ', amt), field('توضیح', nt), sendB, h('p', { class: 'hint' }, 'بعد از واریز، درخواست را ثبت کنید؛ ادمین بررسی و کیف پول شما را شارژ می‌کند.')),
-      w.topups.length ? h('div', { class: 'card' }, h('h2', {}, 'درخواست‌های من'), ...w.topups.map(t => h('div', { class: 'lg' }, h('span', {}, ST_FA[t.status], h('small', {}, new Date(t.ts * 1000).toLocaleString('fa-IR'))), h('b', { dir: 'ltr' }, t.amount.toLocaleString('en-US'))))) : null,
+      w.topups.length ? h('div', { class: 'card' }, h('h2', {}, 'درخواست‌های من'), ...w.topups.map(t => h('div', { class: 'lg' }, h('span', {}, stFa(t), h('small', {}, new Date(t.ts * 1000).toLocaleString('fa-IR'))), h('b', { dir: 'ltr' }, t.amount.toLocaleString('en-US'))))) : null,
       w.log.length ? h('div', { class: 'card' }, h('h2', {}, 'تراکنش‌های اخیر'), ...w.log.map(lgRow)) : null);
   };
 
@@ -1721,7 +1735,7 @@ function shopOrder(o, openIt, redraw) {
     else toast('✅ ثبت شد');
   };
   const rows = [lgRow('👤 مشتری', who(o)), lgRow('📌 نوع', (SHOP_KIND[o.kind] || o.kind) + (o.pname ? ' — ' + o.pname : '') + (o.service ? ' (' + o.service + ')' : '')),
-    lgRow('💰 مبلغ', toman(o.amount)), lgRow('💳 پرداخت', o.method === 'wallet' ? 'کیف پول' : 'کارت‌به‌کارت'), lgRow('🕒 ثبت', fdt(o.rts || o.ts))];
+    lgRow('💰 مبلغ', toman(o.amount)), lgRow('💳 پرداخت', o.method === 'wallet' ? 'کیف پول' : o.method === 'zp' ? 'آنلاین (زرین‌پال)' : 'کارت‌به‌کارت'), lgRow('🕒 ثبت', fdt(o.rts || o.ts))];
   if (o.balance != null) rows.push(lgRow('👛 موجودی مشتری', toman(o.balance)));
   if (o.text) rows.push(lgRow('📝 توضیح مشتری', o.text));
   if (o.err) rows.push(lgRow('⚠️ علت', o.err + (o.unsure ? ' (نتیجه مبهم؛ اول وضعیت کاربر را در پنل ببینید)' : '')));
@@ -2024,6 +2038,42 @@ async function shopBot(d, body, redraw) {
     field('تمپلت تست (فقط حجم از تمپلت می‌آید)', tTpl), field('مدت تست (ساعت، ۱ تا ۷۲۰؛ مثلاً ۲ یا ۲۴)', tHrs), field('پیشوند نام کاربری تست (بعدش کد تصادفی می‌آید، مثل test_k7x2q9)', tPre),
     h('p', { class: 'hint' }, 'هر مشتری فقط یک‌بار می‌تواند تست بگیرد. نام تست کد تصادفی است و از شماره‌گذاری اشتراک‌های پنل جداست. بعد از پایان مدت، تست خودکار از پنل (دیتابیس) پاک می‌شود (تا حدود ۷ دقیقه تأخیر)؛ اگر مشتری قبل از پایان تمدیدش کند حذف نمی‌شود. اگر ساخت تستی مبهم ماند، در تب «مشتری‌ها» دکمه‌ی «بازنشانی تست» اجازه‌ی یک تست دیگر می‌دهد.'),
     h('div', { class: 'btns' }, tSave)));
+  // درگاه آنلاین زرین‌پال (ربات فروش + پنل نماینده‌ها؛ هرکدام جدا روشن/خاموش)
+  const zp = d.zp || {};
+  const zBot = h('input', { type: 'checkbox', id: 'zpbot' }); zBot.checked = !!zp.bot_enabled;
+  const zRep = h('input', { type: 'checkbox', id: 'zprep' }); zRep.checked = !!zp.rep_enabled;
+  const zSand = h('input', { type: 'checkbox', id: 'zpsand' }); zSand.checked = !!zp.sandbox;
+  const zMid = i('', zp.has_merchant ? 'ذخیره شده: ' + zp.merchant_hint + ' (برای تغییر، مرچنت‌کد جدید را بنویسید)' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', { dir: 'ltr', maxlength: 80, autocomplete: 'off' });
+  const zBase = i(zp.base_url, zp.default_base || 'https://panel.example.com:8686', { dir: 'ltr', maxlength: 120 });
+  const zApi = i(zp.api_base, 'خالی = آدرس رسمی زرین‌پال', { dir: 'ltr', maxlength: 120 });
+  const zPx = i(zp.proxy, 'خالی = بدون پروکسی؛ مثل http://host:port', { dir: 'ltr', maxlength: 200 });
+  const zMax = moneyIn(zp.max_amount, 'سقف هر پرداخت');
+  const zSave = h('button', { class: 'btn pri', type: 'button' }, 'ذخیره درگاه زرین‌پال');
+  zSave.onclick = () => run(zSave, async () => {
+    if ((zBot.checked || zRep.checked) && !zp.has_merchant && !zMid.value.trim()) throw new Error('اول مرچنت‌کد زرین‌پال را وارد کنید.');
+    if ((zBot.checked || zRep.checked) && !zBase.value.trim() && !zp.default_base) throw new Error('آدرس بازگشت مشخص نیست؛ SSL/دامنه‌ی وب‌پنل را فعال کنید یا «آدرس بازگشت» را بنویسید.');
+    const body = { zp_bot: zBot.checked, zp_rep: zRep.checked, zp_sandbox: zSand.checked, zp_base: zBase.value.trim(), zp_api: zApi.value.trim(), zp_max: mv(zMax) };
+    if (zMid.value.trim()) body.zp_merchant = zMid.value.trim();
+    if (!zPx.value.includes('***')) body.zp_proxy = zPx.value.trim();
+    await withCode(code => api('/shop/settings', 'POST', { ...body, code }));
+    toast('✅ ذخیره شد'); await redraw();
+  });
+  const zTest = h('button', { class: 'btn', type: 'button' }, '🧪 تست اتصال به زرین‌پال');
+  zTest.onclick = () => run(zTest, async () => { await api('/shop/zp/test', 'POST', {}); toast('✅ اتصال به زرین‌پال برقرار است'); });
+  const zLog = (zp.log || []).slice(-8).reverse().map(x => h('div', { class: 'hint', dir: 'ltr' }, `${new Date(x.ts * 1000).toLocaleString('fa-IR')} — ${x.res}${x.oid ? ' #' + x.oid : ''}${x.amount ? ' · ' + (+x.amount).toLocaleString('en-US') : ''}${x.ref ? ' · ref ' + x.ref : ''}`));
+  body.append(h('div', { class: 'card' }, h('h2', {}, '💳 درگاه آنلاین زرین‌پال'),
+    h('label', { class: 'chk', for: 'zpbot' }, zBot, 'فعال برای ربات فروش (خرید، تمدید و شارژ کیف پول مشتری)'),
+    h('label', { class: 'chk', for: 'zprep' }, zRep, 'فعال برای پنل نماینده‌ها (شارژ کیف پول نماینده)'),
+    h('p', { class: 'hint' }, 'بعد از پرداخت موفق، سمت سرور با زرین‌پال تأیید (verify) می‌شود و سفارش یا شارژ کیف پول خودکار و فقط یک‌بار انجام می‌شود. کارت‌به‌کارت (خودکار و دستی) مستقل از این درگاه کار می‌کند و با خاموش کردن این گزینه‌ها هیچ‌چیز از آن‌ها تغییر نمی‌کند.'),
+    field('مرچنت‌کد زرین‌پال (۳۶ نویسه)', zMid),
+    field('آدرس بازگشت از درگاه (فقط اگر وب‌پنل https/دامنه‌ی خودکار ندارد)', zBase),
+    h('p', { class: 'hint' }, 'آدرس بازگشت نهایی: ' + ((zp.base_url || zp.default_base) ? (zp.base_url || zp.default_base) + '/pay/zp/callback' : '— هنوز مشخص نیست؛ SSL و دامنه را در تنظیمات وب‌پنل فعال کنید یا آدرس را بالا بنویسید.')),
+    field('سقف هر پرداخت آنلاین (تومان)', zMax),
+    h('label', { class: 'chk', for: 'zpsand' }, zSand, 'حالت آزمایشی (Sandbox؛ فقط برای تست، پول واقعی جابه‌جا نمی‌شود)'),
+    h('details', {}, h('summary', {}, 'تنظیمات پیشرفته (سرور خارج از ایران)'), field('آدرس API زرین‌پال (اختیاری، مثلاً رله‌ی داخل ایران)', zApi), field('پروکسی اتصال به زرین‌پال (اختیاری)', zPx),
+      h('p', { class: 'hint' }, 'اگر سرور شما خارج از ایران است و «تست اتصال» خطا داد، یکی از این دو را بگذارید. همچنین دامنه‌ی آدرس بازگشت باید با دامنه‌ی ثبت‌شده‌ی درگاه شما در پنل زرین‌پال یکی باشد.')),
+    h('div', { class: 'btns' }, zSave, zTest),
+    zLog.length ? h('div', {}, h('h3', {}, 'آخرین رویدادها'), ...zLog) : null));
   // تأیید خودکار کارت‌به‌کارت با پیامک واریز بانک (وب‌هوک)
   const au = d.auto || {};
   const hookUrl = location.origin + '/api/shop/sms-hook';
