@@ -113,9 +113,11 @@ DEFAULT_CFG = {
              # تأیید خودکار کارت‌به‌کارت با پیامک واریز بانک (وب‌هوک). seen = هش پیامک‌های مصرف‌شده، log = آخرین رویدادها
              "auto": {"enabled": False, "secret": "", "unit": "rial", "minutes": 30, "max_amount": 5000000, "daily_max": 50000000,
                       "must": "", "seen": [], "log": []},
-             # درگاه آنلاین زرین‌پال: bot_enabled = ربات فروش، rep_enabled = پنل نماینده‌ها (هرکدام جدا روشن/خاموش می‌شود)
-             "zp": {"bot_enabled": False, "rep_enabled": False, "merchant_id": "", "sandbox": False, "base_url": "", "api_base": "", "proxy": "",
-                    "max_amount": 50000000, "log": []}},      # عضویت اجباری: channels=[{chat: "@name"|"-100…", link: "https://t.me/…"}]      # تست رایگان: هر مشتری فقط یک‌بار
+             # درگاه پرداخت آنلاین زرین‌پال: shop_on = ربات فروش، rep_on = پنل نماینده‌ها (هر دو جدا قابل روشن/خاموش‌اند)؛ pays = دفتر پرداخت‌ها
+             "zp": {"merchant": "", "shop_on": False, "rep_on": False, "sandbox": False, "api_base": "", "proxy": "", "base_url": "", "minutes": 30,
+                    "max_amount": 50000000, "pays": []},
+             # رزرو اشتراک توسط مشتری (پلن بعدی با پرداخت): max = سقف پلن‌های صف‌شده برای هر سرویس
+             "reserve": {"enabled": True, "max": 2}},      # عضویت اجباری: channels=[{chat: "@name"|"-100…", link: "https://t.me/…"}]      # تست رایگان: هر مشتری فقط یک‌بار
     "ssl": {"enabled": False, "cert": "", "key": "", "domain": "", "error": ""},
 }
 
@@ -207,7 +209,8 @@ SHOP_BAL_MAX = 10 ** 10
 SHOP_CARDS_MAX = 5
 SHOP_AUTO_SEEN_MAX = 3000
 SHOP_AUTO_LOG_MAX = 50
-ZP_LOG_MAX = 50
+SHOP_ZP_PAYS_MAX = 2000
+_ZP_MERCHANT_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 def parse_force_channels(text: str) -> list[dict]:
@@ -256,28 +259,39 @@ def _normalize_shop_auto(raw) -> dict:
     return a
 
 
-_ZP_MERCHANT_RE = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
-
-
 def _normalize_shop_zp(raw) -> dict:
-    """تنظیمات درگاه زرین‌پال. بدون «مرچنت‌کد» معتبر هیچ‌کدام از دو کلید روشن نمی‌شود."""
+    """تنظیمات و دفتر پرداخت‌های زرین‌پال. بدون مرچنت‌کد معتبر هیچ‌وقت روشن نمی‌شود."""
     z = copy.deepcopy(DEFAULT_CFG["shop"]["zp"])
     raw = raw if isinstance(raw, dict) else {}
-    mid = str(raw.get("merchant_id") or "").strip()
-    z["merchant_id"] = mid if _ZP_MERCHANT_RE.fullmatch(mid) else ""
-    z["bot_enabled"] = bool(raw.get("bot_enabled")) and bool(z["merchant_id"])
-    z["rep_enabled"] = bool(raw.get("rep_enabled")) and bool(z["merchant_id"])
+    m = str(raw.get("merchant") or "").strip().lower()
+    z["merchant"] = m if _ZP_MERCHANT_RE.fullmatch(m) else ""
+    z["shop_on"] = bool(raw.get("shop_on")) and bool(z["merchant"])
+    z["rep_on"] = bool(raw.get("rep_on")) and bool(z["merchant"])
     z["sandbox"] = bool(raw.get("sandbox"))
-    for k in ("base_url", "api_base"):                      # فقط آدرس https بدون مسیر اضافه
-        v = str(raw.get(k) or "").strip().rstrip("/")[:120]
-        z[k] = v if re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d{2,5})?", v) else ""
-    px = str(raw.get("proxy") or "").strip()[:200]
-    z["proxy"] = px if re.fullmatch(r"https?://\S+", px) else ""
-    try:
-        z["max_amount"] = min(10 ** 9, max(1000, int(raw.get("max_amount", z["max_amount"]))))
-    except (TypeError, ValueError):
-        pass
-    z["log"] = [x for x in (raw.get("log") if isinstance(raw.get("log"), list) else []) if isinstance(x, dict)][-ZP_LOG_MAX:]
+    base = str(raw.get("api_base") or "").strip().rstrip("/")
+    z["api_base"] = base if re.fullmatch(r"https?://[A-Za-z0-9.\-_:/]{3,200}", base) else ""
+    px = str(raw.get("proxy") or "").strip()
+    z["proxy"] = px if re.fullmatch(r"(https?|socks5h?)://[^\s]{3,200}", px) else ""
+    bu = str(raw.get("base_url") or "").strip().rstrip("/")
+    z["base_url"] = bu if re.fullmatch(r"https?://[A-Za-z0-9.\-]+(:\d{2,5})?", bu) else ""
+    for k, lo, hi in (("minutes", 5, 180), ("max_amount", 1000, 10 ** 9)):
+        try:
+            z[k] = min(hi, max(lo, int(raw.get(k, z[k]))))
+        except (TypeError, ValueError):
+            pass
+    pays = []
+    for x in (raw.get("pays") if isinstance(raw.get("pays"), list) else []):
+        try:
+            if isinstance(x, dict) and x.get("id") and x.get("kind") in ("order", "rep"):
+                pays.append({"id": str(x["id"])[:24], "kind": x["kind"], "ref": str(x.get("ref") or "")[:40], "uid": int(x.get("uid") or 0),
+                             "amount": max(0, int(x.get("amount") or 0)), "auth": str(x.get("auth") or "")[:64],
+                             "status": x.get("status") if x.get("status") in ("created", "paid", "failed", "expired") else "created",
+                             "ts": int(x.get("ts") or 0), "chk": int(x.get("chk") or 0), "pts": int(x.get("pts") or 0),
+                             "ref_id": str(x.get("ref_id") or "")[:32], "card": str(x.get("card") or "")[:24], "msg": str(x.get("msg") or "")[:160],
+                             "fx": str(x.get("fx") or "")[:24]})
+        except (TypeError, ValueError):
+            continue
+    z["pays"] = pays[-SHOP_ZP_PAYS_MAX:]
     return z
 
 
@@ -348,6 +362,12 @@ def _normalize_shop(raw) -> dict:
     s["bcast"] = {k: bc[k] for k in ("id", "ts", "audience", "text", "total", "sent", "failed", "running", "done_ts") if k in bc}
     s["auto"] = _normalize_shop_auto(raw.get("auto"))
     s["zp"] = _normalize_shop_zp(raw.get("zp"))
+    rs = raw.get("reserve") if isinstance(raw.get("reserve"), dict) else {}
+    try:
+        rmax = min(3, max(1, int(rs.get("max", 2))))
+    except (TypeError, ValueError):
+        rmax = 2
+    s["reserve"] = {"enabled": bool(rs.get("enabled", True)), "max": rmax}
     plans, seen = [], set()
     for p in raw.get("plans") if isinstance(raw.get("plans"), list) else []:
         try:
@@ -534,9 +554,6 @@ def _normalize(data: dict) -> dict:
                 if t.get("mode") == "auto":                       # شارژ خودکار با پیامک بانک
                     _tr.update(mode="auto", base=max(0, int(t.get("base") or 0)), pay_amount=max(0, int(t.get("pay_amount") or 0)),
                                exp=int(t.get("exp") or 0), hold=str(t.get("hold") or "")[:120], auto_ok=bool(t.get("auto_ok")), cts=int(t.get("cts") or 0))
-                if t.get("mode") == "zp":                         # شارژ آنلاین با زرین‌پال
-                    _tr.update(mode="zp", exp=int(t.get("exp") or 0), hold=str(t.get("hold") or "")[:120], zp_auth=re.sub(r"[^A-Za-z0-9]", "", str(t.get("zp_auth") or ""))[:64],
-                               zp_paid=bool(t.get("zp_paid")), zp_ref=str(t.get("zp_ref") or "")[:40], cts=int(t.get("cts") or 0))
                 tu.append(_tr)
         except (TypeError, ValueError, KeyError):
             continue
@@ -991,7 +1008,7 @@ def restore_diff(cur: dict, new: dict) -> dict:
     return {"changed": changed[:40], "changed_n": len(changed),
             "total_now": sum(r["balance"] for r in cur["reps"].values()), "total_backup": sum(r["balance"] for r in new["reps"].values()),
             "only_now": [r["name"] for r in rows if r["backup"] is None], "only_backup": [r["name"] for r in rows if r["now"] is None],
-            "lost_tx": lost, "backup_latest_ts": latest, "pending_topups_now": sum(1 for t in cur["topups"] if topup_for_admin(t)),
+            "lost_tx": lost, "backup_latest_ts": latest, "pending_topups_now": sum(1 for t in cur["topups"] if t.get("status") == "pending"),
             "shop_now": shop_totals(cur), "shop_backup": shop_totals(new)}
 
 
@@ -1015,6 +1032,7 @@ def restore_keep_wallet(new: dict, cur: dict) -> None:
         new[k] = cur[k]
     # فروشگاه: تنظیمات از بکاپ می‌آید ولی موجودی مشتری‌ها، سفارش‌ها و دفتر تراکنش فعلی دست‌نخورده می‌ماند
     new["shop"] = {**new["shop"], "customers": cur["shop"]["customers"], "orders": cur["shop"]["orders"], "tx": cur["shop"]["tx"]}
+    new["shop"]["zp"] = {**new["shop"]["zp"], "pays": cur["shop"]["zp"]["pays"]}          # دفتر پرداخت‌های زرین‌پال هم مثل سفارش‌ها دست‌نخورده می‌ماند
 
 
 def preserve_security(new: dict, cur: dict) -> None:
@@ -1551,7 +1569,7 @@ def topup_add(rid: str, amount: int, note: str = "") -> dict:
     def mut(c):
         if rid not in c["reps"]:
             raise ValueError("نماینده پیدا نشد.")
-        if sum(1 for t in c["topups"] if t["rid"] == rid and topup_for_admin(t)) >= 5:
+        if sum(1 for t in c["topups"] if t["rid"] == rid and t["status"] == "pending") >= 5:
             raise ValueError("۵ درخواست در انتظار دارید؛ تا بررسی ادمین صبر کنید.")
         rec.update(id="t" + secrets.token_hex(4), rid=rid, amount=int(amount), note=str(note).strip()[:200], ts=int(time.time()), status="pending", done=0)
         c["topups"].append(dict(rec))
@@ -1589,11 +1607,6 @@ def topup_resolve(tid: str, approve: bool, amount: int | None = None) -> dict:
     audit_event("ادمین وب‌پنل", "بررسی درخواست افزایش موجودی", out.get("rid", ""), "تأیید شد" if out.get("status") == "approved" else "رد شد",
                 amount=out.get("amount", 0) if out.get("status") == "approved" else None)
     return out
-
-
-def topup_for_admin(t: dict) -> bool:
-    """درخواست افزایش موجودی که باید پیش ادمین دیده شود: pending؛ ولی پرداخت آنلاینی که هنوز پرداخت نشده (مشتری وسط پرداخت است) نه."""
-    return t.get("status") == "pending" and not (t.get("mode") == "zp" and not t.get("zp_paid"))
 
 
 def topup_credit_in(c: dict, t: dict, amt: int, note: str = "شارژ خودکار") -> None:
