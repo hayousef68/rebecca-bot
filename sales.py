@@ -30,6 +30,7 @@ DEFAULT_SCHEMA = {
     "u_limit": "data_limit", "u_expire": "expire", "u_hold": "on_hold_expire_duration", "u_service": "service_id",
     "resets": "user_usage_logs", "r_user": "user_id", "r_at": "reset_at",
     "services": "services", "s_id": "id", "s_name": "name",
+    "usage": "node_user_usages", "n_user": "user_id", "n_at": "created_at", "n_used": "used_traffic",
 }
 GB = 1024 ** 3
 
@@ -687,17 +688,68 @@ def rep_daily_sales(rid: str, days: int = 7) -> list[dict]:
     return out
 
 
+_USAGE_OK: dict = {}
+
+
+def usage_between(a, b) -> dict | None:
+    """مصرف واقعی ترافیک در بازه‌ی [a, b) (datetime ساده در منطقه‌ی دیتابیس) از جدول مصرف ربکا (node_user_usages).
+    فقط کاربران همان ادمین فروش (فیلتر ادمین) حساب می‌شوند. مصرف سرویس‌های همکاری ÷ ضریب می‌شود تا ترافیک واقعی سرور به دست بیاید.
+    اگر جدول نباشد یا خطا شود None برمی‌گردد (آن‌وقت هزینه از روی گیگ فروخته‌شده حساب می‌شود)."""
+    cfg = load_config()["sales"]
+    if cfg.get("cost_mode", "usage") != "usage":
+        return None
+    s = _schema()
+    try:
+        N, U = _ident(s["usage"]), _ident(s["users"])
+        conn = _connect()
+        try:
+            with conn.cursor() as c:
+                key = (s["usage"],)
+                if key not in _USAGE_OK:
+                    c.execute(f"SHOW TABLES LIKE %s", (s["usage"],))
+                    _USAGE_OK[key] = bool(c.fetchone())
+                if not _USAGE_OK[key]:
+                    log.warning("جدول مصرف %s پیدا نشد؛ هزینه از روی گیگ فروخته‌شده حساب می‌شود", s["usage"])
+                    return None
+                fsql, fpar = _admin_filter(conn, s)
+                c.execute(
+                    f"SELECT u.{_ident(s['u_service'])} AS service_id, SUM(n.{_ident(s['n_used'])}) AS used FROM {N} n "
+                    f"JOIN {U} u ON u.{_ident(s['u_id'])} = n.{_ident(s['n_user'])} "
+                    f"WHERE n.{_ident(s['n_at'])} >= %s AND n.{_ident(s['n_at'])} < %s" + fsql +
+                    f" GROUP BY u.{_ident(s['u_service'])}", (a, b) + fpar)
+                rows = list(c.fetchall())
+                try:
+                    c.execute(f"SELECT {_ident(s['s_id'])} AS id, {_ident(s['s_name'])} AS name FROM {_ident(s['services'])}")
+                    svc = {r["id"]: str(r["name"] or "") for r in c.fetchall()}
+                except Exception:  # noqa: BLE001
+                    svc = {}
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        log.exception("usage_between")
+        return None
+    mult = ham_mult(cfg)
+    raw = ham_raw = 0.0
+    for r in rows:
+        gb = float(r["used"] or 0) / GB
+        raw += gb
+        if _is_hamkari({"service_id": r["service_id"], "service_name": svc.get(r["service_id"], "")}, cfg):
+            ham_raw += gb
+    real = (raw - ham_raw) + ham_raw / mult
+    return {"raw_gb": raw, "ham_raw_gb": ham_raw, "real_gb": real}
+
+
 def compute(day: str, partial: bool) -> dict:
     w, n = wallet_income(day, day, partial)
-    return compute_rows(fetch_events(day, partial), w, n)
+    return compute_rows(fetch_events(day, partial), w, n, usage_between(*_bounds_db(day, partial)))
 
 
 def compute_range(d1: str, d2: str, partial: bool) -> dict:
     w, n = wallet_income(d1, d2, partial)
-    return compute_rows(fetch_events_range(d1, d2, partial), w, n)
+    return compute_rows(fetch_events_range(d1, d2, partial), w, n, usage_between(*_bounds_days(d1, d2, partial)))
 
 
-def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0) -> dict:
+def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0, usage: dict | None = None) -> dict:
     """wallet = جمع خالص شارژ کیف پول نماینده‌ها (تومان). به گیگ همکاری تبدیل می‌شود (مبلغ ÷ قیمت هر گیگ همکاری، مثلاً ۳٬۰۰۰)
     و مثل فروش همکاری هم در درآمد و هم در هزینه‌ی خرید حجم حساب می‌شود."""
     cfg = load_config()["sales"]
@@ -717,8 +769,10 @@ def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0) -> dict:
     mult = ham_mult(cfg)
     per_gb_cost = int(cfg.get("buy_per_tb", 750000)) / float(cfg.get("tb_gb", 1000))
     ham_real_gb = ham_gb / mult
-    cost = (ham_real_gb + single_gb + extra_gb) * per_gb_cost
-    return {"cl": cl, "wallet": wallet, "wallet_n": wallet_n, "wallet_gb": wallet_gb, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
+    sold_cost = (ham_real_gb + single_gb + extra_gb) * per_gb_cost
+    # هزینه از مصرف واقعی کل (مثلاً ۲۰ ترابایت در ماه) حساب می‌شود؛ اگر خوانده نشد، از گیگ فروخته‌شده
+    cost = usage["real_gb"] * per_gb_cost if usage else sold_cost
+    return {"usage": usage, "sold_cost": sold_cost, "cost_src": "usage" if usage else "sold", "cl": cl, "wallet": wallet, "wallet_n": wallet_n, "wallet_gb": wallet_gb, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
             "single_gb": single_gb, "extra_gb": extra_gb, "ham_real_gb": ham_real_gb, "mult": mult, "extra_income": extra_income, "rate": rate, "cost": cost,
             "income": ham_income + single_income + extra_income}
 
@@ -765,9 +819,16 @@ def _render(title: str, d: dict, html: bool) -> str:
         L.append(f"🚫 نادیده‌گرفته (تست/غیرفروشی): {sum(cl['ignored'].values())} مورد")
     L.append("")
     L.append(f"💰 جمع کل فروش: {_t(d['income'])} تومان")
-    if d.get("mult", 1) != 1:
-        L.append(f"🔢 ترافیک واقعی همکاری: {_t(d['ham_real_gb'])} گیگ (÷ ضریب {d['mult']:g})")
-    L.append(f"🧾 هزینه‌ی خرید حجم: {_t(d['cost'])} تومان")
+    u = d.get("usage")
+    if u:
+        L.append(f"📊 مصرف واقعی کل: {_t(u['real_gb'])} گیگ ({u['real_gb'] / 1000:,.2f} ترابایت)")
+        if d.get("mult", 1) != 1 and u["ham_raw_gb"] > 0:
+            L.append(f"   (مصرف همکاری ÷ ضریب {d['mult']:g} شده)")
+        L.append(f"🧾 هزینه‌ی خرید حجم (از مصرف واقعی): {_t(d['cost'])} تومان")
+    else:
+        if d.get("mult", 1) != 1:
+            L.append(f"🔢 ترافیک واقعی همکاری: {_t(d['ham_real_gb'])} گیگ (÷ ضریب {d['mult']:g})")
+        L.append(f"🧾 هزینه‌ی خرید حجم (از گیگ فروخته‌شده): {_t(d['cost'])} تومان")
     L.append(f"✅ سود تخمینی: {_t(d['income'] - d['cost'])} تومان")
     text = "\n".join(L)
     return _html.escape(text) if html else text
@@ -852,7 +913,7 @@ def summary(kind: str = "today") -> dict:
         agg[(gb, m)] = agg.get((gb, m), 0) + n
     extra = [{"gb": gb, "months": m, "count": n, "suggest": int(round(gb * d["rate"]))} for (gb, m), n in sorted(agg.items())]
     att = sum(n for c, i in ((cl["ham"], 1), (cl["single"], 2), (cl["extra"], 2)) for k, n in c.items() if k[i] in ("attach", "next"))
-    return {"wallet": int(d.get("wallet", 0)), "income": int(round(d["income"])), "cost": int(round(d["cost"])), "profit": int(round(d["income"] - d["cost"])),
+    return {"wallet": int(d.get("wallet", 0)), "income": int(round(d["income"])), "cost": int(round(d["cost"])), "profit": int(round(d["income"] - d["cost"])), "cost_src": d.get("cost_src", "sold"), "usage_gb": round((d.get("usage") or {}).get("real_gb", 0), 1),
             "new": news, "renew": total - news, "attach": att, "skipped": sum(cl["skipped"].values()), "ham_gb": d["ham_gb"], "wallet_gb": d.get("wallet_gb", 0), "ignored": sum(cl["ignored"].values()), "extra": extra}
 
 
@@ -1260,7 +1321,7 @@ def db_check() -> str:
     conn = _connect()
     try:
         with conn.cursor() as c:
-            for t in (s["users"], s["resets"], s["services"]):
+            for t in (s["users"], s["resets"], s["services"], s["usage"]):
                 try:
                     c.execute(f"SHOW COLUMNS FROM {_ident(t)}")
                     out.append(f"✅ {t}: " + ", ".join(r["Field"] for r in c.fetchall()))
