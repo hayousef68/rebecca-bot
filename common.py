@@ -826,6 +826,19 @@ def hash_password(pw: str, salt: str | None = None) -> dict:
     return {"salt": salt, "hash": h}
 
 
+def prune_attempts(d: dict, now: float, window: float, cap: int = 2000) -> None:
+    """پاک‌کردن IPهایی که همه‌ی تلاش‌های ناموفقشان از پنجره‌ی زمانی گذشته (سقف حافظه).
+    بدون این، هر IP که یک بار اشتباه بزند و دیگر برنگردد برای همیشه در دیکشنری می‌ماند و با اسکن/چرخش IP حافظه بی‌سقف رشد می‌کند.
+    فقط وقتی اندازه از cap گذشت اجرا می‌شود تا در حالت عادی هزینه‌ای نداشته باشد؛ اگر بعد از پاک‌سازی هم پر بود، قدیمی‌ترین‌ها حذف می‌شوند."""
+    if len(d) <= cap:
+        return
+    for k in [k for k, v in d.items() if not any(now - t < window for t in v)]:
+        d.pop(k, None)
+    if len(d) > cap:
+        for k in sorted(d, key=lambda k: max(d[k]) if d[k] else 0)[: len(d) - cap]:
+            d.pop(k, None)
+
+
 _auth_ok: dict[str, float] = {}
 
 
@@ -1775,6 +1788,23 @@ def _detail(resp: httpx.Response) -> str:
     if isinstance(d, dict):
         return "; ".join(f"{k}: {v}" for k, v in d.items())
     return str(d)
+
+
+def default_verify_ssl(url: str) -> bool:
+    """پیش‌فرض «بررسی گواهی SSL» برای پنل جدید: روشن فقط اگر آدرس https با دامنه‌ی واقعی باشد؛
+    برای IP، localhost، دامنه‌های محلی و http خاموش می‌ماند (گواهی خودامضا روی IP رایج است). پنل‌های موجود تغییر نمی‌کنند."""
+    import ipaddress
+    u = (url or "").strip()
+    if not u.lower().startswith("https://"):
+        return False
+    host = (urlsplit(u).hostname or "").lower()
+    if not host or "." not in host or host.endswith((".local", ".lan", ".internal", ".localhost")):
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        return True
 
 
 def _strip_dashboard(url: str) -> str:

@@ -2204,12 +2204,15 @@ async function vSet() {
   const i = (v, p = '', t = 'text') => h('input', { type: t, value: v ?? '', placeholder: p, dir: 'ltr', autocomplete: 'off' });
   const refresh = async () => { await refreshState(); await vSet(); };
   // فرم افزودن/ویرایش پنل
-  let editId = null;
+  let editId = null, sslTouched = false;
+  const guessSsl = u => { try { const x = new URL(u); const hn = x.hostname; return x.protocol === 'https:' && hn.includes('.') && /[a-z]/i.test(hn) && !hn.includes(':') && !/\.(local|lan|internal|localhost)$/i.test(hn); } catch (e) { return false; } };
   const nm = h('input', { placeholder: 'مثلاً پنل اصلی', maxlength: 40 }), url = i('', 'https://panel.example.com:2096'), sub = i('', 'خالی = مشابه پنل'), user = i(''), pass = i('', 'رمز ادمین پنل', 'password');
   const ssl = h('input', { type: 'checkbox', id: 'ssl' });
   const ptitle = h('h2', {}, 'افزودن پنل جدید'); const saveP = h('button', { class: 'btn pri' }, 'ذخیره و تست اتصال');
-  const fill = p => { editId = p ? p.id : null; ptitle.textContent = p ? 'ویرایش: ' + p.name : 'افزودن پنل جدید'; nm.value = p ? p.name : ''; url.value = p ? p.panel_url : ''; sub.value = p ? p.sub_url : '';
-    user.value = p ? p.username : ''; pass.value = ''; pass.placeholder = p && p.has_password ? '•••••• (بدون تغییر)' : 'رمز ادمین پنل'; ssl.checked = p ? p.verify_ssl : false; };
+  url.addEventListener('input', () => { if (!editId && !sslTouched) ssl.checked = guessSsl(url.value); });
+  ssl.addEventListener('change', () => { sslTouched = true; });
+  const fill = p => { editId = p ? p.id : null; sslTouched = false; ptitle.textContent = p ? 'ویرایش: ' + p.name : 'افزودن پنل جدید'; nm.value = p ? p.name : ''; url.value = p ? p.panel_url : ''; sub.value = p ? p.sub_url : '';
+    user.value = p ? p.username : ''; pass.value = ''; pass.placeholder = p && p.has_password ? '•••••• (بدون تغییر)' : 'رمز ادمین پنل'; ssl.checked = p ? p.verify_ssl : guessSsl(url.value); };
   saveP.onclick = () => run(saveP, async () => {
     const r = await api('/panels', 'POST', { id: editId, name: nm.value, panel_url: url.value, sub_url: sub.value, username: user.value, password: pass.value || null, verify_ssl: ssl.checked });
     S.panel = r.id; await refreshState();
@@ -2656,7 +2659,7 @@ async function vSet() {
     h('div', { class: 'grp' }, '🔌 اتصال و ربات'),
     drawer('panels', '🖥', 'پنل‌های ربکا', `${c.panels.length} پنل`, ...list,
     h('div', { class: 'card' }, ptitle, field('نام پنل', nm), field('آدرس پنل', url), field('دامنه سابسکریپشن', sub), field('نام کاربری ادمین', user), field('رمز عبور', pass),
-      h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای گواهی خودامضا خاموش بماند)'),
+      h('label', { class: 'chk', for: 'ssl' }, ssl, 'بررسی گواهی SSL (برای دامنه‌ی https معتبر خودکار روشن می‌شود؛ برای IP یا گواهی خودامضا خاموش بماند)'),
       h('div', { class: 'btns' }, saveP, h('button', { class: 'btn', onclick: () => fill(null) }, 'فرم خالی (پنل جدید)')))),
     drawer('bot', '🤖', 'ربات تلگرام', tok.value ? 'تنظیم شده' : 'تنظیم نشده', strip(h('div', { class: 'card' }, h('h2', {}, 'ربات تلگرام'), field('توکن ربات', tok), field('شناسه ادمین‌ها', adm), h('p', { class: 'hint' }, 'شناسه عددی را از ربات‌هایی مثل @userinfobot بگیرید.'), h('div', { class: 'btns' }, saveB)))),
     h('div', { class: 'grp' }, '🛒 فروش و کاربران'),

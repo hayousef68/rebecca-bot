@@ -692,7 +692,7 @@ async def setup_pass(update, context):
             pn.update(fields)
         else:
             pid = new_panel_id(c)
-            c["panels"].append({"id": pid, "name": su.get("name") or f"پنل {len(c['panels']) + 1}", "verify_ssl": False, "services": [], **fields})
+            c["panels"].append({"id": pid, "name": su.get("name") or f"پنل {len(c['panels']) + 1}", "verify_ssl": C.default_verify_ssl(su["panel_url"]), "services": [], **fields})
             if not c["active_panel"] or len(c["panels"]) == 1:
                 c["active_panel"] = pid
     update_config(save)

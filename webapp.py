@@ -279,6 +279,7 @@ async def _log_login(ip: str, user: str, ok: bool, why: str) -> None:
 def _fail_hit(ip: str, recent: list[float], now: float, user: str) -> None:
     recent.append(now)
     _fails[ip] = recent
+    C.prune_attempts(_fails, now, 300)
     if len(recent) == 5:
         _bg_notify(f"🚨 <b>چند تلاش ناموفق ورود به وب‌پنل</b>\nIP: <code>{C.esc(ip)}</code>\nنام کاربری: <code>{C.esc(user[:40])}</code>\nاین IP به‌مدت ۵ دقیقه مسدود شد.")
 
@@ -2301,6 +2302,10 @@ async def health(request: Request):
         add("panel", "پنل ربکا", "bad", "هیچ پنلی تنظیم نشده")
     for p, lv, tx in panel_res:
         add("panel", f"پنل «{p.get('name') or p['id']}»", lv, tx)
+    for p in cfg["panels"]:
+        if not p.get("verify_ssl") and C.default_verify_ssl(p.get("panel_url", "")):
+            add("ssl", f"گواهی پنل «{p.get('name') or p['id']}»", "warn",
+                "بررسی گواهی SSL خاموش است ولی آدرس پنل دامنه‌ی https است؛ اگر گواهی معتبر دارد در تنظیمات پنل روشنش کنید (رمز ادمین پنل در برابر حمله‌ی MITM محافظت می‌شود)")
     add("db", "دیتابیس فروش", *db_res)
     if bot_st is None:
         add("bot", "سرویس ربات", "warn", "وضعیت قابل بررسی نیست (systemctl در دسترس نیست)")
@@ -2727,7 +2732,7 @@ class PanelReq(BaseModel):
     sub_url: str = ""
     username: str = Field(min_length=1, max_length=100)
     password: str | None = None
-    verify_ssl: bool = False
+    verify_ssl: bool | None = None      # None = پنل جدید: خودکار طبق آدرس؛ پنل موجود: بدون تغییر
 
 
 @app.post("/api/panels", dependencies=[Depends(guard)])
@@ -2748,7 +2753,8 @@ async def panel_save(r: PanelReq):
             c["panels"].append(pn)
             if not c["active_panel"]:
                 c["active_panel"] = pn["id"]
-        pn.update(name=r.name.strip(), panel_url=url, sub_url=r.sub_url.strip().rstrip("/"), username=r.username.strip(), verify_ssl=r.verify_ssl)
+        pn.update(name=r.name.strip(), panel_url=url, sub_url=r.sub_url.strip().rstrip("/"), username=r.username.strip(),
+                  verify_ssl=r.verify_ssl if r.verify_ssl is not None else bool(pn.get("verify_ssl", C.default_verify_ssl(url))))
         if r.password:
             pn["password"] = r.password
         out["id"] = pn["id"]
@@ -3251,6 +3257,7 @@ async def shop_sms_hook(request: Request):
             raise PermissionError
     except PermissionError:
         _hook_fails[ip] = recent + [now]
+        C.prune_attempts(_hook_fails, now, 600)
         return deny
     _hook_fails.pop(ip, None)
     _hook_ok[:] = [t for t in _hook_ok if now - t < 60] + [now]

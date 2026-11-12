@@ -494,6 +494,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/in
 | `ops.py` | کارهای پس‌زمینه (یادآوری، پایش، واریز نشده، تطابق) |
 | `tlsutil.py` / `run_web.py` | SSL و راه‌انداز وب‌پنل |
 | `install.sh` | نصب‌کننده و دستور `rebecca-bot` |
+| `tests/` | تست خودکار بخش مالی (`unittest`) |
 | `rebecca-bot.service` / `rebecca-webapp.service` | سرویس‌های systemd |
 
 ### فایل‌های داده (کنار `config.json`)
@@ -507,6 +508,18 @@ bash <(curl -Ls https://raw.githubusercontent.com/hayousef68/rebecca-bot/main/in
 | `renew_undo.json` | نقاط برگشت تمدید و ریست |
 
 **نیازمندی‌ها:** Python 3 و پکیج‌های `python-telegram-bot`، `httpx`، `qrcode[pil]`، `fastapi`، `uvicorn`، `pymysql`، `cryptography` (نصب‌کننده خودکار نصب می‌کند).
+
+---
+
+## 🧪 تست خودکار
+
+تست‌های بخش مالی (کیف پول نماینده، کیف پول مشتری، پرداخت سفارش، کد تخفیف، رسید، هم‌زمانی) در پوشه‌ی `tests/` هستند. فقط به پایتون نیاز دارند (نه pytest) و به `config.json` واقعی دست نمی‌زنند:
+
+```bash
+cd /opt/rebecca-bot && python3 -m unittest discover -s tests -t . -v
+```
+
+قبل از هر آپدیت که به `common.py` یا `shop.py` دست می‌زند اجرایشان کنید.
 
 ---
 
