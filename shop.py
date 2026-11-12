@@ -146,6 +146,8 @@ def code_apply(s: dict, uid: int, code: str, plan: dict) -> tuple[str, int]:
     d = s["codes"].get(code)
     if not d or not d["active"]:
         raise ValueError("کد تخفیف نامعتبر است.")
+    if d.get("uid") and int(d["uid"]) != int(uid):                # کد شخصی (مثل کد بازگشت مشتری) فقط برای صاحبش
+        raise ValueError("کد تخفیف نامعتبر است.")
     if d["exp"] and time.time() > d["exp"]:
         raise ValueError("مهلت این کد تخفیف تمام شده است.")
     if d["plans"] and plan["id"] not in d["plans"]:
@@ -1480,6 +1482,40 @@ async def zp_loop() -> None:
         await asyncio.sleep(120)
 
 
+def winback_issue(uid: int, percent: int, hours: int) -> str:
+    """یک کد تخفیف شخصی و یک‌بارمصرف برای مشتری می‌سازد و خودِ کد را برمی‌گرداند."""
+    out: dict = {}
+
+    def mut(c):
+        codes = c["shop"]["codes"]
+        while True:
+            code = "WB" + secrets.token_hex(3).upper()
+            if code not in codes:
+                break
+        now = int(time.time())
+        codes[code] = {"kind": "percent", "value": int(percent), "max": 1, "per_user": 1, "exp": now + int(hours) * 3600, "active": True,
+                       "plans": [], "note": "بازگشت مشتری", "created": now, "uid": int(uid), "auto": True}
+        out["code"] = code
+    C.update_config(mut)
+    return out["code"]
+
+
+def winback_cleanup(now: float | None = None, keep_days: int = 7) -> int:
+    """کدهای خودکارِ بازگشت را که مدت‌ها از انقضایشان گذشته پاک می‌کند (دیکشنری کدها بی‌سقف رشد نکند). تعداد حذف‌شده را برمی‌گرداند."""
+    now = now or time.time()
+    out = {"n": 0}
+
+    def mut(c):
+        codes = c["shop"]["codes"]
+        dead = [k for k, d in codes.items() if d.get("auto") and d.get("exp") and d["exp"] < now - keep_days * 86400]
+        for k in dead:
+            codes.pop(k, None)
+        out["n"] = len(dead)
+    if any(d.get("auto") and d.get("exp") and d["exp"] < now - keep_days * 86400 for d in shop_cfg()["codes"].values()):
+        C.update_config(mut)
+    return out["n"]
+
+
 # ═════════════════════════════ یادآوری انقضا و حجم ═════════════════════════════
 async def remind(bot: Bot) -> None:
     """به مشتری‌ها قبل از انقضا / نزدیک اتمام حجم / بعد از انقضا پیام می‌دهد (هر مورد برای هر دوره‌ی اعتبار فقط یک‌بار).
@@ -1526,6 +1562,13 @@ async def remind(bot: Bot) -> None:
             log.warning("remind fetch %s: %s", pid, e)
     now = time.time()
     updates: list[tuple[str, str, str, dict]] = []
+    wb = rm["winback"]
+    alive: set[str] = set()                                        # مشتری‌هایی که هنوز یک سرویس فعال دارند ← «رفته» حساب نمی‌شوند
+    for uid, cu, i, sv in refs:
+        u0 = info.get((pid_of(sv), sv["u"]))
+        if u0 and u0.get("status") in ("active", "on_hold") and (not u0.get("expire") or int(u0["expire"]) > now):
+            alive.add(uid)
+    wb_sent: set[str] = set()                                      # حداکثر یک کد بازگشت برای هر مشتری در هر اجرا
     for uid, cu, i, sv in refs:
         u = info.get((pid_of(sv), sv["u"]))
         if not u:
@@ -1559,6 +1602,17 @@ async def remind(bot: Bot) -> None:
             elif pct >= rm["usage"] and "u" not in r:
                 r["u"] = 1
                 texts.append(f"📊 <b>حجم سرویس {esc(sv['u'])}</b> رو به اتمام است ({pct:.0f}٪ مصرف شده؛ {C.fmt_gb(max(0, lim - used))} باقی مانده).")
+        if (wb["enabled"] and expire > 0 and st not in ("disabled", "on_hold") and now - expire >= wb["after_days"] * 86400 and "wb" not in r
+                and uid not in alive and uid not in wb_sent):
+            r["wb"] = int(now)                                    # قبل از ارسال علامت می‌خورد: خطا هرگز باعث ارسال تکراری نمی‌شود
+            wb_sent.add(uid)
+            try:
+                code = await asyncio.to_thread(winback_issue, int(uid), wb["percent"], wb["hours"])
+                texts.append(f"🎁 <b>دلمان برایتان تنگ شده!</b>\nسرویس {esc(sv['u'])} چند روزی است تمام شده. برای برگشتن، کد تخفیف شخصی شما:\n"
+                             f"<code>{code}</code>\n{wb['percent']}٪ تخفیف، فقط یک‌بار و تا {wb['hours']} ساعت دیگر معتبر است.\n"
+                             "هنگام پرداخت «🏷 کد تخفیف دارم» را بزنید.")
+            except Exception:  # noqa: BLE001
+                log.exception("winback issue")
         if texts:
             await _tell(bot, int(uid), "\n\n".join(texts) + "\n\nبرای تمدید دکمه‌ی زیر را بزنید 👇", M([[B("🔄 تمدید سرویس", callback_data=f"rn:{i}")]]))
             await asyncio.sleep(0.06)
@@ -1572,6 +1626,7 @@ async def remind(bot: Bot) -> None:
                     if x["u"] == name and x["pid"] == pid:
                         x["rem"] = r
         await asyncio.to_thread(C.update_config, mut)
+    await asyncio.to_thread(winback_cleanup)
 
 
 async def maintenance_loop(bot: Bot) -> None:

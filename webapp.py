@@ -3638,6 +3638,10 @@ class ShopRemindReq(BaseModel):
     enabled: bool
     days: list[int] = Field(max_length=4)
     usage: int = Field(ge=50, le=99)
+    wb_enabled: bool | None = None                  # بازگشت مشتری؛ None = تنظیم فعلی بدون تغییر
+    wb_days: int | None = Field(default=None, ge=1, le=60)
+    wb_percent: int | None = Field(default=None, ge=1, le=90)
+    wb_hours: int | None = Field(default=None, ge=6, le=168)
 
 
 @app.post("/api/shop/remind", dependencies=[Depends(guard)])
@@ -3647,9 +3651,15 @@ def shop_remind_save(r: ShopRemindReq):
         raise HTTPException(400, "حداقل یک روز (۱ تا ۳۰) وارد کنید.")
 
     def mut(c):
-        c["shop"]["remind"] = {"enabled": r.enabled, "days": days, "usage": r.usage}
+        old = c["shop"]["remind"].get("winback") or {}
+        c["shop"]["remind"] = {"enabled": r.enabled, "days": days, "usage": r.usage, "winback": {
+            "enabled": old.get("enabled", False) if r.wb_enabled is None else r.wb_enabled,
+            "after_days": r.wb_days or old.get("after_days", 3), "percent": r.wb_percent or old.get("percent", 15),
+            "hours": r.wb_hours or old.get("hours", 48)}}
     update_config(mut)
-    _aud("یادآوری انقضای فروشگاه", "", f"{'روشن' if r.enabled else 'خاموش'}؛ روزها {days}؛ حجم {r.usage}٪", "sys")
+    wbs = C.load_config_ro()["shop"]["remind"]["winback"]
+    _aud("یادآوری انقضای فروشگاه", "", f"{'روشن' if r.enabled else 'خاموش'}؛ روزها {days}؛ حجم {r.usage}٪؛ بازگشت مشتری "
+         f"{'روشن' if wbs['enabled'] else 'خاموش'} ({wbs['after_days']} روز بعد، {wbs['percent']}٪، {wbs['hours']} ساعت)", "sys")
     return {"ok": True}
 
 

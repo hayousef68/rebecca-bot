@@ -109,7 +109,7 @@ DEFAULT_CFG = {
              "min_topup": 10000, "max_topup": 50000000, "receipt_hours": 24, "customers": {}, "orders": [], "tx": [],
              "test": {"enabled": False, "template": "", "prefix": "test", "hours": 24}, "cards": [],
              "force": {"enabled": False, "channels": []},
-             "codes": {}, "remind": {"enabled": True, "days": [3, 1], "usage": 85}, "bcast": {},
+             "codes": {}, "remind": {"enabled": True, "days": [3, 1], "usage": 85, "winback": {"enabled": False, "after_days": 3, "percent": 15, "hours": 48}}, "bcast": {},
              # تأیید خودکار کارت‌به‌کارت با پیامک واریز بانک (وب‌هوک). seen = هش پیامک‌های مصرف‌شده، log = آخرین رویدادها
              "auto": {"enabled": False, "secret": "", "unit": "rial", "minutes": 30, "max_amount": 5000000, "daily_max": 50000000,
                       "must": "", "seen": [], "log": []},
@@ -347,7 +347,7 @@ def _normalize_shop(raw) -> dict:
             codes[k] = {"kind": v["kind"], "value": val, "max": max(0, int(v.get("max") or 0)), "per_user": max(1, int(v.get("per_user") or 1)),
                         "exp": max(0, int(v.get("exp") or 0)), "active": bool(v.get("active", True)),
                         "plans": [str(x)[:12] for x in (v.get("plans") if isinstance(v.get("plans"), list) else [])][:50], "note": str(v.get("note") or "")[:80],
-                        "created": int(v.get("created") or 0)}
+                        "created": int(v.get("created") or 0), "uid": max(0, int(v.get("uid") or 0)), "auto": bool(v.get("auto"))}
         except (TypeError, ValueError):
             continue
     s["codes"] = codes
@@ -357,7 +357,13 @@ def _normalize_shop(raw) -> dict:
         usage = min(99, max(50, int(rm.get("usage", 85))))
     except (TypeError, ValueError):
         days, usage = [3, 1], 85
-    s["remind"] = {"enabled": bool(rm.get("enabled", True)), "days": days or [3, 1], "usage": usage}
+    wb = rm.get("winback") if isinstance(rm.get("winback"), dict) else {}
+    try:                                                          # بازگشت مشتری: پیش‌فرض خاموش (پیام تبلیغاتی است؛ ادمین خودش روشن می‌کند)
+        wb = {"enabled": bool(wb.get("enabled", False)), "after_days": min(60, max(1, int(wb.get("after_days", 3)))),
+              "percent": min(90, max(1, int(wb.get("percent", 15)))), "hours": min(168, max(6, int(wb.get("hours", 48))))}
+    except (TypeError, ValueError):
+        wb = {"enabled": False, "after_days": 3, "percent": 15, "hours": 48}
+    s["remind"] = {"enabled": bool(rm.get("enabled", True)), "days": days or [3, 1], "usage": usage, "winback": wb}
     bc = raw.get("bcast") if isinstance(raw.get("bcast"), dict) else {}
     s["bcast"] = {k: bc[k] for k in ("id", "ts", "audience", "text", "total", "sent", "failed", "running", "done_ts") if k in bc}
     s["auto"] = _normalize_shop_auto(raw.get("auto"))
