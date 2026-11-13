@@ -1942,14 +1942,55 @@ async def _service_info(sv: dict) -> tuple[dict | None, object]:
 STATUS_ICON = {"active": "🟢", "disabled": "⚫", "expired": "🔴", "limited": "🟠", "on_hold": "⏳"}
 
 
-async def show_service(update: Update, context, idx: int) -> None:
+_rev_cd: dict[tuple[int, str], float] = {}   # محدودیت ۳۰ ثانیه‌ای برای جلوگیری از تغییر لینک پیاپی
+REV_COOLDOWN = 30
+
+
+def rev_reserve(uid, uname: str, now: float | None = None) -> int:
+    """نوبت تغییر لینک را «قبل از تماس با پنل» رزرو می‌کند (چک و ثبت بدون await بینشان ← دو کلیک هم‌زمان هر دو رد نمی‌شوند).
+    خروجی: 0 = رزرو شد؛ عدد مثبت = ثانیه‌ی انتظار. اگر تماس با پنل شکست خورد، rev_release صدا زده شود تا مشتری بتواند فوراً دوباره امتحان کند."""
+    now = now or time.time()
+    key = (int(uid), uname)
+    left = REV_COOLDOWN - (now - _rev_cd.get(key, 0))
+    if left > 0:
+        return int(left) + 1
+    if len(_rev_cd) > 5000:                                   # فقط ورودی‌های تمام‌شده پاک می‌شوند، نه کولداون‌های فعال
+        for k in [k for k, ts in _rev_cd.items() if now - ts >= REV_COOLDOWN]:
+            _rev_cd.pop(k, None)
+    _rev_cd[key] = now
+    return 0
+
+
+def rev_release(uid, uname: str) -> None:
+    _rev_cd.pop((int(uid), uname), None)
+
+
+def rate_allow(hits: dict, key, limit: int, window: float, now: float | None = None, cap: int = 5000) -> bool:
+    """محدودیت «حداکثر limit بار در window ثانیه» برای هر key. اگر مجاز بود ثبت می‌کند و True برمی‌گرداند."""
+    now = now or time.time()
+    recent = [ts for ts in hits.get(key, []) if now - ts < window]
+    if len(recent) >= limit:
+        hits[key] = recent
+        return False
+    recent.append(now)
+    hits[key] = recent
+    C.prune_attempts(hits, now, window, cap=cap)
+    return True
+
+
+async def show_service(update: Update, context, idx: int, prefix: str = "", prefetched: dict | None = None) -> None:
     cu = customer_get(update.effective_user.id) or {}
     svcs = cu.get("services") or []
-    if idx >= len(svcs):
+    if idx < 0 or idx >= len(svcs):
         await show(update, context, "سرویس پیدا نشد.", back_kb())
         return
     sv = svcs[idx]
-    u, api = await _service_info(sv)
+    if isinstance(prefetched, dict) and prefetched.get("username") and "subscription_url" in prefetched:
+        cfg = C.load_config_ro()
+        pid = sv["pid"] if sv["pid"] and C.get_panel(cfg, sv["pid"]) else cfg["active_panel"]
+        u, api = prefetched, C.get_api(pid)
+    else:
+        u, api = await _service_info(sv)
     if not u:
         await show(update, context, f"⚠️ اطلاعات <b>{esc(sv['u'])}</b> الان در دسترس نیست؛ کمی بعد دوباره امتحان کنید.",
                    back_kb([[B("🔄 تمدید", callback_data=f"rn:{idx}")]]))
@@ -1958,7 +1999,7 @@ async def show_service(update: Update, context, idx: int) -> None:
     used, lim = u.get("used_traffic", 0) or 0, u.get("data_limit") or 0
     pct = f" ({used * 100 / lim:.0f}%)" if lim else ""
     sub = api.full_sub(u.get("subscription_url", "")) or "نامشخص"
-    txt = (f"👤 <b>{esc(sv['u'])}</b>\n{STATUS_ICON.get(st, '❔')} وضعیت: {esc(st)}\n📊 مصرف: {C.fmt_gb(used)} / {C.fmt_gb(lim)}{pct}\n"
+    txt = (f"{prefix}👤 <b>{esc(sv['u'])}</b>\n{STATUS_ICON.get(st, '❔')} وضعیت: {esc(st)}\n📊 مصرف: {C.fmt_gb(used)} / {C.fmt_gb(lim)}{pct}\n"
            f"⏳ اعتبار: {C.fmt_expire(u.get('expire'), st, u.get('on_hold_expire_duration'))}")
     rsv = shop_cfg()["reserve"]
     queue = C.next_plans_view(u) if rsv["enabled"] or C._raw_plans(u) else []
@@ -1967,6 +2008,7 @@ async def show_service(update: Update, context, idx: int) -> None:
     txt += f"\n\n🔗 <code>{esc(sub)}</code>"
     hu = C.happ_page_url(sub) if sub != "نامشخص" else ""
     rows = ([[B("📲 افزودن به Happ", url=hu)]] if hu else []) + [[B("🖼 QR", callback_data=f"sq:{idx}"), B("🔄 تمدید", callback_data=f"rn:{idx}")]]
+    rows.append([B("🔗 تغییر لینک اشتراک", callback_data=f"srv:{idx}")])
     if rsv["enabled"] and len(queue) < rsv["max"] and _active_plans():
         rows.append([B("⏰ رزرو اشتراک بعدی", callback_data=f"rs:{idx}")])
     await show(update, context, txt, back_kb(rows + [[B("🔙 سرویس‌ها", callback_data="svc")]]))
@@ -2305,6 +2347,50 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await context.bot.send_photo(update.effective_chat.id, png, caption=f"<b>{esc(svcs[i]['u'])}</b>\n<code>{esc(sub)}</code>", parse_mode=HTML)
             else:
                 await _ans(q, "لینک در دسترس نیست.", show_alert=True)
+    elif cmd == "srv":
+        svcs = cu.get("services") or []
+        i = int(p[1]) if len(p) > 1 and p[1].isdigit() else -1
+        if not 0 <= i < len(svcs):
+            await show(update, context, "سرویس پیدا نشد.", back_kb())
+        else:
+            sv = svcs[i]
+            await show(
+                update, context,
+                f"⚠️ <b>تغییر لینک اشتراک {esc(sv['u'])}</b>\n\n"
+                "با این کار، لینک قبلی شما <b>فوراً از کار می‌افتد</b> و باید لینک جدید را در برنامه‌ی خود وارد کنید.\n\n"
+                "آیا مطمئن هستید؟",
+                M([
+                    [B("✅ بله، لینک تغییر کند", callback_data=f"srvo:{i}")],
+                    [B("↩️ انصراف", callback_data=f"sv:{i}")],
+                ]),
+            )
+    elif cmd == "srvo":
+        svcs = cu.get("services") or []
+        i = int(p[1]) if len(p) > 1 and p[1].isdigit() else -1
+        if not 0 <= i < len(svcs):
+            await show(update, context, "سرویس پیدا نشد.", back_kb())
+        else:
+            sv = svcs[i]
+            wait = rev_reserve(u.id, sv["u"])
+            if wait:
+                await show(update, context, f"⏳ لطفاً {wait} ثانیه صبر کنید و دوباره تلاش کنید.", back_kb([[B("🔙 بازگشت به سرویس", callback_data=f"sv:{i}")]]))
+                return
+            cfg = C.load_config_ro()
+            pid = sv["pid"] if sv["pid"] and C.get_panel(cfg, sv["pid"]) else cfg["active_panel"]
+            api = C.get_api(pid)
+            if not api.is_configured():
+                rev_release(u.id, sv["u"])
+                await show(update, context, "⚠️ پنل در دسترس نیست؛ کمی بعد دوباره امتحان کنید.", back_kb([[B("🔙 بازگشت به سرویس", callback_data=f"sv:{i}")]]))
+                return
+            try:
+                res = await asyncio.wait_for(api.request("POST", api.upath(sv["u"]) + "/revoke_sub"), 20)
+            except Exception as e:  # noqa: BLE001
+                rev_release(u.id, sv["u"])
+                log.warning("shop customer revoke %s: %s", sv["u"], e)
+                await show(update, context, "❌ تغییر لینک الان ممکن نشد؛ کمی بعد دوباره امتحان کنید.", back_kb([[B("🔙 بازگشت به سرویس", callback_data=f"sv:{i}")]]))
+                return
+            C.audit_event("فروشگاه", "تغییر لینک اشتراک توسط مشتری", str(u.id), f"{sv['u']} — لینک قبلی از کار افتاد", cat="user")
+            await show_service(update, context, i, "✅ <b>لینک اشتراک جدید ساخته شد</b> (لینک قبلی از کار افتاد).\n\n", prefetched=res if isinstance(res, dict) else None)
     elif cmd == "rn":
         i = int(p[1])
         svcs = cu.get("services") or []
