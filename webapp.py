@@ -3813,10 +3813,12 @@ async def happ_redirect(u: str = Query("", max_length=1500)):
     return HTMLResponse(_HAPP_PAGE.replace("__DEEP__", escape("happ://add/" + sub, quote=True)), headers=_PAGE_HEADERS)
 
 
-# ورود فقط با امضای initData تلگرام (HMAC با توکن ربات فروش) است؛ بدون کوکی/رمز. این بخش فقط‌خواندنی است و پول جابه‌جا نمی‌کند.
+# ورود فقط با امضای initData تلگرام (HMAC با توکن ربات فروش) است؛ بدون کوکی/رمز.
 MINI = os.path.join(C.BASE_DIR, "miniapp.html")
 _mini_cache = {"mtime": 0.0, "data": ""}
-_mini_hits: dict[int, float] = {}
+_mini_hits: dict[int, list[float]] = {}
+_mini_link_hits: dict[int, list[float]] = {}   # اتصال سرویس با لینک: حداکثر ۵ تلاش در دقیقه برای هر مشتری
+_MINI_MAX_IMG_B64 = 2_600_000   # ~1.9MB تصویر
 
 
 @app.get("/app", response_class=HTMLResponse)
@@ -3848,7 +3850,8 @@ def _mini_user(init: str, token: str) -> dict:
         if time.time() - int(pairs.get("auth_date") or 0) > 86400:
             raise bad
         u = json.loads(pairs.get("user") or "{}")
-        return {"id": int(u["id"])}
+        full_name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip()
+        return {"id": int(u["id"]), "name": full_name, "username": str(u.get("username") or "")}
     except (ValueError, KeyError, TypeError):
         raise bad
 
@@ -3857,7 +3860,7 @@ _mini_bot: dict[str, str] = {}
 
 
 async def _mini_bot_name(token: str) -> str:
-    """یوزرنیم ربات فروش (برای لینک‌های خرید/تمدید مینی‌اپ)؛ یک‌بار از تلگرام گرفته و نگه داشته می‌شود."""
+    """یوزرنیم ربات فروش؛ یک‌بار از تلگرام گرفته و نگه داشته می‌شود."""
     if token not in _mini_bot:
         try:
             _mini_bot[token] = (await asyncio.wait_for(Bot(token).get_me(), 8)).username or ""
@@ -3866,25 +3869,134 @@ async def _mini_bot_name(token: str) -> str:
     return _mini_bot[token]
 
 
+async def _mini_auth(init: str, *, allow_closed: bool = False) -> tuple[dict, int, dict]:
+    s = C.load_config_ro()["shop"]
+    uinfo = _mini_user(init, s["token"])
+    uid = uinfo["id"]
+    now = time.time()
+    hits = [t for t in _mini_hits.get(uid, []) if now - t < 10]
+    if len(hits) >= 25:
+        raise HTTPException(429, "تعداد درخواست‌ها زیاد است؛ چند لحظه صبر کنید.")
+    hits.append(now)
+    _mini_hits[uid] = hits
+    C.prune_attempts(_mini_hits, now, 10, cap=5000)
+    cu = await asyncio.to_thread(shop.customer_touch, uid, uinfo["name"], uinfo["username"])
+    if cu.get("banned") and not C.is_admin(uid):
+        raise HTTPException(403, "دسترسی شما به فروشگاه محدود شده است.")
+    if not allow_closed and not s["enabled"] and not C.is_admin(uid):
+        raise HTTPException(403, "فروشگاه موقتاً بسته است؛ بعداً سر بزنید.")
+    return s, uid, cu
+
+
+def _mini_order_view(o: dict, s: dict) -> dict:
+    st = o.get("status", "")
+    mode = o.get("mode", "manual")
+    pay_amt = int(o.get("pay_amount") or 0)
+    return {
+        "id": o["id"],
+        "kind": o["kind"],
+        "kind_fa": shop.KIND_FA.get(o["kind"], o["kind"]),
+        "pname": o.get("pname", ""),
+        "username": o.get("username", ""),
+        "amount": int(o.get("amount") or 0),
+        "orig": int(o.get("orig") or 0),
+        "disc": int(o.get("disc") or 0),
+        "code": o.get("code", ""),
+        "status": st,
+        "status_fa": shop.STATUS_FA.get(st, st),
+        "mode": mode,
+        "method": o.get("method", "card"),
+        "pay_amount": pay_amt,
+        "pay_rial": pay_amt * 10 if pay_amt else 0,
+        "exp": int(o.get("exp") or 0),
+        "ts": int(o.get("ts") or 0),
+        "err": o.get("err", ""),
+        "reason": o.get("reason", ""),
+        "result": o.get("result", ""),
+        "cards": [dict(c) for c in s["cards"]] if st == "new" and mode in ("manual", "auto") else [],
+        "receipt_hours": s["receipt_hours"],
+        "auto_minutes": s["auto"]["minutes"],
+    }
+
+
+async def _mini_attach_sub(ov: dict, o: dict | None) -> dict:
+    """اگر سفارش خرید با موفقیت انجام شده باشد، لینک ساب و Happ اکانت ساخته‌شده را به خروجی اضافه می‌کند."""
+    if not o or o.get("status") != "done" or o.get("kind") != "buy" or not o.get("result"):
+        return ov
+    try:
+        cfg = C.load_config_ro()
+        pid = o.get("pid") or shop.shop_panel(cfg)
+        api = C.get_api(pid)
+        if api.is_configured():
+            u = await asyncio.wait_for(api.request("GET", api.upath(o["result"])), 10)
+            if isinstance(u, dict):
+                sub = api.full_sub(u.get("subscription_url", "")) or ""
+                if sub:
+                    ov["sub"] = sub
+                    ov["happ"] = C.happ_page_url(sub)
+    except Exception:  # noqa: BLE001
+        pass
+    return ov
+
+
 class MiniReq(BaseModel):
     init: str = Field(default="", max_length=4096)
 
 
+class MiniCodeReq(BaseModel):
+    init: str = Field(default="", max_length=4096)
+    plan_id: str = Field(min_length=1, max_length=20)
+    code: str = Field(min_length=1, max_length=32)
+
+
+class MiniOrderReq(BaseModel):
+    init: str = Field(default="", max_length=4096)
+    kind: str = Field(pattern="^(buy|renew|reserve|topup)$")
+    plan_id: str = Field(default="", max_length=20)
+    amount: int = Field(default=0, ge=0, le=10 ** 10)
+    username: str = Field(default="", max_length=64)
+    code: str = Field(default="", max_length=32)
+    method: str = Field(default="wallet", pattern="^(wallet|zp|auto|manual)$")
+
+
+class MiniReceiptReq(BaseModel):
+    init: str = Field(default="", max_length=4096)
+    text: str = Field(default="", max_length=300)
+    image_b64: str = Field(default="", max_length=_MINI_MAX_IMG_B64)
+
+
+class MiniRevokeReq(BaseModel):
+    init: str = Field(default="", max_length=4096)
+    username: str = Field(min_length=1, max_length=64)
+
+
+class MiniLinkReq(BaseModel):
+    init: str = Field(default="", max_length=4096)
+    link: str = Field(min_length=8, max_length=1500)
+
+
+class MiniQrReq(BaseModel):
+    init: str = Field(default="", max_length=4096)
+    text: str = Field(min_length=1, max_length=2000)
+
+
 @app.post("/api/mini/me")
 async def mini_me(r: MiniReq):
-    s = C.load_config_ro()["shop"]
-    uid = _mini_user(r.init, s["token"])["id"]
-    now = time.time()
-    if now - _mini_hits.get(uid, 0) < 1:
-        raise HTTPException(429, "کمی صبر کنید.")
-    if len(_mini_hits) > 5000:
-        _mini_hits.clear()
-    _mini_hits[uid] = now
-    cu = s["customers"].get(str(uid))
-    if cu and cu["banned"]:
-        raise HTTPException(403, "دسترسی شما به فروشگاه محدود شده است.")
+    s, uid, cu = await _mini_auth(r.init, allow_closed=True)
+    if s["force"]["enabled"] and not C.is_admin(uid):
+        try:
+            async with Bot(s["token"]) as b:
+                miss = await shop.missing_channels(b, uid)
+            if miss:
+                return {
+                    "force": [{"chat": ch["chat"], "url": shop._chan_url(ch)} for ch in miss if shop._chan_url(ch)],
+                    "bot": await _mini_bot_name(s["token"]),
+                }
+        except Exception:  # noqa: BLE001
+            log.exception("mini force check")
     plans = [{"id": p["id"], "name": p["name"], "price": p["price"], "info": shop._plan_line(t)} for p, t in shop._active_plans()]
-    svcs = (cu or {}).get("services", [])[:10]
+    svcs = (cu or {}).get("services", [])[:20]
+    rsv_cfg = s["reserve"]
 
     async def one(sv):
         try:
@@ -3894,12 +4006,311 @@ async def mini_me(r: MiniReq):
         if not u:
             return {"name": sv["u"], "ok": False}
         st = u.get("status", "unknown")
-        return {"name": sv["u"], "ok": True, "status": st, "used": C.fmt_gb(u.get("used_traffic", 0) or 0), "limit": C.fmt_gb(u.get("data_limit") or 0),
-                "pct": round((u.get("used_traffic", 0) or 0) * 100 / u["data_limit"]) if u.get("data_limit") else 0,
-                "expire": C.fmt_expire(u.get("expire"), st, u.get("on_hold_expire_duration")), "sub": api.full_sub(u.get("subscription_url", "")) or ""}
+        sub = api.full_sub(u.get("subscription_url", "")) or ""
+        queue = C.next_plans_view(u) if (rsv_cfg["enabled"] or C._raw_plans(u)) else []
+        return {
+            "name": sv["u"],
+            "ok": True,
+            "status": st,
+            "used": C.fmt_gb(u.get("used_traffic", 0) or 0),
+            "limit": C.fmt_gb(u.get("data_limit") or 0),
+            "pct": round((u.get("used_traffic", 0) or 0) * 100 / u["data_limit"]) if u.get("data_limit") else 0,
+            "expire": C.fmt_expire(u.get("expire"), st, u.get("on_hold_expire_duration")),
+            "sub": sub,
+            "happ": C.happ_page_url(sub) if sub else "",
+            "queue": [{"gb": x["gb"], "days": x["days"]} for x in queue],
+            "can_reserve": bool(rsv_cfg["enabled"] and len(queue) < rsv_cfg["max"] and plans and not any(x.get("broken") for x in queue)),
+        }
+
     services = await asyncio.gather(*[one(sv) for sv in svcs])
-    orders = [{"id": o["id"], "kind": shop.KIND_FA.get(o["kind"], o["kind"]), "name": o.get("pname", ""), "amount": o["amount"],
-               "status": shop.STATUS_FA.get(o["status"], o["status"]), "ts": o["ts"]} for o in reversed(s["orders"]) if o["uid"] == uid][:10]
-    return {"enabled": s["enabled"], "balance": (cu or {}).get("balance", 0), "known": bool(cu), "welcome": s["welcome"], "support": s["support"],
-            "plans": plans, "services": services, "orders": orders,
-            "bot": await _mini_bot_name(s["token"]), "test": bool(cu) and shop.test_available() and not cu.get("test")}
+    orders = [_mini_order_view(o, s) for o in reversed(s["orders"]) if o["uid"] == uid][:15]
+    wlog = list(reversed((cu or {}).get("log") or []))[:15]
+    zp = s["zp"]
+    auto = s["auto"]
+    return {
+        "enabled": s["enabled"],
+        "balance": (cu or {}).get("balance", 0),
+        "known": True,
+        "welcome": s["welcome"],
+        "support": s["support"],
+        "plans": plans,
+        "services": services,
+        "orders": orders,
+        "log": wlog,
+        "bot": await _mini_bot_name(s["token"]),
+        "test": shop.test_available() and not (cu or {}).get("test"),
+        "now": int(time.time()),
+        "cfg": {
+            "min_topup": s["min_topup"],
+            "max_topup": s["max_topup"],
+            "has_cards": bool(s["cards"]),
+            "has_codes": any(d["active"] for d in s["codes"].values()),
+            "zp_ok": Z.shop_ready(zp),
+            "zp_min": Z.MIN_TOMAN,
+            "zp_max": zp["max_amount"],
+            "auto_ok": bool(auto["enabled"] and s["cards"]),
+            "auto_max": auto["max_amount"],
+            "reserve_enabled": rsv_cfg["enabled"],
+        },
+    }
+
+
+@app.post("/api/mini/code-check")
+async def mini_code_check(r: MiniCodeReq):
+    _s, uid, _cu = await _mini_auth(r.init)
+    try:
+        code, off, final = await asyncio.to_thread(shop.code_check, uid, r.code, r.plan_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "code": code, "disc": off, "final": final}
+
+
+@app.post("/api/mini/order")
+async def mini_order_create(r: MiniOrderReq):
+    s, uid, _cu = await _mini_auth(r.init)
+    if r.method == "wallet":
+        try:
+            o = await asyncio.to_thread(shop.order_pay_wallet, uid, r.kind, r.plan_id, r.username, r.code)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        async with Bot(s["token"]) as b:
+            await shop.fulfil(b, o["id"])
+        fresh_o = shop.order_get(o["id"]) or o
+        fresh_cu = shop.customer_get(uid) or {}
+        ov = await _mini_attach_sub(_mini_order_view(fresh_o, shop.shop_cfg()), fresh_o)
+        return {"ok": True, "order": ov, "balance": fresh_cu.get("balance", 0)}
+
+    if r.method == "zp":
+        try:
+            o = await asyncio.to_thread(shop.order_new, uid, r.kind, r.plan_id, r.amount, r.username, r.code, "zp")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        what = shop.KIND_FA[o["kind"]] + (f" — {o.get('pname')}" if o.get("pname") else "")
+        try:
+            auth, url = await Z.request_payment(o["amount"], f"{what} #{o['id']}")
+            await asyncio.to_thread(Z.pay_new, "order", o["id"], uid, o["amount"], auth)
+        except (Z.ZPError, ValueError) as e:
+            log.warning("mini zarinpal start failed (order %s): %s", o["id"], e)
+            try:
+                await asyncio.to_thread(shop.order_cancel, o["id"], uid)
+            except ValueError:
+                pass
+            await shop.zp_warn_admins(None, "start", f"⚠️ <b>ساخت پرداخت زرین‌پال ناموفق بود</b>\n{C.esc(e)}\n\nتنظیمات درگاه را در وب‌پنل ← فروشگاه ← زرین‌پال بررسی کنید.")
+            raise HTTPException(502, "ساخت پرداخت آنلاین الان ممکن نشد. لطفاً دقایقی بعد دوباره امتحان کنید یا روش دیگری را انتخاب کنید.")
+        return {"ok": True, "url": url, "order": _mini_order_view(o, shop.shop_cfg())}
+
+    # کارت‌به‌کارت: auto یا manual
+    try:
+        o = await asyncio.to_thread(shop.order_new, uid, r.kind, r.plan_id, r.amount, r.username, r.code, r.method)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "order": _mini_order_view(o, shop.shop_cfg())}
+
+
+@app.post("/api/mini/order/{oid}/status")
+async def mini_order_status(oid: str, r: MiniReq):
+    s, uid, _cu = await _mini_auth(r.init, allow_closed=True)
+    o = shop.order_get(oid)
+    if not o or o["uid"] != uid:
+        raise HTTPException(404, "سفارش پیدا نشد.")
+    if o["status"] == "new" and o.get("mode") == "zp":
+        auth = o.get("zp") or next((p["auth"] for p in reversed(s["zp"]["pays"]) if p["kind"] == "order" and p["ref"] == oid and p["auth"]), "")
+        if auth:
+            res = await Z.finalize(auth, None)
+        else:
+            res = {"state": "missing"}
+        if res["state"] in ("order_ok", "credited", "stuck"):
+            async with Bot(s["token"]) as b:
+                await shop.zp_after(b, res)
+    fresh_o = shop.order_get(oid) or o
+    fresh_cu = shop.customer_get(uid) or {}
+    ov = await _mini_attach_sub(_mini_order_view(fresh_o, shop.shop_cfg()), fresh_o)
+    return {"ok": True, "order": ov, "balance": fresh_cu.get("balance", 0)}
+
+
+@app.post("/api/mini/order/{oid}/cancel")
+async def mini_order_cancel(oid: str, r: MiniReq):
+    _s, uid, _cu = await _mini_auth(r.init, allow_closed=True)
+    try:
+        await asyncio.to_thread(shop.order_cancel, oid, uid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/mini/order/{oid}/receipt")
+async def mini_order_receipt(oid: str, r: MiniReceiptReq):
+    import base64
+    import io
+    s, uid, _cu = await _mini_auth(r.init, allow_closed=True)
+    o = shop.order_get(oid)
+    if not o or o["uid"] != uid:
+        raise HTTPException(404, "سفارش پیدا نشد.")
+    if o["status"] != "new" or o.get("mode") == "zp":
+        raise HTTPException(400, "این سفارش دیگر منتظر رسید نیست.")
+    text = (r.text or "").strip()
+    img_raw = (r.image_b64 or "").strip()
+    if not img_raw and len(text) < 4:
+        raise HTTPException(400, "لطفاً عکس رسید را انتخاب کنید یا شماره پیگیری (حداقل ۴ کاراکتر) بنویسید.")
+    img_bytes = b""
+    if img_raw:
+        if "," in img_raw and img_raw.startswith("data:"):
+            img_raw = img_raw.split(",", 1)[1]
+        try:
+            img_bytes = base64.b64decode(img_raw, validate=True)
+        except Exception:  # noqa: BLE001
+            raise HTTPException(400, "فرمت تصویر نامعتبر است.")
+        if len(img_bytes) < 64 or len(img_bytes) > 1_900_000:
+            raise HTTPException(400, "حجم تصویر باید کمتر از ۱.۸ مگابایت باشد.")
+        if not (img_bytes.startswith(b"\xff\xd8\xff") or img_bytes.startswith(b"\x89PNG") or img_bytes[:4] == b"RIFF" or img_bytes[:3] == b"GIF"):
+            raise HTTPException(400, "فقط تصویر (JPG/PNG/WEBP) مجاز است.")
+
+    cfg = C.load_config_ro()
+    admins = cfg.get("admin_ids") or []
+    file_id = fuid = ""
+    sent_first: list[list] = []
+    async with Bot(s["token"]) as b:
+        if img_bytes:
+            if not admins:
+                raise HTTPException(502, "ادمین برای دریافت رسید تنظیم نشده است.")
+            preview = {**o, "status": "pending", "rts": int(time.time()), "text": text[:300]}
+            cap = shop.order_text(preview)[:1020]
+            kb = shop.order_kb(preview)
+            for aid in admins:
+                try:
+                    bio = io.BytesIO(img_bytes)
+                    bio.name = f"receipt_{oid}.jpg"
+                    msg = await b.send_photo(aid, bio, caption=cap, parse_mode=shop.HTML, reply_markup=kb)
+                    if msg.photo:
+                        file_id = msg.photo[-1].file_id
+                        fuid = msg.photo[-1].file_unique_id
+                    sent_first.append([aid, msg.message_id, True])
+                    break
+                except TelegramError as e:
+                    log.warning("mini receipt send_photo to %s failed: %s", aid, e)
+            if not file_id:
+                raise HTTPException(502, "ارسال تصویر رسید به تلگرام ناموفق بود؛ دوباره تلاش کنید.")
+        try:
+            o = await asyncio.to_thread(shop.order_receipt, oid, uid, file_id, fuid, text)
+        except ValueError as e:
+            for aid, mid, _ in sent_first:
+                try:
+                    await b.delete_message(aid, mid)
+                except TelegramError:
+                    pass
+            raise HTTPException(400, str(e))
+        if img_bytes:
+            # ارسال به بقیه‌ی ادمین‌ها با file_id ثبت‌شده
+            rem_sent = []
+            for aid in admins:
+                if any(x[0] == aid for x in sent_first):
+                    continue
+                try:
+                    m2 = await b.send_photo(aid, file_id, caption=shop.order_text(o)[:1020], parse_mode=shop.HTML, reply_markup=shop.order_kb(o))
+                    rem_sent.append([aid, m2.message_id, True])
+                except TelegramError:
+                    pass
+            await asyncio.to_thread(shop.order_update, oid, adm=sent_first + rem_sent)
+        else:
+            sent = await shop._notify_admins(b, shop.order_text(o), shop.order_kb(o))
+            await asyncio.to_thread(shop.order_update, oid, adm=sent)
+
+    fresh_o = shop.order_get(oid) or o
+    return {"ok": True, "order": _mini_order_view(fresh_o, shop.shop_cfg())}
+
+
+@app.post("/api/mini/revoke")
+async def mini_revoke(r: MiniRevokeReq):
+    _s, uid, cu = await _mini_auth(r.init)
+    sv = next((x for x in (cu or {}).get("services", []) if x["u"] == r.username), None)
+    if not sv:
+        raise HTTPException(404, "این سرویس متعلق به شما نیست.")
+    wait = shop.rev_reserve(uid, sv["u"])
+    if wait:
+        raise HTTPException(429, f"لطفاً {wait} ثانیه صبر کنید و دوباره تلاش کنید.")
+    cfg = C.load_config_ro()
+    pid = sv["pid"] if sv["pid"] and C.get_panel(cfg, sv["pid"]) else cfg["active_panel"]
+    api = C.get_api(pid)
+    if not api.is_configured():
+        shop.rev_release(uid, sv["u"])
+        raise HTTPException(502, "پنل در دسترس نیست؛ کمی بعد دوباره امتحان کنید.")
+    try:
+        res = await asyncio.wait_for(api.request("POST", api.upath(sv["u"]) + "/revoke_sub"), 20)
+    except Exception as e:  # noqa: BLE001
+        shop.rev_release(uid, sv["u"])
+        log.warning("mini revoke %s: %s", sv["u"], e)
+        raise HTTPException(502, "تغییر لینک الان ممکن نشد؛ کمی بعد دوباره امتحان کنید.")
+    C.audit_event("فروشگاه (مینی‌اپ)", "تغییر لینک اشتراک توسط مشتری", str(uid), f"{sv['u']} — لینک قبلی از کار افتاد", cat="user")
+    raw_sub = (res if isinstance(res, dict) else {}).get("subscription_url", "")
+    if not raw_sub:
+        try:
+            fresh_u = await asyncio.wait_for(api.request("GET", api.upath(sv["u"])), 15)
+            if isinstance(fresh_u, dict):
+                raw_sub = fresh_u.get("subscription_url", "")
+        except Exception:  # noqa: BLE001
+            pass
+    sub = api.full_sub(raw_sub) or ""
+    return {"ok": True, "sub": sub, "happ": C.happ_page_url(sub) if sub else ""}
+
+
+@app.post("/api/mini/link")
+async def mini_link(r: MiniLinkReq):
+    _s, uid, _cu = await _mini_auth(r.init)
+    if not shop.rate_allow(_mini_link_hits, uid, 5, 60):
+        raise HTTPException(429, "تلاش‌های زیاد؛ یک دقیقه بعد دوباره امتحان کنید.")
+    try:
+        hit = await shop.find_service_by_link(r.link)
+    except Exception:  # noqa: BLE001
+        log.exception("mini link lookup")
+        hit = None
+    if not hit:
+        raise HTTPException(404, "این لینک در سیستم پیدا نشد. لینک ساب کامل را وارد کنید.")
+    pid, uname, _ = hit
+    try:
+        res = await asyncio.to_thread(shop.customer_link_service, uid, pid, uname)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if res == "taken":
+        raise HTTPException(409, f"سرویس {uname} قبلاً به حساب دیگری وصل شده است؛ به پشتیبانی پیام بدهید.")
+    return {"ok": True, "username": uname, "status": res}
+
+
+@app.post("/api/mini/test")
+async def mini_test(r: MiniReq):
+    s, uid, _cu = await _mini_auth(r.init)
+    cfg = C.load_config_ro()
+    if not shop.test_available(cfg):
+        raise HTTPException(400, "تست رایگان فعلاً فعال نیست.")
+    claim = await asyncio.to_thread(shop._test_claim, uid, True)
+    if claim == "used":
+        raise HTTPException(400, "شما قبلاً تست رایگان گرفته‌اید (هر نفر فقط یک‌بار).")
+    if claim == "off":
+        raise HTTPException(400, "تست رایگان فعلاً فعال نیست.")
+    try:
+        res = await shop._create_test(uid)
+    except shop.FulfilError as e:
+        if e.clean:
+            await asyncio.to_thread(shop._test_claim, uid, False)
+            raise HTTPException(502, "ساخت تست الان ممکن نشد؛ کمی بعد دوباره امتحان کنید.")
+        async with Bot(s["token"]) as b:
+            await shop._notify_admins(b, f"⚠️ ساخت تست رایگان (مینی‌اپ) برای {shop.label(shop.customer_get(uid), uid)} نتیجه‌ی مبهم داشت ({C.esc(e)}).")
+        raise HTTPException(502, "ساخت تست با مشکل روبه‌رو شد؛ پشتیبانی بررسی می‌کند.")
+    except Exception:  # noqa: BLE001
+        log.exception("mini give_test")
+        raise HTTPException(502, "خطای غیرمنتظره؛ پشتیبانی بررسی می‌کند.")
+    sub = res["results"][0]["sub"]
+    async with Bot(s["token"]) as b:
+        try:
+            await C.send_results(b, uid, res["results"], res["header"], cfg["max_qr"], True)
+            await b.send_message(uid, f"🎁 تست رایگان شما آماده است.\n⏳ اعتبار: {shop._hours_fa(cfg['shop']['test']['hours'])}")
+        except Exception:  # noqa: BLE001
+            log.exception("mini send test result")
+        await shop._notify_admins(b, f"🎁 تست رایگان (مینی‌اپ): <code>{C.esc(res['username'])}</code> برای {shop.label(shop.customer_get(uid), uid)}")
+    return {"ok": True, "username": res["username"], "sub": sub, "happ": C.happ_page_url(sub) if sub else "", "hours": cfg["shop"]["test"]["hours"]}
+
+
+@app.post("/api/mini/qr")
+async def mini_qr(r: MiniQrReq):
+    await _mini_auth(r.init, allow_closed=True)                 # محدودیت تعداد + چک مسدودی (قبلاً فقط امضا چک می‌شد)
+    png = await asyncio.to_thread(C.make_qr_png, r.text)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
