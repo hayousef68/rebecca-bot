@@ -1743,7 +1743,10 @@ def _slim(u: dict, api, pend: dict | None = None) -> dict:
         "days_left": days_left, "unlimited_days": st != "on_hold" and not exp,
         "expire_text": C.fmt_expire(u.get("expire"), st, u.get("on_hold_expire_duration")),
         "sub": api.full_sub(u.get("subscription_url", "")),
+        "pid": str(getattr(api, "pid", "")),
+        "panel_name": getattr(api, "name", "") or (get_panel(cfg, str(getattr(api, "pid", ""))) or {}).get("name", ""),
         "service_id": u.get("service_id"), "note": u.get("note") or "",
+        "rep_note": cfg.get("rep_notes", {}).get(str(getattr(api, "pid", "")), {}).get(username, ""),
         "created_by_rep": rep_owner_label, "rep_id": rid or "",
         "next_plans": C.next_plans_view(u),
         "np_raw": json.dumps(C._raw_plans(u), ensure_ascii=False)[:1500] if C._raw_plans(u) else "",
@@ -1788,19 +1791,151 @@ async def _unlimited_users(api, search: str, offset: int, limit: int) -> dict:
     return {"users": [_slim(u, api, pend) for u in found[offset:offset + limit]], "total": len(found)}
 
 
+async def _search_panel_smart(ap: RebeccaClient, cfg: dict, q_raw: str, q_norm: str, status: str, limit_per_panel: int = 40) -> list[dict]:
+    """جستجوی ترکیبی در یک پنل: API پنل (نام کاربری و یادداشت پنل) + یادداشت‌های محلی نماینده‌ها (rep_notes)."""
+    if not ap.is_configured():
+        return []
+    pid = ap.pid
+    pend = C.unpaid_map(pid)
+    seen: set[str] = set()
+    out: list[dict] = []
+
+    # ۱) تطابق در یادداشت‌های محلی نماینده‌ها برای این پنل
+    rep_hits: list[str] = []
+    for uname, rnote in (cfg.get("rep_notes", {}).get(pid) or {}).items():
+        if q_norm and q_norm in str(rnote).translate(_FA_DIGITS).lower():
+            rep_hits.append(uname)
+
+    # ۲) جستجوی استاندارد در API پنل
+    try:
+        if status == "unlimited":
+            u_res = await _unlimited_users(ap, q_raw, 0, limit_per_panel)
+            batch = u_res.get("users", [])
+            for item in batch:
+                un = item.get("username") or ""
+                if un and un not in seen:
+                    seen.add(un)
+                    if un in rep_hits:
+                        item["match_via"] = "یادداشت نماینده"
+                    out.append(item)
+        else:
+            params: dict = {"offset": 0, "limit": limit_per_panel}
+            if q_raw:
+                params["search"] = q_raw
+            if status:
+                params["status"] = status
+            res = await ap.request("GET", "/api/users", params=params)
+            for raw_u in res.get("users", []):
+                un = raw_u.get("username") or ""
+                if un and un not in seen:
+                    seen.add(un)
+                    item = _slim(raw_u, ap, pend)
+                    if un in rep_hits:
+                        item["match_via"] = "یادداشت نماینده"
+                    out.append(item)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ۳) واکشی کاربرانی که فقط از طریق یادداشت نماینده پیدا شدند
+    extra_names = [un for un in rep_hits if un not in seen][:20]
+    if extra_names:
+        sem = asyncio.Semaphore(6)
+
+        async def fetch_one(uname: str):
+            async with sem:
+                try:
+                    raw_u = await asyncio.wait_for(ap.request("GET", ap.upath(uname)), 12)
+                    if not isinstance(raw_u, dict) or not raw_u.get("username"):
+                        return None
+                    if status == "unlimited" and not _is_unlimited(raw_u):
+                        return None
+                    if status and status != "unlimited" and raw_u.get("status") != status:
+                        return None
+                    item = _slim(raw_u, ap, pend)
+                    item["match_via"] = "یادداشت نماینده"
+                    return item
+                except Exception:  # noqa: BLE001
+                    return None
+
+        for item in await asyncio.gather(*(fetch_one(un) for un in extra_names)):
+            if item and item["username"] not in seen:
+                seen.add(item["username"])
+                out.append(item)
+
+    return out
+
+
 @app.get("/api/users", dependencies=[Depends(guard)])
-async def users(search: str = "", status: str = "", offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+async def users(search: str = "", status: str = "", scope: str = Query("panel", pattern="^(panel|global)$"),
+                offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
                 api: RebeccaClient = Depends(P)):
-    if status == "unlimited":          # حجم یا زمان نامحدود: پنل فیلتر ندارد؛ همه را می‌خوانیم و اینجا جدا می‌کنیم
-        return await _unlimited_users(api, search, offset, limit)
-    params = {"offset": offset, "limit": limit}
-    if search.strip():
-        params["search"] = search.strip()
-    if status:
-        params["status"] = status
-    res = await api.request("GET", "/api/users", params=params)
-    pend = C.unpaid_map(api.pid)
-    return {"users": [_slim(u, api, pend) for u in res.get("users", [])], "total": res.get("total", 0)}
+    q_raw = search.strip()
+    cfg = C.load_config_ro()
+
+    # ۱) تشخیص لینک ساب (مستقیم از روی توکن اشتراک در همه پنل‌ها پیدا می‌کند)
+    if q_raw and ("/sub/" in q_raw or q_raw.lower().startswith(("http://", "https://"))):
+        link_candidate = q_raw if "://" in q_raw else "https://" + q_raw.lstrip("/")
+        try:
+            hit = await shop.find_service_by_link(link_candidate)
+        except Exception:  # noqa: BLE001
+            hit = None
+        if not hit:
+            return {"users": [], "total": 0, "match_reason": "لینک اشتراک در هیچ پنلی پیدا نشد"}
+        pid, _uname, raw_u = hit
+        ap_hit = get_api(pid)
+        item = _slim(raw_u, ap_hit)
+        item["match_via"] = "لینک اشتراک"
+        return {
+            "users": [item],
+            "total": 1,
+            "found_panel": pid,
+            "found_panel_name": ap_hit.name,
+            "match_reason": f"پیدا شده از روی لینک اشتراک در پنل «{ap_hit.name}»",
+        }
+
+    # ۲) جستجوی سراسری بین همه پنل‌ها (وقتی scope=global انتخاب شده)
+    if q_raw and scope == "global":
+        q_norm = q_raw.translate(_FA_DIGITS).strip().lstrip("@").lower()
+        apis = [get_api(pn["id"]) for pn in cfg["panels"]]
+        batches = await asyncio.gather(*(_search_panel_smart(ap, cfg, q_raw, q_norm, status, 40) for ap in apis))
+        merged: list[dict] = []
+        for ap, items in zip(apis, batches):
+            for it in items:
+                if ap.pid != api.pid and not it.get("match_via"):
+                    it["match_via"] = f"پنل {ap.name}"
+                merged.append(it)
+        return {"users": merged[offset:offset + limit], "total": len(merged), "global": True}
+
+    # ۳) حالت عادی (بدون جستجو): صفحه‌بندی سریع روی پنل فعال
+    if not q_raw:
+        if status == "unlimited":
+            return await _unlimited_users(api, "", offset, limit)
+        params: dict = {"offset": offset, "limit": limit}
+        if status:
+            params["status"] = status
+        res = await api.request("GET", "/api/users", params=params)
+        pend = C.unpaid_map(api.pid)
+        return {"users": [_slim(u, api, pend) for u in res.get("users", [])], "total": res.get("total", 0)}
+
+    # ۴) جستجو در پنل فعال (شامل یادداشت نماینده) + جستجوی خودکار در سایر پنل‌ها در صورت نبود نتیجه
+    q_norm = q_raw.translate(_FA_DIGITS).strip().lstrip("@").lower()
+    local_items = await _search_panel_smart(api, cfg, q_raw, q_norm, status, max(50, offset + limit))
+    if local_items or len(cfg["panels"]) <= 1 or offset > 0:
+        return {"users": local_items[offset:offset + limit], "total": len(local_items)}
+
+    other_apis = [get_api(pn["id"]) for pn in cfg["panels"] if pn["id"] != api.pid]
+    other_batches = await asyncio.gather(*(_search_panel_smart(ap, cfg, q_raw, q_norm, status, 30) for ap in other_apis))
+    fallback_items: list[dict] = []
+    for ap, items in zip(other_apis, other_batches):
+        for it in items:
+            if not it.get("match_via"):
+                it["match_via"] = f"پنل {ap.name}"
+            fallback_items.append(it)
+    return {
+        "users": fallback_items[:limit],
+        "total": len(fallback_items),
+        "auto_global": bool(fallback_items),
+    }
 
 
 class EditReq(BaseModel):
@@ -2603,7 +2738,7 @@ async def backup_restore(r: RestoreReq, request: Request):
         os.chmod(safety, 0o600)
         try:
             import glob
-            for _old in sorted(glob.glob(C.CONFIG_FILE + ".pre-restore-*"))[:-5]:
+            for _old in sorted(glob.glob(C.CONFIG_FILE + ".pre-restore-*"))[:-8]:
                 os.remove(_old)
         except OSError:
             log.warning("پاک‌سازی نسخه‌های قدیمی pre-restore ممکن نشد")
@@ -2650,6 +2785,183 @@ async def backup_verify(r: RestoreReq):
             "balance": sum(x["balance"] for x in new["reps"].values()),
             "shop": C.shop_totals(new),
             "attach_log": len((extra or {}).get("attach_log") or [])}
+
+
+# ── مدیریت فایل‌های پشتیبان روی سرور (pre-restore) ──
+def _snap_dir() -> str:
+    return os.path.dirname(C.CONFIG_FILE) or "."
+
+
+def _snap_prefix() -> str:
+    return os.path.basename(C.CONFIG_FILE) + ".pre-restore-"
+
+
+def _snap_path(name: str) -> str:
+    """مسیر امن فایل پشتیبان سرور (جلوگیری کامل از path traversal)."""
+    clean = os.path.basename(str(name or "").strip())
+    if clean != name or not clean.startswith(_snap_prefix()) or not re.fullmatch(r"[A-Za-z0-9._-]+", clean):
+        raise HTTPException(400, "نام فایل پشتیبان نامعتبر است.")
+    path = os.path.join(_snap_dir(), clean)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "فایل پشتیبان پیدا نشد.")
+    return path
+
+
+def _snap_list_sync() -> list[dict]:
+    import glob
+    pattern = os.path.join(_snap_dir(), _snap_prefix() + "*")
+    out = []
+    for path in sorted(glob.glob(pattern), reverse=True):
+        if not os.path.isfile(path):
+            continue
+        name = os.path.basename(path)
+        try:
+            st = os.stat(path)
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            norm = C._normalize(raw if isinstance(raw, dict) else {})
+            sm = C.backup_summary(norm)
+            out.append({
+                "name": name,
+                "ts": int(st.st_mtime),
+                "size_kb": round(st.st_size / 1024, 1),
+                "panels": sm["panels"],
+                "reps": sm["reps"],
+                "rep_users": sm["rep_users"],
+                "balance": sum(int(x.get("balance") or 0) for x in norm["reps"].values()),
+                "shop_customers": sm["shop_customers"],
+                "shop_balance": sm["shop_balance"],
+            })
+        except Exception:  # noqa: BLE001
+            try:
+                st = os.stat(path)
+                out.append({"name": name, "ts": int(st.st_mtime), "size_kb": round(st.st_size / 1024, 1), "broken": True})
+            except OSError:
+                pass
+    return out
+
+
+def _snap_create_sync() -> str:
+    import glob
+    import shutil
+    if not os.path.exists(C.CONFIG_FILE):
+        raise HTTPException(404, "فایل تنظیمات فعلی پیدا نشد.")
+    base = f"{C.CONFIG_FILE}.pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
+    target = base
+    n = 1
+    while os.path.exists(target):
+        target = f"{base}-{n}"
+        n += 1
+    shutil.copy2(C.CONFIG_FILE, target)
+    os.chmod(target, 0o600)
+    for old in sorted(glob.glob(os.path.join(_snap_dir(), _snap_prefix() + "*")))[:-8]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    return os.path.basename(target)
+
+
+@app.get("/api/backup/snapshots", dependencies=[Depends(guard)])
+async def backup_snapshots():
+    """فهرست نسخه‌های پشتیبان ذخیره‌شده روی سرور."""
+    return {"items": await asyncio.to_thread(_snap_list_sync)}
+
+
+@app.post("/api/backup/snapshot", dependencies=[Depends(guard)])
+async def backup_snapshot_create():
+    """ایجاد یک نسخه‌ی پشتیبان فوری روی سرور قبل از تغییرات حساس."""
+    name = await asyncio.to_thread(_snap_create_sync)
+    _aud("ایجاد نقطه بازیابی سرور", name, "", "sys")
+    return {"ok": True, "name": name}
+
+
+@app.get("/api/backup/snapshots/{name}", dependencies=[Depends(guard)])
+async def backup_snapshot_download(name: str):
+    path = _snap_path(name)
+
+    def _read() -> bytes:
+        with open(path, "rb") as f:
+            return f.read()
+    data = await asyncio.to_thread(_read)
+    fname = os.path.basename(path)
+    pw = load_config()["backup"].get("password") or ""
+    if pw:                                                       # مثل دانلود عادی بکاپ: با رمز تنظیم‌شده، فایل رمزنگاری می‌شود (قبلاً متن ساده بود)
+        data = await asyncio.to_thread(C.encrypt_backup, data, pw)
+        fname += ".enc"
+    return Response(data, media_type="application/octet-stream" if pw else "application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.post("/api/backup/snapshots/{name}/delete", dependencies=[Depends(guard)])
+async def backup_snapshot_delete(name: str):
+    path = _snap_path(name)
+    os.remove(path)
+    _aud("حذف نقطه بازیابی سرور", os.path.basename(path), "", "sys")
+    return {"ok": True}
+
+
+class SnapRestoreReq(BaseModel):
+    wallet_mode: str = Field(default="keep", pattern="^(keep|restore)$")
+    confirm_wallet: bool = False
+    code: str = Field(default="", max_length=64)
+
+
+@app.post("/api/backup/snapshots/{name}/restore", dependencies=[Depends(guard)])
+async def backup_snapshot_restore(name: str, r: SnapRestoreReq, request: Request):
+    """بازیابی یک‌کلیکی از فایل پشتیبان موجود روی سرور (همراه با گرفتن بکاپ از وضعیت فعلی)."""
+    path = _snap_path(name)
+    await _gate_code(request, r.code, None, "بازیابی نقطه بازیابی سرور", always=True)
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    data, new, extra = _parse_restore(content, "")
+    cur = load_config()
+    if not (new.get("web") or {}).get("hash"):
+        new["web"] = cur["web"]
+    has_reps = "reps" in data
+    if not has_reps:
+        new["reps"], new["rep_users"], new["rep_notes"], new["rep_paid"] = cur["reps"], cur["rep_users"], cur["rep_notes"], cur["rep_paid"]
+    _sh = C.shop_totals(cur)
+    fresh_srv = (not any(x["balance"] for x in cur["reps"].values()) and not cur["wallet_tx"]
+                 and not _sh["customers"] and not _sh["orders"])
+    keep = (r.wallet_mode == "keep" and not fresh_srv) or not has_reps
+    if not keep and not r.confirm_wallet and not fresh_srv:
+        raise HTTPException(400, "برای برگرداندنِ موجودی و تراکنش‌ها از بکاپ، تأیید صریح لازم است.")
+    C.preserve_security(new, cur)
+    if keep:
+        C.restore_keep_wallet(new, cur)
+    web_changed = (new["web"].get("hash"), new["web"].get("user")) != (cur["web"].get("hash"), cur["web"].get("user"))
+    safety_name = await asyncio.to_thread(_snap_create_sync)
+    C.save_config(new)
+    if extra:
+        if isinstance(extra.get("attach_log"), list):
+            sales.attach_import(extra["attach_log"])
+        ov = extra.get("sales_overrides")
+        if isinstance(ov, dict):
+            base = {"hide": {}, "edit": {}, "spans": []}
+            base.update({k: ov[k] for k in base if isinstance(ov.get(k), type(base[k]))})
+            sales._save_ovr(base)
+    for p in {p["id"] for p in cur["panels"]} | {p["id"] for p in new["panels"]}:
+        C.drop_api(p)
+    _bot.update(token=None, obj=None)
+    _aud("بازیابی نقطه بازیابی سرور", os.path.basename(path), f"حالت کیف پول: {'حفظ وضعیت فعلی' if keep else 'برگردانده‌شده از بکاپ'}؛ پشتیبان قبلی: {safety_name}")
+    _bg_notify(f"♻️ <b>نقطه بازیابی سرور بازگردانی شد</b>\nفایل: <code>{C.esc(os.path.basename(path))}</code>\nکیف پول: {'وضعیت فعلی حفظ شد' if keep else '⚠️ از بکاپ برگردانده شد'}\nIP: <code>{C.esc(_client_ip(request))}</code>")
+    try:
+        proc = await asyncio.create_subprocess_exec("systemctl", "restart", "rebecca-bot")
+        asyncio.create_task(proc.wait())
+    except Exception:  # noqa: BLE001
+        log.warning("ریستارت خودکار ربات ممکن نشد")
+    fresh = load_config()
+    return {
+        "ok": True,
+        "panels": len(fresh["panels"]),
+        "reps": len(fresh["reps"]),
+        "balance": sum(x["balance"] for x in fresh["reps"].values()),
+        "shop": C.shop_totals(fresh),
+        "wallet_kept": keep,
+        "web_changed": web_changed,
+        "recon": ops.recon_summary(ops.reconcile(fresh, None), 8),
+    }
 
 
 # ───────────────────────────── داشبورد نماینده ─────────────────────────────
