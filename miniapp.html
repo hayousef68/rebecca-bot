@@ -2,79 +2,841 @@
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>فروشگاه</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{--bg:var(--tg-theme-bg-color,#fff);--tx:var(--tg-theme-text-color,#111);--mu:var(--tg-theme-hint-color,#777);--cd:var(--tg-theme-secondary-bg-color,#f2f2f5);--bt:var(--tg-theme-button-color,#2f80ed);--bx:var(--tg-theme-button-text-color,#fff);--ok:#2ea44f;--bad:#d64545}
-*{box-sizing:border-box}
-body{margin:0;padding:12px 12px calc(20px + env(safe-area-inset-bottom,0px));background:var(--bg);color:var(--tx);font:15px/1.7 system-ui,Tahoma,sans-serif}
-h2{font-size:15px;margin:18px 4px 8px;color:var(--mu);font-weight:600}
-.card{background:var(--cd);border-radius:14px;padding:12px 14px;margin-bottom:8px}
+:root{
+  --bg:var(--tg-theme-bg-color,#0f172a);
+  --sec:var(--tg-theme-secondary-bg-color,#1e293b);
+  --tx:var(--tg-theme-text-color,#f1f5f9);
+  --mu:var(--tg-theme-hint-color,#94a3b8);
+  --bt:var(--tg-theme-button-color,#3b82f6);
+  --bx:var(--tg-theme-button-text-color,#ffffff);
+  --ln:color-mix(in srgb,var(--tx) 11%,transparent);
+  --ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
+  --r:16px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--tx);font:14.5px/1.65 system-ui,-apple-system,Tahoma,sans-serif;overflow-x:hidden}
+body{padding:12px 14px calc(86px + env(safe-area-inset-bottom,0px))}
+button,input{font:inherit}
+button{border:0;border-radius:12px;padding:10px 14px;background:var(--bt);color:var(--bx);font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:transform .1s,opacity .15s}
+button:active:not(:disabled){transform:scale(.97)}
+button:disabled{opacity:.55;cursor:not-allowed}
+button.g{background:color-mix(in srgb,var(--bt) 14%,transparent);color:var(--bt);border:1px solid color-mix(in srgb,var(--bt) 30%,transparent)}
+button.s{background:var(--sec);color:var(--tx);border:1px solid var(--ln)}
+button.bad{background:color-mix(in srgb,var(--bad) 15%,transparent);color:var(--bad);border:1px solid color-mix(in srgb,var(--bad) 30%,transparent)}
+button.sm{padding:7px 11px;font-size:13px;border-radius:10px}
+button.full{width:100%}
+input{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--ln);border-radius:12px;padding:10px 12px;min-height:44px;outline:none;transition:border-color .15s}
+input:focus{border-color:var(--bt)}
+.card{background:var(--sec);border:1px solid var(--ln);border-radius:var(--r);padding:14px;margin-bottom:10px}
 .row{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.bal{font-size:24px;font-weight:700}
-.mu{color:var(--mu);font-size:13px}
-.bar{height:6px;border-radius:3px;background:#8884;overflow:hidden;margin:6px 0}
-.bar i{display:block;height:100%;background:var(--bt)}
-button{font:inherit;border:0;border-radius:10px;padding:8px 14px;background:var(--bt);color:var(--bx)}
-button.g{background:transparent;color:var(--bt);border:1px solid var(--bt)}
-.err{color:var(--bad);text-align:center;padding:30px 10px}
-b.n{unicode-bidi:isolate}
-.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.col{display:flex;flex-direction:column;gap:8px}
+.mu{color:var(--mu);font-size:12.5px}
+.hero{background:linear-gradient(135deg,color-mix(in srgb,var(--bt) 24%,var(--sec)),var(--sec));border:1px solid color-mix(in srgb,var(--bt) 35%,transparent);border-radius:20px;padding:16px;margin-bottom:12px}
+.bal{font-size:26px;font-weight:800;letter-spacing:-.3px;margin:2px 0 10px;unicode-bidi:isolate}
+.bal small{font-size:13px;font-weight:500;color:var(--mu);margin-inline-start:4px}
+.btns{display:flex;flex-wrap:wrap;gap:8px}
+.btns>*{flex:1 1 auto}
+.sec-t{font-size:13.5px;font-weight:700;color:var(--mu);margin:14px 4px 8px;display:flex;align-items:center;justify-content:space-between}
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;background:color-mix(in srgb,var(--tx) 8%,transparent);color:var(--mu)}
+.pill.ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.pill.bad{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.pill.warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.bar{height:7px;border-radius:99px;background:color-mix(in srgb,var(--tx) 10%,transparent);overflow:hidden;margin:8px 0}
+.bar i{display:block;height:100%;border-radius:99px;background:var(--ok);transition:width .35s}
+.bar i.w{background:var(--warn)}.bar i.b{background:var(--bad)}
+.codebox{direction:ltr;text-align:left;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;background:var(--bg);border:1px solid var(--ln);border-radius:11px;padding:9px 11px;word-break:break-all;cursor:pointer;margin:8px 0;user-select:all}
+.rialbox{direction:ltr;text-align:center;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:24px;font-weight:800;letter-spacing:1px;background:var(--bg);border:1.5px dashed var(--bt);color:var(--bt);border-radius:14px;padding:12px;cursor:pointer;margin:8px 0}
+.cardnum{direction:ltr;text-align:center;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:16px;font-weight:700;letter-spacing:1.2px;background:var(--bg);border:1px solid var(--ln);border-radius:11px;padding:9px;cursor:pointer;margin:4px 0}
+.chips{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:8px 0}
+.chip{background:var(--bg);border:1px solid var(--ln);color:var(--tx);padding:9px;border-radius:11px;font-size:13px;font-weight:600}
+.chip.on{border-color:var(--bt);background:color-mix(in srgb,var(--bt) 15%,transparent);color:var(--bt)}
+/* Bottom Navigation */
+nav{position:fixed;inset:auto 10px calc(10px + env(safe-area-inset-bottom,0px)) 10px;z-index:20;background:color-mix(in srgb,var(--sec) 92%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--ln);border-radius:20px;padding:5px;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;box-shadow:0 8px 28px rgba(0,0,0,.28)}
+nav button{background:none;color:var(--mu);padding:7px 2px;border-radius:15px;flex-direction:column;gap:2px;font-size:11.5px;font-weight:600}
+nav button.on{background:color-mix(in srgb,var(--bt) 16%,transparent);color:var(--bt)}
+nav button svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+/* Modal Bottom Sheet */
+.backdrop{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.58);backdrop-filter:blur(3px);display:flex;align-items:flex-end;justify-content:center;animation:fadein .16s ease-out}
+.sheet{width:100%;max-width:520px;max-height:90vh;overflow-y:auto;background:var(--sec);border-top:1px solid var(--ln);border-radius:24px 24px 0 0;padding:16px 16px calc(22px + env(safe-area-inset-bottom,0px));box-shadow:0 -10px 40px rgba(0,0,0,.35);animation:slideup .2s ease-out}
+.sheet-bar{width:40px;height:4px;border-radius:4px;background:var(--ln);margin:0 auto 12px}
+.sheet h3{margin:0 0 10px;font-size:16.5px;font-weight:800;display:flex;align-items:center;justify-content:space-between}
+.payopt{width:100%;justify-content:space-between;text-align:start;padding:12px 14px;border-radius:14px;background:var(--bg);color:var(--tx);border:1px solid var(--ln);margin-bottom:8px}
+.payopt:hover,.payopt.pri{border-color:var(--bt);background:color-mix(in srgb,var(--bt) 13%,var(--bg))}
+.payopt b{display:block;font-size:14px}.payopt small{display:block;color:var(--mu);font-size:12px;font-weight:400}
+.toast{position:fixed;top:14px;left:14px;right:14px;z-index:60;margin:auto;max-width:420px;background:#111827;color:#f8fafc;border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:11px 14px;text-align:center;font-size:13.5px;font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.toast.bad{background:#7f1d1d;border-color:#ef4444}
+.qrimg{display:block;width:210px;max-width:100%;margin:10px auto;background:#fff;padding:10px;border-radius:14px}
+.txrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px dashed var(--ln)}
+.txrow:last-child{border:0}
+.pos{color:var(--ok)}.neg{color:var(--bad)}
+[hidden]{display:none!important}
+@keyframes fadein{from{opacity:0}}
+@keyframes slideup{from{transform:translateY(28px);opacity:.6}}
 </style>
 </head>
 <body>
-<div id="app"><p class="mu" style="text-align:center;padding:40px 0">در حال بارگذاری…</p></div>
+<div id="app"><p class="mu" style="text-align:center;padding:48px 0">⏳ در حال بارگذاری فروشگاه…</p></div>
+<nav id="nav" hidden></nav>
+<div id="modal"></div>
+<div id="toast" class="toast" hidden></div>
+
 <script>
+'use strict';
 const tg = window.Telegram && Telegram.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
-const $a = document.getElementById('app');
+
+const _startParam = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || '';
+const S = {
+  tab: ['buy', 'services', 'wallet', 'orders'].includes(_startParam) ? _startParam : 'buy',
+  data: null,
+  pollTimer: null,
+  cdTimer: null,
+};
+
 const fa = n => (+n || 0).toLocaleString('fa-IR');
+const toman = n => fa(n) + ' تومان';
+const fdt = ts => ts ? new Date(ts * 1000).toLocaleString('fa-IR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+
+function haptic(type = 'light') {
+  try {
+    if (!tg || !tg.HapticFeedback) return;
+    if (type === 'success' || type === 'error' || type === 'warning') tg.HapticFeedback.notificationOccurred(type);
+    else tg.HapticFeedback.impactOccurred(type);
+  } catch {}
+}
+
 function h(tag, props, ...kids) {
   const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(props || {})) { if (v == null || v === false) continue; if (k === 'class') n.className = v; else if (k.startsWith('on')) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v); }
-  for (const c of kids.flat()) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(c));
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') n.className = v;
+    else if (k === 'value') n.value = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat(9)) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(c));
   return n;
 }
-function fail(msg, retry) {
-  $a.replaceChildren(h('div', { class: 'err' }, msg, retry ? h('div', { style: 'margin-top:12px' }, h('button', { onclick: load }, '🔄 تلاش دوباره')) : null));
+
+let toastTm;
+function toast(msg, bad = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (bad ? ' bad' : '');
+  t.hidden = false;
+  haptic(bad ? 'error' : 'light');
+  clearTimeout(toastTm);
+  toastTm = setTimeout(() => { t.hidden = true; }, 3200);
 }
-const ICON = { active: '🟢', disabled: '⚫', expired: '🔴', limited: '🟠', on_hold: '⏳' };
-function draw(d) {
-  const go = a => { if (!d.bot || !tg) return; tg.openTelegramLink(`https://t.me/${d.bot}?start=${a}`); };      // صفحه‌ی همان عمل در ربات باز می‌شود
-  const bt = (t, a, cls) => d.bot && d.enabled ? h('button', { class: cls || '', onclick: () => go(a) }, t) : null;
-  const out = [];
-  out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('span', { class: 'mu' }, '👛 موجودی کیف پول'), d.enabled ? null : h('span', { class: 'mu' }, '🔴 فروشگاه بسته است')),
-    h('div', { class: 'bal' }, fa(d.balance) + ' تومان'),
-    h('div', { class: 'btns' }, bt('➕ شارژ کیف پول', 'wt'), (d.test ? bt('🎁 تست رایگان', 'tst', 'g') : null), bt('🔗 اتصال سرویس قبلی', 'lnk', 'g'), d.bot ? h('button', { class: 'g', onclick: () => go('sup') }, '☎️ پشتیبانی') : null)));
-  out.push(h('h2', {}, '🛒 پلن‌ها'));
-  if (!d.plans.length) out.push(h('div', { class: 'card mu' }, 'فعلاً پلنی فعال نیست.'));
-  d.plans.forEach(p => out.push(h('div', { class: 'card row' }, h('div', {}, h('div', {}, p.name), h('div', { class: 'mu' }, p.info)), h('div', { style: 'text-align:left' }, h('b', { class: 'n' }, fa(p.price) + ' تومان'), h('div', {}, bt('خرید', 'bp_' + p.id))))));
-  out.push(h('h2', {}, '🔄 سرویس‌های من'));
-  if (!d.services.length) out.push(h('div', { class: 'card mu' }, d.known ? 'سرویسی ندارید.' : 'هنوز در ربات /start نزده‌اید.'));
-  d.services.forEach((s, i) => {
-    if (!s.ok) return out.push(h('div', { class: 'card' }, h('b', { dir: 'ltr' }, s.name), h('div', { class: 'mu' }, '⚠️ اطلاعات الان در دسترس نیست.')));
-    const cp = h('button', { class: 'g', onclick: async () => { try { await navigator.clipboard.writeText(s.sub); } catch { const t = h('textarea', {}); t.value = s.sub; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); } cp.textContent = 'کپی شد ✓'; setTimeout(() => cp.textContent = 'کپی لینک اشتراک', 1500); } }, 'کپی لینک اشتراک');
-    out.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('b', { dir: 'ltr' }, s.name), h('span', {}, (ICON[s.status] || '❔') + ' ' + s.status)),
-      h('div', { class: 'bar' }, h('i', { style: 'width:' + Math.min(100, s.pct) + '%' })),
-      h('div', { class: 'mu', dir: 'ltr', style: 'text-align:right' }, `${s.used} / ${s.limit}`), h('div', { class: 'mu' }, '⏳ ' + s.expire),
-      h('div', { class: 'btns', style: 'margin-top:8px' }, s.sub ? cp : null, bt('🔄 تمدید', 'rn_' + i))));
+
+async function copyText(text, label = 'کپی شد ✓') {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const a = h('textarea', { value: text, style: 'position:fixed;opacity:0' });
+    document.body.append(a); a.select(); document.execCommand('copy'); a.remove();
+  }
+  toast(label);
+}
+
+async function api(path, body = {}) {
+  const r = await fetch('/api/mini' + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ init: (tg && tg.initData) || '', ...body }),
   });
-  out.push(h('h2', {}, '🧾 سفارش‌های اخیر'));
-  if (!d.orders.length) out.push(h('div', { class: 'card mu' }, 'سفارشی ندارید.'));
-  d.orders.forEach(o => out.push(h('div', { class: 'card row' }, h('div', {}, h('div', {}, `#${o.id} · ${o.kind}${o.name ? ' — ' + o.name : ''}`), h('div', { class: 'mu' }, o.status + ' · ' + new Date(o.ts * 1000).toLocaleDateString('fa-IR'))), h('b', { class: 'n' }, fa(o.amount)))));
-  if (d.support) out.push(h('div', { class: 'card mu', style: 'white-space:pre-wrap' }, '☎️ ' + d.support));
-  $a.replaceChildren(...out);
+  let d = {};
+  try { d = await r.json(); } catch {}
+  if (!r.ok) {
+    throw new Error(typeof d.detail === 'string' ? d.detail : 'خطا در ارتباط با سرور (' + r.status + ')');
+  }
+  return d;
 }
-async function load() {
-  if (!tg || !tg.initData) return fail('این صفحه فقط داخل تلگرام و از دکمه‌ی ربات فروشگاه باز می‌شود.');
-  let r, d = {};
-  try { r = await fetch('/api/mini/me', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ init: tg.initData }) }); d = await r.json().catch(() => ({})); }
-  catch { return fail('ارتباط با سرور برقرار نشد.', true); }
-  if (!r.ok) return fail(typeof d.detail === 'string' ? d.detail : 'خطا ' + r.status, r.status >= 429);
-  draw(d);
+
+async function runBtn(btn, fn) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ صبر کنید…';
+  try { await fn(); }
+  catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = old; }
 }
-load();
+
+function stopTimers() {
+  if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
+  if (S.cdTimer) { clearInterval(S.cdTimer); S.cdTimer = null; }
+}
+
+function closeModal() {
+  stopTimers();
+  document.getElementById('modal').replaceChildren();
+  try { if (tg && tg.BackButton) tg.BackButton.hide(); } catch {}
+}
+
+function openModal(title, ...content) {
+  stopTimers();
+  const closeB = h('button', { class: 's sm', type: 'button', onclick: closeModal }, '✕');
+  const sheet = h('div', { class: 'sheet', onclick: e => e.stopPropagation() },
+    h('div', { class: 'sheet-bar' }),
+    h('h3', {}, h('span', {}, title), closeB),
+    ...content);
+  const wrap = h('div', { class: 'backdrop', onclick: closeModal }, sheet);
+  document.getElementById('modal').replaceChildren(wrap);
+  try {
+    if (tg && tg.BackButton) {
+      tg.BackButton.show();
+      tg.BackButton.onClick(closeModal);
+    }
+  } catch {}
+  return sheet;
+}
+
+async function showQrModal(title, text) {
+  const box = h('div', { style: 'text-align:center;padding:12px 0' }, h('p', { class: 'mu' }, '⏳ در حال ساخت QR…'));
+  openModal('🖼 کد QR — ' + title, box,
+    h('div', { class: 'codebox', onclick: () => copyText(text, 'لینک کپی شد ✓') }, text),
+    h('button', { class: 'full', type: 'button', onclick: () => copyText(text, 'لینک کپی شد ✓') }, '📋 کپی لینک اشتراک'));
+  try {
+    const r = await fetch('/api/mini/qr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ init: (tg && tg.initData) || '', text }),
+    });
+    if (!r.ok) throw new Error('خطا در ساخت QR');
+    const url = URL.createObjectURL(await r.blob());
+    box.replaceChildren(h('img', { class: 'qrimg', src: url, alt: 'QR' }));
+  } catch (e) {
+    box.replaceChildren(h('p', { class: 'mu' }, '⚠️ ' + e.message));
+  }
+}
+
+function showSuccessModal(title, infoLines, sub = '', happ = '') {
+  haptic('success');
+  const items = [
+    h('div', { class: 'card', style: 'background:var(--bg)' }, ...infoLines.map(l => h('div', { style: 'margin-bottom:4px' }, l))),
+  ];
+  if (sub) {
+    items.push(
+      h('p', { class: 'mu', style: 'margin:8px 0 2px' }, '🔗 لینک اشتراک (برای کپی لمس کنید):'),
+      h('div', { class: 'codebox', onclick: () => copyText(sub, 'لینک اشتراک کپی شد ✓') }, sub),
+      h('div', { class: 'btns' },
+        h('button', { type: 'button', onclick: () => copyText(sub, 'لینک اشتراک کپی شد ✓') }, '📋 کپی لینک'),
+        happ ? h('button', { class: 'g', type: 'button', onclick: () => { if (tg && tg.openLink) tg.openLink(happ); else window.open(happ, '_blank'); } }, '📲 افزودن به Happ') : null,
+        h('button', { class: 's', type: 'button', onclick: () => showQrModal('اشتراک', sub) }, '🖼 QR')
+      )
+    );
+  }
+  items.push(h('button', { class: 's full', style: 'margin-top:12px', type: 'button', onclick: () => { closeModal(); load(true); } }, 'باشه'));
+  openModal(title, ...items);
+}
+
+/* ───────── فرم خرید / تمدید / رزرو / شارژ کیف پول ───────── */
+function openCheckout({ kind, plan = null, username = '', amount = 0 }) {
+  const d = S.data;
+  const cfg = d.cfg;
+  const isTopup = kind === 'topup';
+  let basePrice = isTopup ? amount : plan.price;
+  let finalPrice = basePrice;
+  let appliedCode = '';
+  let discAmount = 0;
+
+  const titleMap = {
+    buy: '🛒 خرید کانفیگ',
+    renew: '🔄 تمدید ' + username,
+    reserve: '⏰ رزرو اشتراک برای ' + username,
+    topup: '➕ شارژ کیف پول',
+  };
+
+  const priceBox = h('div', {});
+  const methodsBox = h('div', { class: 'col', style: 'margin-top:10px' });
+
+  const renderPrice = () => {
+    if (isTopup) {
+      priceBox.replaceChildren(
+        h('div', { class: 'card', style: 'background:var(--bg)' },
+          h('div', { class: 'row' }, h('span', { class: 'mu' }, 'مبلغ شارژ:'), h('b', { style: 'font-size:16px' }, toman(finalPrice))))
+      );
+      return;
+    }
+    priceBox.replaceChildren(
+      h('div', { class: 'card', style: 'background:var(--bg)' },
+        h('div', { class: 'row' }, h('b', {}, plan.name), h('span', { class: 'pill' }, plan.info)),
+        h('div', { class: 'row', style: 'margin-top:8px' },
+          h('span', { class: 'mu' }, 'مبلغ قابل پرداخت:'),
+          appliedCode
+            ? h('span', {}, h('s', { class: 'mu', style: 'margin-inline-end:6px' }, fa(basePrice)), h('b', { style: 'font-size:16px;color:var(--ok)' }, toman(finalPrice)))
+            : h('b', { style: 'font-size:16px' }, toman(finalPrice))),
+        appliedCode ? h('div', { class: 'mu', style: 'color:var(--ok);margin-top:4px' }, `🏷 کد ${appliedCode} اعمال شد (${toman(discAmount)} تخفیف)`) : null)
+    );
+  };
+
+  const startOrder = async (method, btn) => {
+    await runBtn(btn, async () => {
+      const r = await api('/order', {
+        kind,
+        plan_id: plan ? plan.id : '',
+        amount: isTopup ? finalPrice : 0,
+        username,
+        code: appliedCode,
+        method,
+      });
+      if (method === 'wallet') {
+        const o = r.order;
+        const lines = [
+          `✅ ${o.kind_fa} با موفقیت انجام شد.`,
+          o.result ? `👤 سرویس: ${o.result}` : null,
+          `💰 مبلغ پرداخت‌شده: ${toman(o.amount)}`,
+          `👛 موجودی باقی‌مانده: ${toman(r.balance)}`,
+        ].filter(Boolean);
+        showSuccessModal('🎉 سفارش انجام شد', lines, o.sub || '', o.happ || '');
+        return;
+      }
+      if (method === 'zp' && r.url) {
+        openOrderPayment(r.order, r.url);
+        try {
+          if (tg && tg.openLink) tg.openLink(r.url);
+          else window.open(r.url, '_blank');
+        } catch { location.href = r.url; }
+        return;
+      }
+      openOrderPayment(r.order);
+    });
+  };
+
+  const renderMethods = () => {
+    const opts = [];
+    if (!isTopup && d.balance >= finalPrice) {
+      const b = h('button', { class: 'payopt pri', type: 'button' },
+        h('span', {}, h('b', {}, '👛 پرداخت از کیف پول (آنی)'), h('small', {}, `موجودی شما: ${toman(d.balance)}`)),
+        h('span', {}, '←'));
+      b.onclick = () => startOrder('wallet', b);
+      opts.push(b);
+    }
+    if (cfg.zp_ok && finalPrice >= cfg.zp_min && finalPrice <= cfg.zp_max) {
+      const b = h('button', { class: 'payopt' + (opts.length === 0 ? ' pri' : ''), type: 'button' },
+        h('span', {}, h('b', {}, '💳 پرداخت آنلاین (زرین‌پال)'), h('small', {}, 'پرداخت با کلیه کارت‌های عضو شتاب و تحویل آنی')),
+        h('span', {}, '←'));
+      b.onclick = () => startOrder('zp', b);
+      opts.push(b);
+    }
+    if (cfg.auto_ok && cfg.has_cards && finalPrice <= cfg.auto_max) {
+      const b = h('button', { class: 'payopt' + (opts.length === 0 ? ' pri' : ''), type: 'button' },
+        h('span', {}, h('b', {}, '⚡ کارت‌به‌کارت (تأیید خودکار)'), h('small', {}, 'بدون نیاز به ارسال رسید؛ واریز مبلغ دقیق و تأیید خودکار')),
+        h('span', {}, '←'));
+      b.onclick = () => startOrder('auto', b);
+      opts.push(b);
+    }
+    if (cfg.has_cards) {
+      const b = h('button', { class: 'payopt', type: 'button' },
+        h('span', {}, h('b', {}, '🧾 کارت‌به‌کارت (تأیید دستی با رسید)'), h('small', {}, 'واریز به کارت و آپلود عکس رسید یا شماره پیگیری')),
+        h('span', {}, '←'));
+      b.onclick = () => startOrder('manual', b);
+      opts.push(b);
+    }
+    if (!opts.length) {
+      opts.push(h('p', { class: 'mu', style: 'text-align:center' }, '⚠️ در حال حاضر روش پرداختی برای این مبلغ فعال نیست.'));
+    }
+    methodsBox.replaceChildren(h('div', { class: 'mu', style: 'margin-bottom:4px' }, 'روش پرداخت را انتخاب کنید:'), ...opts);
+  };
+
+  let codeSection = null;
+  if (!isTopup && cfg.has_codes) {
+    const codeIn = h('input', { placeholder: 'کد تخفیف (مثلاً OFF20)', dir: 'ltr', style: 'text-transform:uppercase' });
+    const codeBtn = h('button', { class: 's', type: 'button', style: 'flex:none;min-width:92px' }, 'اعمال کد');
+    codeBtn.onclick = () => runBtn(codeBtn, async () => {
+      const raw = codeIn.value.trim();
+      if (!raw) throw new Error('کد تخفیف را وارد کنید.');
+      const res = await api('/code-check', { plan_id: plan.id, code: raw });
+      appliedCode = res.code;
+      discAmount = res.disc;
+      finalPrice = res.final;
+      renderPrice();
+      renderMethods();
+      toast(`✅ کد ${appliedCode} اعمال شد`);
+    });
+    codeSection = h('div', { class: 'row', style: 'margin-top:8px' }, codeIn, codeBtn);
+  }
+
+  renderPrice();
+  renderMethods();
+  openModal(titleMap[kind] || 'ثبت سفارش', priceBox, codeSection, methodsBox);
+}
+
+/* ───────── صفحه‌ی پرداخت سفارش باز (زرین‌پال / خودکار / دستی با آپلود رسید) ───────── */
+function openOrderPayment(o, zpUrl = '', forceReceipt = false) {
+  const mode = forceReceipt ? 'manual' : o.mode;
+
+  if (mode === 'zp') {
+    const stText = h('p', { class: 'mu', style: 'text-align:center' }, '⏳ پس از تکمیل پرداخت در درگاه، دکمه‌ی زیر را بزنید یا چند لحظه صبر کنید…');
+    const chkBtn = h('button', { class: 'full', type: 'button' }, '🔄 بررسی وضعیت پرداخت');
+    const cancelBtn = h('button', { class: 'bad full', type: 'button' }, '❌ لغو سفارش');
+    const checkNow = async (silent = false) => {
+      try {
+        const res = await api(`/order/${o.id}/status`);
+        const cur = res.order;
+        if (cur.status === 'done') {
+          showSuccessModal('✅ پرداخت تأیید و سفارش انجام شد',
+            [`🧾 سفارش #${cur.id} — ${cur.kind_fa}`, cur.result ? `👤 ${cur.result}` : null, `👛 موجودی فعلی: ${toman(res.balance)}`].filter(Boolean),
+            cur.sub || '', cur.happ || '');
+        } else if (cur.status !== 'new') {
+          closeModal();
+          toast(`وضعیت سفارش #${cur.id}: ${cur.status_fa}`);
+          load(true);
+        } else if (!silent) {
+          toast('هنوز پرداختی از سمت بانک تأیید نشده است.', true);
+        }
+      } catch (e) { if (!silent) toast(e.message, true); }
+    };
+    chkBtn.onclick = () => runBtn(chkBtn, () => checkNow(false));
+    cancelBtn.onclick = () => {
+      if (!confirm('این سفارش لغو شود؟ اگر پرداخت کرده‌اید لغو نکنید و «بررسی وضعیت پرداخت» را بزنید.')) return;
+      runBtn(cancelBtn, async () => {
+        await api(`/order/${o.id}/cancel`);
+        closeModal();
+        toast('🚫 سفارش لغو شد');
+        load(true);
+      });
+    };
+    openModal(`💳 پرداخت آنلاین — #${o.id}`,
+      h('div', { class: 'card', style: 'background:var(--bg)' },
+        h('div', { class: 'row' }, h('span', { class: 'mu' }, 'بابت:'), h('b', {}, o.kind_fa + (o.pname ? ' — ' + o.pname : ''))),
+        h('div', { class: 'row', style: 'margin-top:6px' }, h('span', { class: 'mu' }, 'مبلغ:'), h('b', {}, toman(o.amount)))),
+      zpUrl ? h('button', { class: 'full', type: 'button', onclick: () => { if (tg && tg.openLink) tg.openLink(zpUrl); else window.open(zpUrl, '_blank'); } }, '🌐 باز کردن صفحه‌ی پرداخت') : null,
+      stText,
+      h('div', { class: 'col', style: 'margin-top:8px' }, chkBtn, cancelBtn));
+    S.pollTimer = setInterval(() => checkNow(true), 6000);
+    return;
+  }
+
+  const cardsBlock = (o.cards || []).map(c => {
+    const spaced = String(c.number || '').replace(/(.{4})/g, '$1 ').trim();
+    return h('div', { class: 'card', style: 'background:var(--bg);padding:10px 12px;margin-bottom:6px' },
+      h('div', { class: 'cardnum', onclick: () => copyText(c.number, 'شماره کارت کپی شد ✓') }, spaced),
+      h('div', { class: 'row mu' }, h('span', {}, c.holder || ''), h('span', {}, c.bank || '')));
+  });
+
+  if (mode === 'auto') {
+    const cdLabel = h('b', { dir: 'ltr' }, '--:--');
+    const stBox = h('p', { class: 'mu', style: 'text-align:center;margin:6px 0' }, '⏳ در انتظار شناسایی واریز توسط سیستم…');
+    const chkBtn = h('button', { class: 'full', type: 'button' }, '🔄 بررسی وضعیت پرداخت');
+    const manBtn = h('button', { class: 's full', type: 'button' }, '🧾 واریز کردم ولی تأیید نشد (ارسال رسید)');
+    const cancelBtn = h('button', { class: 'bad full', type: 'button' }, '❌ لغو سفارش');
+
+    const checkNow = async (silent = false) => {
+      try {
+        const res = await api(`/order/${o.id}/status`);
+        const cur = res.order;
+        if (cur.status === 'done') {
+          showSuccessModal('✅ پرداخت شناسایی و سفارش انجام شد',
+            [`🧾 سفارش #${cur.id} — ${cur.kind_fa}`, cur.result ? `👤 ${cur.result}` : null, `👛 موجودی فعلی: ${toman(res.balance)}`].filter(Boolean),
+            cur.sub || '', cur.happ || '');
+        } else if (cur.status !== 'new') {
+          closeModal();
+          toast(`وضعیت سفارش #${cur.id}: ${cur.status_fa}`);
+          load(true);
+        } else if (!silent) {
+          toast('هنوز واریزی با این مبلغ دقیق ثبت نشده است. چند لحظه صبر کنید.', true);
+        }
+      } catch (e) { if (!silent) toast(e.message, true); }
+    };
+
+    chkBtn.onclick = () => runBtn(chkBtn, () => checkNow(false));
+    manBtn.onclick = () => openOrderPayment(o, '', true);
+    cancelBtn.onclick = () => {
+      if (!confirm('این سفارش لغو شود؟ اگر پرداخت کرده‌اید لغو نکنید و «بررسی وضعیت پرداخت» را بزنید.')) return;
+      runBtn(cancelBtn, async () => {
+        await api(`/order/${o.id}/cancel`);
+        closeModal();
+        toast('🚫 سفارش لغو شد');
+        load(true);
+      });
+    };
+
+    openModal(`⚡ کارت‌به‌کارت خودکار — #${o.id}`,
+      h('p', { class: 'mu', style: 'margin:0 0 4px' }, 'مبلغ دقیق زیر را به <b>ریال</b> با تمام ارقام واریز کنید (برای کپی لمس کنید):'),
+      h('div', { class: 'rialbox', onclick: () => copyText(String(o.pay_rial), 'مبلغ به ریال کپی شد ✓') }, `${fa(o.pay_rial)} ریال`),
+      ...cardsBlock,
+      h('div', { class: 'row mu', style: 'margin:6px 2px' }, h('span', {}, '⏳ مهلت باقی‌مانده:'), cdLabel),
+      stBox,
+      h('div', { class: 'col', style: 'margin-top:8px' }, chkBtn, manBtn, cancelBtn));
+
+    const endMs = (o.exp || 0) * 1000;
+    const tick = () => {
+      const rem = Math.max(0, Math.floor((endMs - Date.now()) / 1000));
+      const mm = String(Math.floor(rem / 60)).padStart(2, '0');
+      const ss = String(rem % 60).padStart(2, '0');
+      cdLabel.textContent = `${mm}:${ss}`;
+    };
+    tick();
+    S.cdTimer = setInterval(tick, 1000);
+    S.pollTimer = setInterval(() => checkNow(true), 5000);
+    return;
+  }
+
+  /* حالت دستی با آپلود عکس رسید یا شماره پیگیری */
+  let imageB64 = '';
+  const preview = h('div', { style: 'text-align:center' });
+  const fileIn = h('input', { type: 'file', accept: 'image/*', style: 'padding:8px' });
+  const noteIn = h('input', { placeholder: 'شماره پیگیری / چهار رقم آخر کارت (اختیاری)', maxlength: 250 });
+  const sendBtn = h('button', { class: 'full', type: 'button' }, '📤 ثبت و ارسال رسید');
+  const cancelBtn = h('button', { class: 'bad full', type: 'button' }, '❌ لغو سفارش');
+
+  fileIn.onchange = async () => {
+    const file = fileIn.files && fileIn.files[0];
+    if (!file) { imageB64 = ''; preview.replaceChildren(); return; }
+    sendBtn.disabled = true;
+    sendBtn.textContent = '⏳ در حال آماده‌سازی تصویر…';
+    try {
+      let b64 = await compressImage(file, 1280, 0.82);
+      if (b64.length > 2200000) b64 = await compressImage(file, 960, 0.65);
+      imageB64 = b64;
+      preview.replaceChildren(h('img', { src: imageB64, style: 'max-height:170px;border-radius:12px;margin-top:8px;border:1px solid var(--ln)' }));
+    } catch {
+      imageB64 = '';
+      toast('خواندن تصویر ناموفق بود؛ تصویر دیگری انتخاب کنید.', true);
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = '📤 ثبت و ارسال رسید';
+    }
+  };
+
+  sendBtn.onclick = () => runBtn(sendBtn, async () => {
+    const txt = noteIn.value.trim();
+    if (!imageB64 && txt.length < 4) throw new Error('لطفاً عکس رسید را انتخاب کنید یا شماره پیگیری را بنویسید.');
+    await api(`/order/${o.id}/receipt`, { text: txt, image_b64: imageB64 });
+    showSuccessModal('✅ رسید ثبت شد', [
+      `🧾 سفارش #${o.id} برای بررسی ادمین ارسال شد.`,
+      'پس از تأیید، نتیجه بلافاصله از طریق ربات به شما اعلام می‌شود.',
+    ]);
+  });
+
+  cancelBtn.onclick = () => runBtn(cancelBtn, async () => {
+    await api(`/order/${o.id}/cancel`);
+    closeModal();
+    toast('🚫 سفارش لغو شد');
+    load(true);
+  });
+
+  openModal(`🧾 ارسال رسید — #${o.id}`,
+    h('div', { class: 'card', style: 'background:var(--bg);padding:10px 12px' },
+      h('div', { class: 'row' }, h('span', { class: 'mu' }, 'مبلغ واریز:'), h('b', { style: 'font-size:16px' }, toman(o.amount)))),
+    ...cardsBlock,
+    h('label', { class: 'mu', style: 'display:block;margin:8px 0 4px' }, '📸 انتخاب عکس رسید از گالری:'),
+    fileIn, preview,
+    h('label', { class: 'mu', style: 'display:block;margin:8px 0 4px' }, '🔢 شماره پیگیری یا توضیح:'),
+    noteIn,
+    h('div', { class: 'col', style: 'margin-top:12px' }, sendBtn, cancelBtn));
+}
+
+function compressImage(file, maxDim = 1280, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let w = img.width, h_ = img.height;
+        if (w > maxDim || h_ > maxDim) {
+          if (w >= h_) { h_ = Math.round(h_ * maxDim / w); w = maxDim; }
+          else { w = Math.round(w * maxDim / h_); h_ = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h_;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h_);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ───────── رندر تب‌ها ───────── */
+const NAV_ITEMS = [
+  ['buy', 'خرید', '<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.4 11.2a2 2 0 0 0 2 1.6h8.8a2 2 0 0 0 2-1.5L22 7H6"/>'],
+  ['services', 'سرویس‌ها', '<path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"/><path d="M21 3v5h-5"/>'],
+  ['wallet', 'کیف پول', '<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M16 12h2"/><path d="M2 9h20"/>'],
+  ['orders', 'سفارش‌ها', '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2V2z"/><path d="M9 7h6M9 11h6M9 15h4"/>'],
+];
+
+function svgIc(d) {
+  const w = document.createElement('span');
+  w.innerHTML = `<svg viewBox="0 0 24 24">${d}</svg>`;
+  return w.firstChild;
+}
+
+function renderNav() {
+  const nav = document.getElementById('nav');
+  nav.hidden = false;
+  nav.replaceChildren(...NAV_ITEMS.map(([k, label, ic]) =>
+    h('button', {
+      class: S.tab === k ? 'on' : '',
+      type: 'button',
+      onclick: () => { S.tab = k; haptic('light'); renderApp(); window.scrollTo(0, 0); },
+    }, svgIc(ic), label)));
+}
+
+function renderHero(d) {
+  const testBtn = d.test ? h('button', { class: 'g sm', type: 'button', onclick: async e => {
+    await runBtn(e.currentTarget, async () => {
+      const r = await api('/test');
+      showSuccessModal('🎁 تست رایگان آماده شد',
+        [`👤 نام کاربری: ${r.username}`, `⏳ مدت اعتبار: ${fa(r.hours)} ساعت`],
+        r.sub || '', r.happ || '');
+    });
+  } }, '🎁 تست رایگان') : null;
+
+  return h('div', { class: 'hero' },
+    h('div', { class: 'row' },
+      h('span', { class: 'mu' }, '👛 موجودی کیف پول'),
+      !d.enabled ? h('span', { class: 'pill bad' }, '🔴 فروشگاه بسته است') : null),
+    h('div', { class: 'bal' }, fa(d.balance), h('small', {}, 'تومان')),
+    h('div', { class: 'btns' },
+      h('button', { class: 'sm', type: 'button', onclick: () => { S.tab = 'wallet'; renderApp(); } }, '➕ شارژ کیف پول'),
+      testBtn,
+      d.support ? h('button', { class: 's sm', type: 'button', onclick: () => openModal('☎️ پشتیبانی', h('div', { class: 'card', style: 'background:var(--bg);white-space:pre-wrap' }, d.support)) }, '☎️ پشتیبانی') : null));
+}
+
+function renderBuyTab(d) {
+  const out = [renderHero(d)];
+  if (d.welcome) {
+    out.push(h('div', { class: 'card mu', style: 'white-space:pre-wrap' }, d.welcome));
+  }
+  out.push(h('div', { class: 'sec-t' }, h('span', {}, '🛒 پلن‌های اشتراک'), h('span', {}, `${fa(d.plans.length)} پلن`)));
+  if (!d.plans.length) {
+    out.push(h('div', { class: 'card mu', style: 'text-align:center;padding:24px' }, 'فعلاً پلنی برای فروش فعال نیست.'));
+    return out;
+  }
+  d.plans.forEach(p => {
+    const buyB = h('button', { class: 'sm', disabled: !d.enabled, type: 'button', onclick: () => openCheckout({ kind: 'buy', plan: p }) }, 'خرید');
+    out.push(h('div', { class: 'card row' },
+      h('div', {},
+        h('div', { style: 'font-weight:700;font-size:15px' }, p.name),
+        h('div', { class: 'mu' }, p.info)),
+      h('div', { style: 'text-align:left;flex:none' },
+        h('div', { style: 'font-weight:800;margin-bottom:5px' }, toman(p.price)),
+        buyB)));
+  });
+  return out;
+}
+
+const ST_INFO = {
+  active: ['🟢 فعال', 'ok'],
+  on_hold: ['⏳ خام (اولین اتصال)', 'warn'],
+  expired: ['🔴 منقضی شده', 'bad'],
+  limited: ['🟠 اتمام حجم', 'bad'],
+  disabled: ['⚫ غیرفعال', ''],
+};
+
+function renderServicesTab(d) {
+  const out = [renderHero(d)];
+
+  /* اتصال سرویس قبلی با لینک ساب */
+  const linkIn = h('input', { placeholder: 'لینک ساب سرویس قبلی را اینجا بچسبانید (https://…)', dir: 'ltr' });
+  const linkBtn = h('button', { class: 's sm', type: 'button', style: 'flex:none' }, '🔗 اتصال');
+  linkBtn.onclick = () => runBtn(linkBtn, async () => {
+    const val = linkIn.value.trim();
+    if (!val) throw new Error('لینک اشتراک را وارد کنید.');
+    const r = await api('/link', { link: val });
+    linkIn.value = '';
+    toast(r.status === 'dup' ? `ℹ️ سرویس ${r.username} از قبل متصل بود.` : `✅ سرویس ${r.username} به حساب شما وصل شد!`);
+    await load(true);
+  });
+  out.push(h('div', { class: 'card' },
+    h('div', { style: 'font-weight:700;margin-bottom:6px' }, '🔗 اتصال سرویس قبلی'),
+    h('div', { class: 'row' }, linkIn, linkBtn)));
+
+  out.push(h('div', { class: 'sec-t' }, h('span', {}, '🔄 سرویس‌های من'), h('span', {}, `${fa(d.services.length)} سرویس`)));
+  if (!d.services.length) {
+    out.push(h('div', { class: 'card mu', style: 'text-align:center;padding:24px' }, 'هنوز سرویسی ندارید. از تب «خرید» اولین اشتراک را تهیه کنید.'));
+    return out;
+  }
+
+  d.services.forEach(s => {
+    if (!s.ok) {
+      out.push(h('div', { class: 'card' }, h('b', { dir: 'ltr' }, s.name), h('div', { class: 'mu' }, '⚠️ اطلاعات این سرویس موقتاً در دسترس نیست.')));
+      return;
+    }
+    const [stLabel, stCls] = ST_INFO[s.status] || [s.status, ''];
+    const barCls = s.pct >= 90 ? 'b' : s.pct >= 75 ? 'w' : '';
+
+    const pickPlanModal = (kind) => {
+      if (!d.plans.length) return toast('فعلاً پلنی فعال نیست.', true);
+      const list = d.plans.map(p => h('button', {
+        class: 'payopt',
+        type: 'button',
+        onclick: () => openCheckout({ kind, plan: p, username: s.name }),
+      }, h('span', {}, h('b', {}, p.name), h('small', {}, p.info)), h('b', {}, toman(p.price))));
+      openModal(kind === 'reserve' ? `⏰ رزرو اشتراک بعدی — ${s.name}` : `🔄 تمدید سرویس — ${s.name}`, ...list);
+    };
+
+    const revokeConfirm = () => {
+      const go = h('button', { class: 'bad full', type: 'button' }, '✅ بله، لینک قبلی بسوزد و جدید شود');
+      go.onclick = () => runBtn(go, async () => {
+        const res = await api('/revoke', { username: s.name });
+        showSuccessModal('✅ لینک اشتراک تغییر کرد', [
+          `👤 سرویس: ${s.name}`,
+          'لینک قبلی از کار افتاد؛ لینک جدید را در برنامه وارد کنید.',
+        ], res.sub || '', res.happ || '');
+      });
+      openModal(`🔗 تغییر لینک — ${s.name}`,
+        h('p', { class: 'mu' }, 'با تأیید این عملیات، لینک اشتراک قبلی شما <b>فوراً از کار می‌افتد</b> و یک لینک جدید ساخته می‌شود.'),
+        h('div', { class: 'col', style: 'margin-top:10px' }, go, h('button', { class: 's full', type: 'button', onclick: closeModal }, 'انصراف')));
+    };
+
+    const qInfo = (s.queue && s.queue.length)
+      ? h('div', { class: 'mu', style: 'color:var(--ok);margin-top:4px' }, '⏰ رزرو شده: ' + s.queue.map(q => `${q.gb || 'نامحدود'}${q.gb ? 'GB' : ''} / ${q.days || 'نامحدود'}${q.days ? ' روز' : ''}`).join('، '))
+      : null;
+
+    out.push(h('div', { class: 'card' },
+      h('div', { class: 'row' },
+        h('b', { dir: 'ltr', style: 'font-size:15px' }, s.name),
+        h('span', { class: 'pill ' + stCls }, stLabel)),
+      h('div', { class: 'bar' }, h('i', { class: barCls, style: `width:${Math.min(100, s.pct)}%` })),
+      h('div', { class: 'row mu' },
+        h('span', { dir: 'ltr' }, `${s.used} / ${s.limit}`),
+        h('span', {}, '⏳ ' + s.expire)),
+      qInfo,
+      s.sub ? h('div', { class: 'codebox', onclick: () => copyText(s.sub, 'لینک اشتراک کپی شد ✓') }, s.sub) : null,
+      h('div', { class: 'btns', style: 'margin-top:8px' },
+        s.sub ? h('button', { class: 'sm', type: 'button', onclick: () => copyText(s.sub, 'لینک اشتراک کپی شد ✓') }, '📋 کپی') : null,
+        s.happ ? h('button', { class: 'g sm', type: 'button', onclick: () => { if (tg && tg.openLink) tg.openLink(s.happ); else window.open(s.happ, '_blank'); } }, '📲 Happ') : null,
+        s.sub ? h('button', { class: 's sm', type: 'button', onclick: () => showQrModal(s.name, s.sub) }, '🖼 QR') : null,
+        h('button', { class: 'g sm', disabled: !d.enabled, type: 'button', onclick: () => pickPlanModal('renew') }, '🔄 تمدید'),
+        s.can_reserve ? h('button', { class: 's sm', disabled: !d.enabled, type: 'button', onclick: () => pickPlanModal('reserve') }, '⏰ رزرو') : null,
+        h('button', { class: 's sm', disabled: !d.enabled, type: 'button', onclick: revokeConfirm }, '🔗 تغییر لینک'))));
+  });
+  return out;
+}
+
+function renderWalletTab(d) {
+  const cfg = d.cfg;
+  const presets = [50000, 100000, 200000, 500000].filter(v => v >= cfg.min_topup && v <= cfg.max_topup);
+  const amtIn = h('input', { type: 'text', inputmode: 'numeric', dir: 'ltr', placeholder: `مبلغ دلخواه (${fa(cfg.min_topup)} تا ${fa(cfg.max_topup)} تومان)` });
+  const parseAmt = () => +String(amtIn.value).replace(/[۰-۹]/g, c => '۰۱۲۳۴۵۶۷۸۹'.indexOf(c)).replace(/[^\d]/g, '') || 0;
+  amtIn.oninput = () => { const n = parseAmt(); amtIn.value = n ? n.toLocaleString('en-US') : ''; };
+
+  const chips = presets.map(v => h('button', {
+    class: 'chip',
+    type: 'button',
+    onclick: () => { amtIn.value = v.toLocaleString('en-US'); },
+  }, toman(v)));
+
+  const goTopup = h('button', { class: 'full', disabled: !d.enabled, type: 'button', style: 'margin-top:8px' }, '➕ ادامه و انتخاب روش پرداخت');
+  goTopup.onclick = () => {
+    const v = parseAmt();
+    if (v < cfg.min_topup || v > cfg.max_topup) {
+      return toast(`مبلغ شارژ باید بین ${toman(cfg.min_topup)} و ${toman(cfg.max_topup)} باشد.`, true);
+    }
+    openCheckout({ kind: 'topup', amount: v });
+  };
+
+  const out = [
+    renderHero(d),
+    h('div', { class: 'card' },
+      h('div', { style: 'font-weight:700;margin-bottom:6px' }, '➕ شارژ آنی کیف پول'),
+      chips.length ? h('div', { class: 'chips' }, ...chips) : null,
+      amtIn,
+      goTopup),
+  ];
+
+  if (d.log && d.log.length) {
+    out.push(
+      h('div', { class: 'sec-t' }, h('span', {}, '🧾 گردش حساب اخیر')),
+      h('div', { class: 'card' }, ...d.log.map(x => {
+        const amt = +x.amount || 0;
+        return h('div', { class: 'txrow' },
+          h('div', {}, h('div', { style: 'font-weight:600' }, x.note || x.type), h('div', { class: 'mu' }, fdt(x.ts))),
+          h('div', { style: 'text-align:left' },
+            h('b', { class: amt >= 0 ? 'pos' : 'neg', dir: 'ltr' }, (amt > 0 ? '+' : '') + fa(amt)),
+            h('div', { class: 'mu' }, 'مانده: ' + fa(x.balance))));
+      }))
+    );
+  }
+  return out;
+}
+
+function renderOrdersTab(d) {
+  const out = [renderHero(d), h('div', { class: 'sec-t' }, h('span', {}, '🧾 سفارش‌های من'), h('span', {}, `${fa(d.orders.length)} سفارش`))];
+  if (!d.orders.length) {
+    out.push(h('div', { class: 'card mu', style: 'text-align:center;padding:24px' }, 'هنوز سفارشی ثبت نکرده‌اید.'));
+    return out;
+  }
+  const BAD_ST = { rejected: 1, failed: 1, cancelled: 1 };
+  d.orders.forEach(o => {
+    const isOpen = o.status === 'new';
+    const btnLbl = o.mode === 'zp' ? '💳 بررسی / تکمیل پرداخت آنلاین' : '💳 تکمیل / ارسال رسید';
+    const actBtn = isOpen ? h('button', { class: 'sm', type: 'button', onclick: () => openOrderPayment(o) }, btnLbl) : null;
+    const pillCls = o.status === 'done' ? 'ok' : isOpen ? 'warn' : (BAD_ST[o.status] ? 'bad' : '');
+    out.push(h('div', { class: 'card' },
+      h('div', { class: 'row' },
+        h('b', {}, `#${o.id} · ${o.kind_fa}${o.pname ? ' — ' + o.pname : ''}`),
+        h('span', { class: 'pill ' + pillCls }, o.status_fa)),
+      h('div', { class: 'row mu', style: 'margin-top:6px' },
+        h('span', {}, fdt(o.ts) + (o.username ? ` · ${o.username}` : '')),
+        h('b', { style: 'color:var(--tx)' }, toman(o.amount))),
+      o.reason ? h('div', { class: 'mu', style: 'color:var(--bad);margin-top:4px' }, 'دلیل رد: ' + o.reason) : null,
+      actBtn ? h('div', { style: 'margin-top:8px' }, actBtn) : null));
+  });
+  return out;
+}
+
+function renderForceGate(d) {
+  document.getElementById('nav').hidden = true;
+  const btns = (d.force || []).map(ch => h('button', {
+    class: 'g full',
+    type: 'button',
+    onclick: () => { if (tg && tg.openTelegramLink) tg.openTelegramLink(ch.url); else window.open(ch.url, '_blank'); },
+  }, `📢 عضویت در ${ch.chat}`));
+  const chk = h('button', { class: 'full', type: 'button', onclick: () => load(false) }, '✅ عضو شدم / ورود به فروشگاه');
+  document.getElementById('app').replaceChildren(
+    h('div', { class: 'card', style: 'margin-top:24px;text-align:center' },
+      h('h3', { style: 'margin:0 0 8px' }, '🔒 عضویت اجباری'),
+      h('p', { class: 'mu' }, 'برای استفاده از فروشگاه، ابتدا در کانال(های) زیر عضو شوید و سپس دکمه‌ی تأیید را بزنید.'),
+      h('div', { class: 'col', style: 'margin-top:12px' }, ...btns, chk))
+  );
+}
+
+function renderApp() {
+  const d = S.data;
+  if (!d) return;
+  if (d.force) return renderForceGate(d);
+  renderNav();
+  const views = { buy: renderBuyTab, services: renderServicesTab, wallet: renderWalletTab, orders: renderOrdersTab };
+  const nodes = (views[S.tab] || renderBuyTab)(d);
+  document.getElementById('app').replaceChildren(...nodes);
+}
+
+async function load(silent = false) {
+  const app = document.getElementById('app');
+  if (!tg || !tg.initData) {
+    app.replaceChildren(h('div', { class: 'card', style: 'margin-top:30px;text-align:center' },
+      h('p', { style: 'color:var(--bad);font-weight:700' }, '⛔ این صفحه فقط از داخل ربات تلگرام قابل باز شدن است.')));
+    return;
+  }
+  if (!silent) {
+    app.replaceChildren(h('p', { class: 'mu', style: 'text-align:center;padding:48px 0' }, '⏳ در حال بارگذاری فروشگاه…'));
+  }
+  try {
+    S.data = await api('/me');
+    renderApp();
+  } catch (e) {
+    app.replaceChildren(h('div', { class: 'card', style: 'margin-top:30px;text-align:center' },
+      h('p', { style: 'color:var(--bad)' }, '⚠️ ' + e.message),
+      h('button', { class: 'sm', type: 'button', onclick: () => load(false) }, '🔄 تلاش دوباره')));
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && S.data) load(true);
+});
+
+load(false);
 </script>
 </body>
 </html>
