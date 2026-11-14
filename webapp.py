@@ -391,7 +391,7 @@ async def state():
     return {
         "panels": _panels_view(cfg), "active_panel": cfg["active_panel"],
         "bot": bool(cfg["bot_token"] and cfg["admin_ids"]),
-        "templates": cfg["templates"], "active": cfg["active_template"], "active_group": cfg.get("active_group_template", ""), "max_batch": cfg["max_batch"],
+        "templates": cfg["templates"], "templates_order": list(cfg["templates"]), "active": cfg["active_template"], "active_group": cfg.get("active_group_template", ""), "max_batch": cfg["max_batch"],
         "default_prefix": cfg["default_prefix"], "multi_panel": len(cfg["panels"]) > 1, "unpaid_hours": cfg["unpaid"]["hours"],
         "ham_names": cfg.get("sales", {}).get("hamkari_service_names", ["hamkari"]),
         "next_plan_mode": cfg.get("next_plan_mode", "duration"), "undo": cfg["undo"]["enabled"],
@@ -814,7 +814,8 @@ async def rep_status(r: RepStatusReq, rep=Depends(rep_guard)):
 
 def _rep_templates(cfg: dict, rep: dict) -> dict:
     """تمپلت‌هایی که ادمین برای این نماینده فعال کرده و قیمت دارند."""
-    return {n: cfg["templates"][n] for n in rep["tpls"] if n in cfg["templates"] and cfg["templates"][n].get("price", 0) > 0}
+    allowed = set(rep["tpls"])                                      # ترتیب نمایش = ترتیب سراسری تمپلت‌ها (ادمین از تب «تمپلت» تعیین می‌کند)
+    return {n: t for n, t in cfg["templates"].items() if n in allowed and t.get("price", 0) > 0}
 
 
 async def _notify_admins(cfg: dict, text: str):
@@ -2224,6 +2225,29 @@ async def tpl_save(r: TplReq):
 
 class NameReq(BaseModel):
     name: str
+
+
+def _reorder_templates(templates: dict, names: list) -> dict:
+    """نام‌های names اول و به همان ترتیب؛ بقیه‌ی تمپلت‌ها با ترتیب قبلی‌شان بعد از آن‌ها. نام ناشناس یا تکراری نادیده گرفته می‌شود
+    و هیچ تمپلتی هرگز گم نمی‌شود (حتی اگر لیست ناقص بیاید)."""
+    first = [n for n in dict.fromkeys(names) if n in templates]
+    taken = set(first)
+    return {n: templates[n] for n in first + [n for n in templates if n not in taken]}
+
+
+class TplOrderReq(BaseModel):
+    names: list[str] = Field(max_length=500)
+
+
+@app.post("/api/templates/order", dependencies=[Depends(guard)])
+async def tpl_order(r: TplOrderReq):
+    """ترتیب نمایش تمپلت‌ها؛ هم در پنل ادمین و هم در پنل همه‌ی نماینده‌ها اعمال می‌شود."""
+    def mut(c):
+        c["templates"] = _reorder_templates(c["templates"], r.names)
+    update_config(mut)
+    order = list(load_config()["templates"])
+    _aud("ترتیب تمپلت‌ها", "", "؛ ".join(order)[:300], "sys")
+    return {"ok": True, "order": order}
 
 
 @app.post("/api/templates/active", dependencies=[Depends(guard)])

@@ -369,6 +369,8 @@ html{-webkit-tap-highlight-color:transparent}
 .tx .a{text-align:end;white-space:nowrap}.tx .a b{display:block;font-weight:700;font-size:var(--fs-sm);font-variant-numeric:tabular-nums}.tx .a small{display:block;color:var(--mu);font-size:var(--fs-xs);font-variant-numeric:tabular-nums}
 .tx .pos{color:var(--ok)}.tx .neg{color:var(--bad)}
 
+.tpo{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}.tpo:last-child{border-bottom:0}.tpo .n{flex:1;min-width:0;overflow-wrap:anywhere}.tpo button{min-width:44px;min-height:40px;flex:none}
+.mhd{font-size:var(--fs-xs);font-weight:800;color:var(--mu);margin:14px 4px 6px}.mhd:first-child{margin-top:4px}
 </style>
 </head>
 <body>
@@ -504,6 +506,47 @@ const ICONS = {   // آیکون‌های خطی (ثابت و داخلی)
   set: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/>'
 };
 const svgIcon = k => { const w = document.createElement('span'); w.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k] || ''}</svg>`; return w.firstChild; };
+// ترتیب نمایش تمپلت‌ها: از آرایه‌ی templates_order (کلیدهای عددیِ شیء در جاوااسکریپت خودکار مرتب می‌شوند و ترتیب ادمین را به‌هم می‌زنند)
+function tplEntries(st) {
+  const T = (st && st.templates) || {}, ord = (st && st.templates_order) || Object.keys(T), seen = new Set(), out = [];
+  ord.forEach(n => { if (n in T && !seen.has(n)) { seen.add(n); out.push([n, T[n]]); } });
+  Object.keys(T).forEach(n => { if (!seen.has(n)) out.push([n, T[n]]); });
+  return out;
+}
+// جابه‌جایی یک تمپلت بین هم‌نوع‌های خودش (تکی یا همکاری)؛ جای نوع دیگر در ترتیب سراسری ثابت می‌ماند
+function reorderKind(order, kindNames, name, dir) {
+  const i = kindNames.indexOf(name), j = i + dir;
+  if (i < 0 || j < 0 || j >= kindNames.length) return order;
+  const nk = kindNames.slice(); [nk[i], nk[j]] = [nk[j], nk[i]];
+  const set = new Set(kindNames); let p = 0;
+  return order.map(n => set.has(n) ? nk[p++] : n);
+}
+// دسته‌بندی بر اساس ماه: ۳۰ روز = ۱ ماه (±۲ روز مجاز؛ ۳۶۵/۳۶۶ = ۱۲ ماه)؛ مدت غیرمعمول (مثلاً ۴۵ روز) دسته‌ی جدا با همان تعداد روز؛ صفر = نامحدود
+function tplMonth(days) {
+  const d = Math.round(+days || 0);
+  if (d <= 0) return { key: 'inf', label: '♾ نامحدود', sort: 1e9 };
+  const m = (d === 365 || d === 366) ? 12 : Math.round(d / 30);
+  if ((m >= 1 && Math.abs(d - m * 30) <= 2) || d === 365 || d === 366) return { key: 'm' + m, label: `${m.toLocaleString('fa-IR')} ماهه`, sort: m };
+  return { key: 'd' + d, label: `${d.toLocaleString('fa-IR')} روزه`, sort: d / 30 };
+}
+// entries = [[نام، تمپلت]...] ← دسته‌ها از کم‌ماه به پرماه؛ ترتیب داخل هر دسته همان ترتیب ورودی (ترتیبی که ادمین تعیین کرده)
+function groupByMonth(entries) {
+  const map = new Map();
+  entries.forEach(e => { const g = tplMonth(e[1] && e[1].days); if (!map.has(g.key)) map.set(g.key, { ...g, items: [] }); map.get(g.key).items.push(e); });
+  return [...map.values()].sort((a, b) => a.sort - b.sort);
+}
+// ردیف‌ها با تیتر هر ماه؛ اگر فقط یک دسته بود و always نبود، بدون تیتر
+function monthRows(entries, mkRow, always) {
+  const gs = groupByMonth(entries);
+  if (gs.length < 2 && !always) return entries.map(e => mkRow(e));
+  return gs.flatMap(g => [h('div', { class: 'mhd' }, `📅 ${g.label} · ${g.items.length.toLocaleString('fa-IR')}`), ...g.items.map(e => mkRow(e))]);
+}
+// گزینه‌های <select> با <optgroup> برای هر ماه (اگر فقط یک دسته بود، گزینه‌های ساده)
+function tplOptions(entries, mkOpt) {
+  const gs = groupByMonth(entries);
+  if (gs.length < 2) return entries.map(e => mkOpt(e));
+  return gs.map(g => h('optgroup', { label: g.label }, g.items.map(e => mkOpt(e))));
+}
 const TABS = [['create', 'create', 'ساخت'], ['users', 'users', 'کاربران'], ['home', 'home', 'خانه'], ['tpl', 'tpl', 'تمپلت'], ['shop', 'shop', 'فروشگاه'], ['set', 'set', 'تنظیمات']];
 
 function renderNav() {
@@ -625,9 +668,9 @@ async function vCreate() {
   const tpl = h('select', {});
   const kindOf = m => m === 'group' ? 'group' : 'single';
   const fillTplOpts = m => {                                   // فقط تمپلت‌های همین نوع (اگر نبود همه)
-    const k = kindOf(m); let ents = Object.entries(st.templates).filter(([, t]) => (t.kind || 'single') === k); if (!ents.length) ents = Object.entries(st.templates);
+    const k = kindOf(m); let ents = tplEntries(st).filter(([, t]) => (t.kind || 'single') === k); if (!ents.length) ents = tplEntries(st);
     const def = k === 'group' ? st.active_group : st.active;
-    tpl.replaceChildren(...ents.map(([n, t]) => h('option', { value: n, selected: n === def }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
+    tpl.replaceChildren(...tplOptions(ents, ([n, t]) => h('option', { value: n, selected: n === def }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
     if (!ents.some(([n]) => n === def) && tpl.options.length) tpl.selectedIndex = 0;
   };
   fillTplOpts('single');
@@ -856,9 +899,9 @@ function userItem(u, parent, tab) {
   const tile = (l, v) => h('div', {}, h('span', {}, l), h('b', {}, v));
 
   /* ─── تب تمدید: انتخاب ← پیش‌نمایش ← اعمال (سرویس کاربر هیچ‌وقت تغییر نمی‌کند) ─── */
-  const entries = Object.entries(S.st.templates);
+  const entries = tplEntries(S.st);
   const own = entries.filter(([, t]) => (t.kind || 'single') !== 'group');            // فقط تمپلت‌های عادی (نه همکاری)
-  const tplSel = h('select', {}, (own.length ? own : entries).map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
+  const tplSel = h('select', {}, tplOptions(own.length ? own : entries, ([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
   if (S.st.active && S.st.templates[S.st.active] && [...tplSel.options].some(o => o.value === S.st.active)) tplSel.value = S.st.active;
   const cG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
   const cD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
@@ -1306,7 +1349,7 @@ async function repApp(me) {
       note.value = ''; paidNew.checked = false; loadName(); toast('✅ اکانت ساخته شد');
     });
     upd();
-    mount(head, h('div', { class: 'card' }, h('h2', {}, 'انتخاب تمپلت'), ...opts, field('نام کاربری (خودکار طبق شماره‌گذاری پنل)', uname), field('یادداشت', note), h('label', { class: 'chk paidchk', for: 'paidnew' }, paidNew, '💰 پرداخت شد (مشتری پول را داده است)'), go), out);
+    mount(head, h('div', { class: 'card' }, h('h2', {}, 'انتخاب تمپلت'), ...monthRows(w.templates.map(t => [t.name, t]), ([n]) => opts[w.templates.findIndex(x => x.name === n)]), field('نام کاربری (خودکار طبق شماره‌گذاری پنل)', uname), field('یادداشت', note), h('label', { class: 'chk paidchk', for: 'paidnew' }, paidNew, '💰 پرداخت شد (مشتری پول را داده است)'), go), out);
   };
 
   views.dash = async () => {
@@ -1698,7 +1741,30 @@ function vTpl() {
           mk('📄 کپی', async () => { await api('/templates', 'POST', { name: (n + ' کپی').slice(0, 40), old_name: null, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value, price: mv(pr) }); await reload(); }),
           mk('🗑', async () => { if (!confirm(`«${n}» حذف شود؟`)) return; await api('/templates/delete', 'POST', { name: n }); await reload(); }, 'bad'))));
   };
-  const ents = Object.entries(st.templates), sing = ents.filter(([, t]) => t.kind !== 'group').map(mkItem), grp = ents.filter(([, t]) => t.kind === 'group').map(mkItem);
+  const ents = tplEntries(st), singE = ents.filter(([, t]) => t.kind !== 'group'), grpE = ents.filter(([, t]) => t.kind === 'group');
+  const sing = monthRows(singE, mkItem, true), grp = monthRows(grpE, mkItem, true);      // دسته‌بندی بر اساس ماه
+  // ترتیب نمایش (▲▼): ترتیب سراسری برای پنل ادمین و پنل همه‌ی نماینده‌ها؛ دکمه‌ها فقط داخل همان ماه جابه‌جا می‌کنند (ماه‌ها خودکار از کم به زیاد چیده می‌شوند)
+  S.tplOrdOpen = S.tplOrdOpen || {};
+  const moveTpl = async (names, n, dir) => {
+    const order = tplEntries(st).map(([x]) => x), next = reorderKind(order, names, n, dir);
+    if (next.join('\u0000') === order.join('\u0000')) return;
+    await api('/templates/order', 'POST', { names: next }); await reload();
+  };
+  const orderCard = k => {
+    const es = tplEntries(st).filter(([, t]) => (k === 'group') === (t.kind === 'group')); if (es.length < 2) return null;
+    const rows = groupByMonth(es).flatMap(g => {
+      const names = g.items.map(([x]) => x);
+      return [h('div', { class: 'mhd' }, `📅 ${g.label}`), ...names.map((n, i) => {
+        const up = mk('▲', () => moveTpl(names, n, -1)), dn = mk('▼', () => moveTpl(names, n, 1));
+        up.setAttribute('aria-label', 'بالا'); dn.setAttribute('aria-label', 'پایین'); up.disabled = i === 0; dn.disabled = i === names.length - 1;
+        return h('div', { class: 'tpo' }, h('span', { class: 'n' }, `${(i + 1).toLocaleString('fa-IR')}. ${n}`), up, dn);
+      })];
+    });
+    const dt = h('details', { class: 'item' }, h('summary', {}, h('span', { class: 'nm' }, '↕️ ترتیب نمایش'), h('span', { class: 'sub' }, 'داخل هر ماه · اثر روی پنل شما و نماینده‌ها')),
+      h('div', { class: 'body', style: 'padding-top:8px' }, ...rows));
+    dt.open = !!S.tplOrdOpen[k]; dt.addEventListener('toggle', () => { S.tplOrdOpen[k] = dt.open; });
+    return dt;
+  };
   // افزودن سریع
   const name = h('input', { placeholder: 'نام (مثلاً ۶۰ گیگ دوماهه)', maxlength: 40 }), g = num(60, 'GB', 'any'), d = num(60, 'روز'), m = modeSel('on_hold'), kd = kindSel('single'), npr = moneyIn(0, 'تومان');
   const add = mk('➕ افزودن تمپلت', async () => { if (!name.value.trim()) throw new Error('نام را وارد کنید.'); await api('/templates', 'POST', { name: name.value.trim(), old_name: null, gb: +g.value, days: +d.value, mode: m.value, kind: kd.value, price: mv(npr) }); toast('اضافه شد'); await reload(); }, 'pri');
@@ -1714,8 +1780,8 @@ function vTpl() {
   const newCard = h('div', { class: 'acc-in' }, field('نام', name), field('نوع', kd), h('div', { class: 'row' }, field('حجم (GB)', g), field('روز', d)), field('حالت شروع', m), field('قیمت برای نماینده‌ها (تومان)', npr), h('p', { class: 'hint' }, '۰ در حجم/روز یعنی نامحدود. تمپلتِ بدون قیمت برای نماینده قابل خرید نیست.'), h('div', { class: 'btns' }, add));
   mount(h('p', { class: 'hint', style: 'margin:0 2px 10px' }, `${ents.length} تمپلت — یک بخش را باز کنید و برای ویرایش روی هر مورد بزنید`),
     h('div', { class: 'grp' }, '📋 تمپلت‌ها'),
-    tdrawer('single', '👤', 'تکی — سرویس ms', `${sing.length} تمپلت${st.active ? ' · پیش‌فرض: ' + st.active : ''}`, ...(sing.length ? sing : [h('p', { class: 'hint' }, 'تمپلت تکی ندارید.')])),
-    tdrawer('group', '👥', 'همکاری — سرویس hamkari', `${grp.length} تمپلت${st.active_group ? ' · پیش‌فرض: ' + st.active_group : ''}`, ...(grp.length ? grp : [h('p', { class: 'hint' }, 'تمپلت همکاری ندارید؛ ساخت گروهی از تمپلت‌های تکی استفاده می‌کند.')])),
+    tdrawer('single', '👤', 'تکی — سرویس ms', `${singE.length} تمپلت${st.active ? ' · پیش‌فرض: ' + st.active : ''}`, ...[orderCard('single')].filter(Boolean), ...(singE.length ? sing : [h('p', { class: 'hint' }, 'تمپلت تکی ندارید.')])),
+    tdrawer('group', '👥', 'همکاری — سرویس hamkari', `${grpE.length} تمپلت${st.active_group ? ' · پیش‌فرض: ' + st.active_group : ''}`, ...[orderCard('group')].filter(Boolean), ...(grpE.length ? grp : [h('p', { class: 'hint' }, 'تمپلت همکاری ندارید؛ ساخت گروهی از تمپلت‌های تکی استفاده می‌کند.')])),
     h('div', { class: 'grp' }, '➕ افزودن'),
     tdrawer('new', '➕', 'تمپلت جدید', 'ساخت تمپلت', newCard));
 }
@@ -1869,7 +1935,7 @@ function shopOrder(o, openIt, redraw) {
 /* ── پلن‌ها و قیمت‌ها ── */
 async function shopPlans(d, body, redraw) {
   const tplOk = new Set(d.templates.map(t => t.name));
-  const tpl = h('select', {}, d.templates.map(t => h('option', { value: t.name }, `${t.name} — ${t.gb || '∞'}GB / ${t.days || '∞'} روز`)));
+  const tpl = h('select', {}, tplOptions(d.templates.map(t => [t.name, t]), ([, t]) => h('option', { value: t.name }, `${t.name} — ${t.gb || '∞'}GB / ${t.days || '∞'} روز`)));
   const nm = h('input', { placeholder: 'نام نمایشی برای مشتری (خالی = نام تمپلت)', maxlength: 60 });
   const price = moneyIn('', 'قیمت (تومان)');
   const add = h('button', { class: 'btn pri', type: 'button' }, '➕ افزودن پلن');
@@ -2125,7 +2191,7 @@ async function shopBot(d, body, redraw) {
     h('p', { class: 'hint' }, 'کد فقط برای همان مشتری و فقط یک‌بار قابل استفاده است. مشتری‌ای که هنوز سرویس فعال دیگری دارد پیام نمی‌گیرد. برای هر دوره‌ی اعتبار فقط یک‌بار فرستاده می‌شود (بعد از تمدید و انقضای دوباره، دوباره ممکن است). کدهای ساخته‌شده بعد از ۷ روز از انقضا خودکار پاک می‌شوند.'),
     h('div', { class: 'btns' }, rmSave)));
   const tOn = h('input', { type: 'checkbox', id: 'tston' }); tOn.checked = !!d.test.enabled;
-  const tTpl = h('select', {}, [h('option', { value: '' }, '— انتخاب تمپلت تست —'), ...d.templates.map(t => h('option', { value: t.name, selected: t.name === d.test.template }, `${t.name} (${t.gb || '∞'}GB · ${t.days || '∞'} روز)`))]);
+  const tTpl = h('select', {}, [h('option', { value: '' }, '— انتخاب تمپلت تست —'), ...tplOptions(d.templates.map(t => [t.name, t]), ([, t]) => h('option', { value: t.name, selected: t.name === d.test.template }, `${t.name} (${t.gb || '∞'}GB · ${t.days || '∞'} روز)`))]);
   const tPre = i(d.test.prefix, 'test', { dir: 'ltr', maxlength: 16 });
   const tHrs = i(d.test.hours, '24', { type: 'number', min: 1, max: 720, dir: 'ltr' });
   const tSave = h('button', { class: 'btn pri', type: 'button' }, 'ذخیره تست رایگان');
@@ -2709,7 +2775,7 @@ async function vSet() {
     const spec = () => am === 'range' ? { prefix: pre.value.trim(), start: fr.value === '' ? null : +fr.value, end: to.value === '' ? null : +to.value } : { names: lst.value };
     const done = async (m) => { S.setOpen = 'reps'; toast(m); await vSet(); };
     const wAmt = moneyIn(0, 'مبلغ (تومان)'), wNote = h('input', { placeholder: 'توضیح (اختیاری)', maxlength: 120 }), logBox = h('div', { hidden: true });
-    const tplBox = h('div', {}, Object.entries((S.st && S.st.templates) || {}).map(([n, t]) => h('label', { class: 'chk', style: 'display:flex;gap:8px;align-items:center;margin:4px 0' },
+    const tplBox = h('div', {}, monthRows(tplEntries(S.st || {}), ([n, t]) => h('label', { class: 'chk', style: 'display:flex;gap:8px;align-items:center;margin:4px 0' },
       h('input', { type: 'checkbox', value: n, checked: (r.tpls || []).includes(n) }), h('span', {}, `${n} · ${t.gb ? t.gb + 'GB' : '∞'} · ${t.days ? t.days + 'روز' : '∞'} · ${t.kind === 'group' ? 'همکاری' : 'تکی'} — `, h('b', { style: t.price ? 'color:var(--ac)' : 'color:var(--warn)' }, t.price ? toman(t.price) : '⚠️ بدون قیمت (قابل خرید نیست)')))));
     const panSel = h('select', {}, h('option', { value: '' }, '— پنل فعال —'), ((S.st && S.st.panels) || []).map(pn => h('option', { value: pn.id, selected: pn.id === r.panel }, pn.name)));
     const pwI = h('input', { placeholder: 'رمز جدید دستی (حداقل ۶ کاراکتر)', dir: 'ltr', maxlength: 64, autocomplete: 'off', autocapitalize: 'off' });
