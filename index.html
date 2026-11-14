@@ -370,7 +370,7 @@ html{-webkit-tap-highlight-color:transparent}
 .tx .pos{color:var(--ok)}.tx .neg{color:var(--bad)}
 
 .tpo{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}.tpo:last-child{border-bottom:0}.tpo .n{flex:1;min-width:0;overflow-wrap:anywhere}.tpo button{min-width:44px;min-height:40px;flex:none}
-.mhd{font-size:var(--fs-xs);font-weight:800;color:var(--mu);margin:14px 4px 6px}.mhd:first-child{margin-top:4px}
+.mhd{font-size:var(--fs-2xl);font-weight:800;color:var(--ac);line-height:1.3;margin:18px 4px 8px}.mhd:first-child{margin-top:4px}
 </style>
 </head>
 <body>
@@ -539,7 +539,7 @@ function groupByMonth(entries) {
 function monthRows(entries, mkRow, always) {
   const gs = groupByMonth(entries);
   if (gs.length < 2 && !always) return entries.map(e => mkRow(e));
-  return gs.flatMap(g => [h('div', { class: 'mhd' }, `📅 ${g.label} · ${g.items.length.toLocaleString('fa-IR')}`), ...g.items.map(e => mkRow(e))]);
+  return gs.flatMap(g => [h('div', { class: 'mhd' }, `📅 ${g.label}`), ...g.items.map(e => mkRow(e))]);
 }
 // گزینه‌های <select> با <optgroup> برای هر ماه (اگر فقط یک دسته بود، گزینه‌های ساده)
 function tplOptions(entries, mkOpt) {
