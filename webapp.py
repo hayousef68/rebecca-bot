@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from telegram import Bot
 from telegram.error import Forbidden, RetryAfter, TelegramError
 
+import checker
 import common as C
 import ops
 import sales
@@ -383,6 +384,60 @@ async def me(request: Request):
 
 def _panels_view(cfg):
     return [{"id": p["id"], "name": p["name"], "ok": bool(p["panel_url"] and p["username"] and p["password"])} for p in cfg["panels"]]
+
+
+# ───────────────────────────── سلامت کانفیگ‌ها ─────────────────────────────
+class CheckerReq(BaseModel):
+    enabled: bool = True
+    alerts: bool = True
+    interval: int = Field(300, ge=60, le=3600)
+    timeout: int = Field(6, ge=2, le=20)
+    fails: int = Field(2, ge=1, le=10)
+    panel: str = Field("", max_length=64)
+    username: str = Field("", max_length=64)
+    sub_url: str = Field("", max_length=2000)
+    links: str = Field("", max_length=60000)
+    ignore: str = Field("", max_length=1000)
+
+
+def _checker_payload() -> dict:
+    cfg = C.load_config_ro()
+    c = checker.get_cfg(cfg)
+    return {"cfg": c, "view": checker.view(), "panels": [{"id": p["id"], "name": p["name"]} for p in cfg["panels"]]}
+
+
+@app.get("/api/checker", dependencies=[Depends(guard)])
+async def checker_get():
+    return _checker_payload()
+
+
+@app.post("/api/checker/settings", dependencies=[Depends(guard)])
+async def checker_save(r: CheckerReq):
+    sub = r.sub_url.strip()
+    if sub and not re.match(r"https?://", sub, re.I):
+        raise HTTPException(400, "لینک ساب باید با http:// یا https:// شروع شود.")
+    if r.username.strip() and not get_panel(C.load_config_ro(), r.panel):
+        raise HTTPException(400, "برای کاربر تست، پنل را انتخاب کنید.")
+    new = {"enabled": r.enabled, "alerts": r.alerts, "interval": r.interval, "timeout": r.timeout, "fails": r.fails,
+           "panel": r.panel.strip(), "username": r.username.strip(), "sub_url": sub, "links": r.links, "ignore": r.ignore.strip()}
+
+    def mut(c):
+        c["checker"] = new
+    update_config(mut)
+    _aud("تغییر تنظیمات سلامت کانفیگ‌ها", "", f"{'روشن' if r.enabled else 'خاموش'}؛ هر {r.interval} ثانیه؛ هشدار بعد از {r.fails} بررسی ناموفق", "sys")
+    return {"ok": True}
+
+
+@app.post("/api/checker/run", dependencies=[Depends(guard)])
+async def checker_run():
+    """بررسی فوری؛ فقط نتیجه را ذخیره می‌کند (هشدار تلگرام فقط از حلقه‌ی ربات می‌رود)."""
+    c = checker.get_cfg()
+    if not checker.has_source(c):
+        raise HTTPException(409, "اول منبع کانفیگ‌ها را تنظیم کنید (کاربر تست، لینک ساب یا لینک‌های خام).")
+    res = await asyncio.wait_for(checker.run_check(alerts=False), 120)
+    out = _checker_payload()
+    out["skipped"] = res.get("skipped", "")
+    return out
 
 
 @app.get("/api/state", dependencies=[Depends(guard)])

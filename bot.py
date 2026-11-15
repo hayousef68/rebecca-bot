@@ -16,6 +16,7 @@ from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters,
 )
 
+import checker
 import common as C
 import ops
 import sales
@@ -1078,6 +1079,24 @@ async def sales_reply(update, context):
 
 
 @nav
+async def configs_cmd(update, context):
+    """/configs — وضعیت لحظه‌ای سلامت کانفیگ‌ها (یک دور بررسی تازه می‌گیرد؛ هشدارها را دست نمی‌زند)."""
+    c = checker.get_cfg()
+    if not checker.has_source(c):
+        return await update.message.reply_html("🩺 هنوز منبع کانفیگ‌ها تنظیم نشده.\nوب‌پنل ← خانه ← «سلامت کانفیگ‌ها» ← تنظیمات.", reply_markup=main_kb())
+    msg = await update.message.reply_text("⏳ در حال بررسی کانفیگ‌ها…")
+    try:
+        await asyncio.wait_for(checker.run_check(alerts=False), 90)
+    except Exception as e:  # noqa: BLE001
+        log.warning("configs_cmd: %s", e)
+    try:
+        await msg.delete()
+    except TelegramError:
+        pass
+    await update.message.reply_html(checker.format_status(checker.view()), reply_markup=main_kb())
+
+
+@nav
 async def setshop_cmd(update, context):
     """/setshop TOKEN: ربات فروش مشتری را وصل و راه‌اندازی می‌کند. /setshop off: خاموش. بدون آرگومان: راهنما و وضعیت."""
     msg = update.message
@@ -1141,13 +1160,14 @@ async def on_error(update, context):
 
 
 async def post_init(app: Application):
-    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("setdb", "اتصال دیتابیس پنل"), BotCommand("setshop", "اتصال ربات فروش مشتری"), BotCommand("cancel", "لغو عملیات جاری")])
+    await app.bot.set_my_commands([BotCommand("start", "منوی اصلی"), BotCommand("report", "گزارش فروش امروز"), BotCommand("configs", "سلامت کانفیگ‌ها"), BotCommand("setdb", "اتصال دیتابیس پنل"), BotCommand("setshop", "اتصال ربات فروش مشتری"), BotCommand("cancel", "لغو عملیات جاری")])
     # ردیاب فروش و گزارش روزانه ۰۰:۰۰ (به وقت ایران)
     app.bot_data["bg"] = [
         asyncio.create_task(sales.watch_loop()), asyncio.create_task(sales.report_loop(app.bot)),
         asyncio.create_task(ops.reminder_loop(app.bot)), asyncio.create_task(ops.monitor_loop(app.bot)),
         asyncio.create_task(ops.unpaid_loop(app.bot)), asyncio.create_task(sales.backup_loop(app.bot)),
         asyncio.create_task(ops.recon_loop(app.bot)),   # ردیاب اختلاف مالی هر ۶ ساعت
+        asyncio.create_task(checker.checker_loop(app.bot)),   # مانیتور سلامت کانفیگ‌ها
           # بکاپ اصلی روزانه ۱۲:۰۰
     ]
     runner = shop.Runner()          # ربات فروش مشتری (توکن جدا) داخل همین پروسه؛ خطایش ربات مدیریت را خراب نمی‌کند
@@ -1180,7 +1200,7 @@ def build_app() -> Application:
     cb = CallbackQueryHandler
     conv = ConversationHandler(
         entry_points=[
-            CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), CommandHandler("report", report_cmd), CommandHandler("setdb", setdb_cmd), CommandHandler("setshop", setshop_cmd),
+            CommandHandler("start", start_cmd), CommandHandler("cancel", cancel_cmd), CommandHandler("report", report_cmd), CommandHandler("configs", configs_cmd), CommandHandler("setdb", setdb_cmd), CommandHandler("setshop", setshop_cmd),
             cb(back_cb, pattern=r"^back$"), cb(report_cb, pattern=r"^rp:(today|yday)$"),
             cb(create_entry, pattern=r"^c:(quick|pick)$"),
             cb(tpl_new, pattern=r"^t:new$"), cb(tpl_edit_field, pattern=r"^te:(name|gb|days):\d+$"),

@@ -89,6 +89,8 @@ DEFAULT_CFG = {
     "undo": {"enabled": True, "keep": 300, "days": 14, "bulk_max": 30},
     "backup": {"enabled": True, "interval_min": 1440, "password": "", "live": False, "live_chat": "", "bot_token": ""},   # interval_min: ۱۴۴۰ = روزانه ساعت ۱۲:۰۰؛ کمتر از آن = هر N دقیقه (فقط وقتی چیزی عوض شده)
     "monitor": {"enabled": True, "interval": 300},
+    # مانیتور سلامت کانفیگ‌ها (checker.py): panel+username = کاربر تست داخل پنل، sub_url = لینک ساب، links = لینک‌های خام، ignore = کلمه‌هایی که اگر در نام کانفیگ بود نادیده گرفته شود
+    "checker": {"enabled": True, "interval": 300, "timeout": 6, "fails": 2, "alerts": True, "panel": "", "username": "", "sub_url": "", "links": "", "ignore": ""},
     "smart_alerts": {"low_rep_wallet": True, "panel_down": True, "backup_failed": True, "topup_request": True, "low_wallet_threshold": 100000},
     "audit_log": [],
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},

@@ -1608,6 +1608,56 @@ function repItem(u) {
 }
 
 /* ───────── خانه ───────── */
+/* ───────── سلامت کانفیگ‌ها ───────── */
+function cfgHealthCard() {
+  const box = h('div', { class: 'card' }), list = h('div'), form = h('div', { hidden: true });
+  const ago = t => { if (!t) return '—'; const m = Math.round((Date.now() / 1000 - t) / 60); return m < 1 ? 'همین الان' : m < 60 ? m + ' دقیقه پیش' : Math.round(m / 60) + ' ساعت پیش'; };
+  let data = null;
+  const draw = d => {
+    data = d; const v = d.view, c = d.cfg;
+    const rows = v.items.map(r => h('div', { style: 'display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line)' },
+      h('span', {}, r.ok === null ? '⚪' : r.ok ? '🟢' : '🔴'),
+      h('div', { style: 'flex:1;min-width:0' }, h('div', { style: 'font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, r.name),
+        h('div', { class: 'hint', dir: 'ltr', style: 'text-align:right;margin:0' }, `${r.proto}/${r.network}${r.security ? '/' + r.security : ''} · ${r.host}:${r.port}`)),
+      h('div', { style: 'text-align:left;font-size:var(--fs-sm)', dir: 'ltr' },
+        r.ok === null ? 'UDP' : r.ok ? `${r.ms}ms` : h('span', { class: 'err' }, r.err || 'DOWN'), r.uptime != null ? h('div', { class: 'hint', style: 'margin:0' }, r.uptime + '%') : null)));
+    const head = v.total ? h('div', { class: 'row', style: 'gap:8px;margin-bottom:6px;flex-wrap:wrap' },
+      h('span', { class: 'pill ok' }, `🟢 ${v.up} سالم`), h('span', { class: 'pill ' + (v.down ? 'bad' : '') }, `🔴 ${v.down} خراب`), h('span', { class: 'pill' }, 'آخرین بررسی: ' + ago(v.last_run))) : null;
+    list.replaceChildren(head, v.error ? h('p', { class: 'err' }, v.error) : null, ...rows,
+      v.total ? null : h('p', { class: 'hint' }, 'هنوز نتیجه‌ای نیست. «⚙️ تنظیمات» را بزنید، منبع کانفیگ‌ها را بدهید و ذخیره کنید.'));
+    if (!form.dataset.built) buildForm(d);
+  };
+  const buildForm = d => {
+    form.dataset.built = '1'; const c = d.cfg, ltr = { dir: 'ltr', autocomplete: 'off', autocapitalize: 'none' };
+    const en = h('input', { type: 'checkbox', checked: c.enabled }), al = h('input', { type: 'checkbox', checked: c.alerts });
+    const panel = h('select', {}, h('option', { value: '' }, '— بدون کاربر تست —'), d.panels.map(p => h('option', { value: p.id, selected: p.id === c.panel }, p.name)));
+    const user = h('input', { ...ltr, value: c.username, placeholder: 'نام کاربر تست (مثلاً test_cfg)' });
+    const sub = h('input', { ...ltr, value: c.sub_url, placeholder: 'https://…/sub/…  (اختیاری)' });
+    const links = h('textarea', { ...ltr, rows: 4, placeholder: 'vless://…\nvmess://…  (اختیاری، هر خط یک لینک)' }); links.value = c.links;
+    const ign = h('input', { value: c.ignore, placeholder: 'کلمه‌هایی که نادیده گرفته شوند، با کاما (مثلاً: test, اطلاعات)' });
+    const iv = h('input', { type: 'number', min: 60, max: 3600, value: c.interval, dir: 'ltr' }), fl = h('input', { type: 'number', min: 1, max: 10, value: c.fails, dir: 'ltr' }), to = h('input', { type: 'number', min: 2, max: 20, value: c.timeout, dir: 'ltr' });
+    const save = h('button', { class: 'btn pri', type: 'button' }, '💾 ذخیره');
+    save.onclick = () => run(save, async () => {
+      await api('/checker/settings', 'POST', { enabled: en.checked, alerts: al.checked, interval: +iv.value || 300, timeout: +to.value || 6, fails: +fl.value || 2, panel: panel.value, username: user.value.trim(), sub_url: sub.value.trim(), links: links.value, ignore: ign.value.trim() });
+      toast('✅ ذخیره شد'); form.hidden = true; await reload(true);
+    });
+    form.replaceChildren(
+      h('label', { style: 'display:flex;gap:8px;align-items:center' }, en, 'بررسی خودکار روشن باشد'),
+      h('label', { style: 'display:flex;gap:8px;align-items:center' }, al, 'هشدار تلگرام برای قطع/وصل'),
+      field('پنل و کاربر تست (لینک‌های همین کاربر بررسی می‌شود)', h('div', { class: 'row' }, panel, user)),
+      field('یا لینک ساب', sub), field('یا لینک‌های خام', links), field('نادیده‌گرفتن', ign),
+      h('div', { class: 'row' }, field('هر چند ثانیه', iv), field('هشدار بعد از N شکست', fl), field('تایم‌اوت (ثانیه)', to)),
+      h('p', { class: 'hint' }, 'بررسی از روی سرور ربات انجام می‌شود: سالم بودن سرور/پورت و هندشیک TLS را می‌سنجد، نه فیلتر بودن در ایران.'), save);
+  };
+  const reload = async (rebuild) => { try { if (rebuild) delete form.dataset.built; draw(await api('/checker')); } catch (e) { list.replaceChildren(h('p', { class: 'err' }, e.message)); } };
+  const runB = h('button', { class: 'btn pri sm', type: 'button' }, '🔄 بررسی الان');
+  runB.onclick = () => run(runB, async () => { const d = await api('/checker/run', 'POST'); draw(d); if (d.skipped) toast('بررسی انجام نشد: ' + ({ no_items: 'کانفیگی پیدا نشد', no_internet: 'سرور ربات اینترنت ندارد' }[d.skipped] || d.skipped), true); else toast(`✅ ${d.view.up} سالم · ${d.view.down} خراب`, d.view.down > 0); });
+  const setB = h('button', { class: 'btn sm', type: 'button' }, '⚙️ تنظیمات'); setB.onclick = () => { form.hidden = !form.hidden; };
+  box.append(h('div', { class: 'sec', style: 'display:flex;justify-content:space-between;align-items:center;gap:8px' }, h('h2', { style: 'margin:0' }, '🩺 سلامت کانفیگ‌ها'), h('div', { class: 'row', style: 'gap:6px' }, setB, runB)), form, list);
+  reload();
+  return box;
+}
+
 async function vHome() {
   if (!hasPanel()) return vCreate();
   const res = h('div', { class: 'card' });
@@ -1714,7 +1764,7 @@ async function vHome() {
     rep, h('div', { class: 'btns' }, sendBtn, detBtn, edBtn), edBox, h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
   loadStats(); loadSales(); loadRep('today');
   mount(saleBox, h('div', { class: 'sec' }, h('h2', {}, 'وضعیت پنل'), refB),
-    usersBox, sysBox, extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
+    usersBox, cfgHealthCard(), sysBox, extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   core.onclick = () => { if (confirm('هسته Xray ریستارت شود؟')) run(core, async () => { await api('/core/restart', 'POST'); toast('ریستارت شد'); }); };
   res.replaceChildren(h('h2', {}, 'عملیات'), h('div', { class: 'btns' }, core));
