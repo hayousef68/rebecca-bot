@@ -445,6 +445,63 @@ def _admin_filter(conn, s: dict) -> tuple[str, tuple]:
     return f" AND ({uc} IS NULL OR {uc} IN (SELECT `id` FROM `admins` WHERE `username` = %s))", (name,)
 
 
+def _drop_next_activations(rows: list[dict], b, off: int, s: dict) -> list[dict]:
+    """«پلن بعدی» یک‌بار هنگام ثبت (record_attach kind=next) فروش حساب می‌شود. وقتی پنل خودش آن را فعال می‌کند یک ردیف ریست
+    در دیتابیس می‌نویسد که نباید دوباره فروش حساب شود. هر پلن بعدیِ ثبت‌شده، «اولین ریست بدون توضیح» همان کاربر بعد از ثبت را مصرف می‌کند
+    (ریستی که ربات خودش با تمدید/ساخت ثبت کرده یا ≤۲ دقیقه از ساخت گذشته، «بدون توضیح» نیست)."""
+    nexts: dict[str, list[float]] = {}
+    for x in _load_attach():
+        if x.get("k") == "next":
+            try:
+                nexts.setdefault(str(x.get("u", "")), []).append(float(x["ts"]))
+            except (KeyError, TypeError, ValueError):
+                pass
+    cand = {r["username"] for r in rows if r["kind"] == "renew" and r["username"] in nexts}
+    if not cand:
+        return rows
+    from common import _hist_read
+    start_ts = min(min(v) for u, v in nexts.items() if u in cand)
+    a0 = datetime.fromtimestamp(start_ts, tz=timezone.utc).replace(tzinfo=None) + timedelta(minutes=off) - timedelta(seconds=5)
+    U, R = _ident(s["users"]), _ident(s["resets"])
+    ph = ",".join(["%s"] * len(cand))
+    sql = (f"SELECT u.{_ident(s['u_name'])} AS username, u.{_ident(s['u_created'])} AS created_at, r.{_ident(s['r_at'])} AS at FROM {R} r "
+           f"JOIN {U} u ON u.{_ident(s['u_id'])} = r.{_ident(s['r_user'])} "
+           f"WHERE u.{_ident(s['u_name'])} IN ({ph}) AND r.{_ident(s['r_at'])} >= %s AND r.{_ident(s['r_at'])} < %s "
+           f"ORDER BY r.{_ident(s['r_at'])}")
+    conn = _connect()
+    try:
+        with conn.cursor() as c:
+            c.execute(sql, tuple(cand) + (a0, b))
+            db = list(c.fetchall())
+    finally:
+        conn.close()
+    bot: dict[str, list[float]] = {}
+    for h in _hist_read():
+        if h.get("k") in ("renew", "renew-keep", "new"):
+            bot.setdefault(str(h.get("u", "")), []).append(float(h["ts"]))
+    drop: set[tuple[str, float]] = set()
+    for u in cand:
+        free = []
+        for d in db:
+            if d["username"] != u or not isinstance(d["at"], datetime):
+                continue
+            t = _ts_of({"at": d["at"]}, off)
+            if any(abs(t - x) <= 120 for x in bot.get(u, [])):
+                continue
+            if isinstance(d.get("created_at"), datetime) and abs(t - _ts_of({"at": d["created_at"]}, off)) <= 120:
+                continue
+            free.append(t)
+        free.sort()
+        for nt in sorted(nexts[u]):
+            t = next((x for x in free if x > nt), None)
+            if t is not None:
+                free.remove(t)
+                drop.add((u, t))
+    if not drop:
+        return rows
+    return [r for r in rows if not (r["kind"] == "renew" and isinstance(r.get("at"), datetime) and (r["username"], _ts_of(r, off)) in drop)]
+
+
 def _fetch(a, b, include_hidden: bool = False) -> list[dict]:
     s = _schema()
     off = int(load_config()["sales"].get("db_tz_offset_minutes", 0))
@@ -480,6 +537,10 @@ def _fetch(a, b, include_hidden: bool = False) -> list[dict]:
     created = {r["username"]: r["at"] for r in rows if r["kind"] == "new" and isinstance(r["at"], datetime)}
     rows = [r for r in rows if not (r["kind"] == "renew" and r["username"] in created and isinstance(r["at"], datetime)
                                     and abs((r["at"] - created[r["username"]]).total_seconds()) <= 120)]
+    try:
+        rows = _drop_next_activations(rows, b, off, s)       # فعال‌شدنِ خودکار پلن بعدی دوباره فروش حساب نشود
+    except Exception:  # noqa: BLE001
+        log.exception("drop next activations")
     rows.sort(key=lambda r: r["at"] if isinstance(r["at"], datetime) else datetime.min)
     return _apply_overrides(rows, off, include_hidden)
 
