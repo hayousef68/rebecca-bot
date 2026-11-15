@@ -1364,6 +1364,10 @@ async def rep_next_plan(r: RepNextPlanReq, request: Request, rep=Depends(rep_gua
                 raise HTTPException(400, "ثبت پلن بعدی ناموفق بود؛ " + ("مبلغ برگشت داده شد." if ok else "بازگشت وجه خودکار انجام نشد و به ادمین اطلاع داده شد.") + (f" ({err})" if isinstance(err, C.RebeccaError) else ""))
         else:
             await asyncio.to_thread(C.wallet_tx_mark, txid, "done", r.username)
+        try:        # نشانه‌ی «پلن بعدی ثبت شد» (خودش با بازه‌ی نماینده از فروش حذف می‌شود) تا ریستِ فعال‌سازی بعدیِ پنل هم فروش حساب نشود
+            await asyncio.to_thread(sales.record_attach, r.username, (res or {}).get("service_id"), gb, days, None, "next")
+        except Exception:  # noqa: BLE001
+            log.exception("record rep next plan")
         await _hide_from_sales(r.username, t_start)
         await asyncio.to_thread(C.hist_add_many, [{"pid": getattr(api, "pid", ""), "u": r.username, "k": "next", "gb": gb, "days": days}])
         bal = C.load_config_ro()["reps"][rid]["balance"]
