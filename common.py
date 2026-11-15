@@ -2188,7 +2188,7 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
         same = (known and not view[idx]["broken"] and abs(view[idx]["gb"] - gb) < 0.01
                 and view[idx]["days"] == days and view[idx]["add_remaining"] == rem)
         if same:
-            q = dict(raw[idx])                                    # بدون تغییر: همان‌طور که هست
+            q = dict(raw[idx])                                    # بدون تغییر: همان‌طور که هست (جز پرچم‌های انتقال حجم که پایین اجباری می‌شوند)
             if mode == "chain" and not _is_dur(q, legacy) and int(q.get("expire") or 0):
                 base = float(q["expire"])
         else:
@@ -2197,10 +2197,14 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
             q["add_remaining_traffic"] = rem
             if not legacy:
                 q["start_on_first_connect"] = False               # مدت نیست؛ تاریخ مطلق است
-                q["increase_data_limit"] = False                  # پنل خودش هم هیچ‌وقت این را روشن نمی‌فرستد (روشن = حجم به حجم فعلی اضافه می‌شود)
             q["expire"] = int(base) + days * 86400 if days > 0 else 0
             if days > 0 and mode == "chain":
                 base = float(q["expire"])
+        # انتقال حجم فقط وقتی «حجم باقی‌مانده منتقل شود» تیک خورده؛ در غیر این صورت هر دو پرچم صراحتاً خاموش می‌شوند
+        # (increase_data_limit روشن = حجم پلن به «حجم کل فعلی» اضافه می‌شود و مصرف صفر نمی‌شود → یعنی باقی‌مانده منتقل می‌شود؛
+        #  پلن‌های قدیمی/ساخته‌شده در خود پنل یا کپی‌شده از پلن اول ممکن است این پرچم را روشن داشته باشند)
+        q["add_remaining_traffic"] = rem
+        q["increase_data_limit"] = False
         for k in _PLAN_DROP:
             q.pop(k, None)
         if "position" in q:
@@ -2211,6 +2215,13 @@ async def set_next_plans(api, username: str, plans: list[dict], mode: str | None
     after = await api.request("GET", ph)
     if len(next_plans_view(after)) != len(built):
         raise RebeccaError("پنل پلن بعدی را ذخیره نکرد (نسخه‌ی ربکا یا فیلدها سازگار نیست). جزئیات فنی را بفرستید.")
+    for want, got in zip(built, _raw_plans(after)):
+        if "add_remaining_traffic" in got and bool(got["add_remaining_traffic"]) != bool(want["add_remaining_traffic"]):
+            log.warning("panel kept add_remaining_traffic=%s for %s (wanted %s)", got["add_remaining_traffic"], username, want["add_remaining_traffic"])
+            raise RebeccaError("پنل تنظیم «انتقال حجم باقی‌مانده» را همان‌طور که فرستاده شد ذخیره نکرد؛ همین پلن را از خود پنل بررسی کنید.")
+        if got.get("increase_data_limit"):
+            log.warning("panel kept increase_data_limit=True for %s", username)
+            raise RebeccaError("پنل گزینه‌ی «افزایش حجم کل» را روشن نگه داشت (باعث انتقال حجم می‌شود). جزئیات فنی را بفرستید.")
     return after
 
 
