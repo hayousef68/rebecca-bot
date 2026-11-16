@@ -473,20 +473,17 @@ body{background:
   radial-gradient(1100px 520px at 85% -160px,color-mix(in srgb,var(--ac) 20%,transparent),transparent 62%),
   radial-gradient(900px 480px at -8% 12%,color-mix(in srgb,var(--ac2) 13%,transparent),transparent 60%),
   radial-gradient(700px 500px at 50% 115%,color-mix(in srgb,var(--ac) 9%,transparent),transparent 65%),
-  var(--bg);background-attachment:fixed}
-body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.5;
-  background-image:radial-gradient(color-mix(in srgb,var(--fg,#fff) 9%,transparent) 1px,transparent 1.3px);background-size:26px 26px;
-  -webkit-mask-image:linear-gradient(180deg,#000,transparent 70%);mask-image:linear-gradient(180deg,#000,transparent 70%)}
+  var(--bg);background-attachment:scroll}
 ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--mu) 35%,transparent);border-radius:10px;border:3px solid transparent;background-clip:content-box}
 ::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--ac) 55%,transparent);background-clip:content-box;border:3px solid transparent}
 ::selection{background:color-mix(in srgb,var(--ac) 40%,transparent)}
 /* هدر */
-header{background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);border-bottom:0;position:sticky}
+header{background:color-mix(in srgb,var(--bg) 70%,transparent);-webkit-border-bottom:0;position:sticky}
 header::after{content:"";position:absolute;inset:auto 0 0 0;height:1px;background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--ac) 55%,transparent),color-mix(in srgb,var(--ac2) 45%,transparent),transparent)}
 .logo{box-shadow:0 6px 22px color-mix(in srgb,var(--ac) 45%,transparent),inset 0 1px 0 #fff5}
 /* سایدبار */
-html.desk nav{background:linear-gradient(180deg,color-mix(in srgb,var(--s1) 78%,transparent),color-mix(in srgb,var(--s0) 88%,transparent));backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
-html.desk #sbbrand,html.desk #sbfoot{background:color-mix(in srgb,var(--s1) 70%,transparent);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+html.desk nav{background:linear-gradient(180deg,color-mix(in srgb,var(--s1) 78%,transparent),color-mix(in srgb,var(--s0) 88%,transparent));-webkit-}
+html.desk #sbbrand,html.desk #sbfoot{background:color-mix(in srgb,var(--s1) 70%,transparent);-webkit-}
 html.desk #sbbrand b{background:linear-gradient(90deg,var(--tx),color-mix(in srgb,var(--ac) 70%,var(--tx)));-webkit-background-clip:text;background-clip:text;color:transparent;font-size:var(--fs-lg)}
 html.desk nav button{border:1px solid transparent}
 html.desk nav button:hover{background:color-mix(in srgb,var(--ac) 7%,var(--s2));border-color:var(--line);transform:translateX(-2px)}
@@ -495,11 +492,11 @@ html.desk nav button.on svg{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--a
 html.desk nav .nv-sec{display:flex;align-items:center;gap:10px}
 html.desk nav .nv-sec::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
 /* نوار پایین موبایل */
-html:not(.desk) nav{background:color-mix(in srgb,var(--s1) 78%,transparent);backdrop-filter:blur(22px) saturate(1.5);-webkit-backdrop-filter:blur(22px) saturate(1.5);box-shadow:0 14px 40px #0009,inset 0 1px 0 #ffffff14}
+html:not(.desk) nav{background:color-mix(in srgb,var(--s1) 78%,transparent);-webkit-box-shadow:0 14px 40px #0009,inset 0 1px 0 #ffffff14}
 html:not(.desk) nav button.on{background:linear-gradient(180deg,color-mix(in srgb,var(--ac) 24%,transparent),color-mix(in srgb,var(--ac) 5%,transparent));box-shadow:inset 0 1px 0 #ffffff12}
 /* کارت‌ها: شیشه‌ای + درخشش هنگام هاور */
 .card,.item,.stat div,.hero,.qa button{background:linear-gradient(180deg,color-mix(in srgb,var(--fg,#fff) 6%,transparent),color-mix(in srgb,var(--fg,#fff) 1.5%,transparent)),color-mix(in srgb,var(--s1) 82%,transparent);
-  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-color:color-mix(in srgb,var(--fg,#fff) 9%,var(--line));box-shadow:inset 0 1px 0 color-mix(in srgb,var(--fg,#fff) 8%,transparent),0 10px 30px -12px #000a}
+  -webkit-border-color:color-mix(in srgb,var(--fg,#fff) 9%,var(--line));box-shadow:inset 0 1px 0 color-mix(in srgb,var(--fg,#fff) 8%,transparent),0 10px 30px -12px #000a}
 .card{border-radius:20px;transition:border-color .25s,box-shadow .25s}
 .card:hover{border-color:color-mix(in srgb,var(--ac) 28%,var(--line))}
 .card h2,.sec h2{letter-spacing:0}
@@ -508,7 +505,7 @@ html:not(.desk) nav button.on{background:linear-gradient(180deg,color-mix(in srg
   background:radial-gradient(520px 220px at 100% 0,color-mix(in srgb,var(--ac) 30%,transparent),transparent 70%),radial-gradient(420px 220px at 0 100%,color-mix(in srgb,var(--ac2) 22%,transparent),transparent 70%),color-mix(in srgb,var(--s1) 85%,transparent)}
 .hero .big{font-size:clamp(30px,6vw,44px);background:linear-gradient(90deg,var(--tx),color-mix(in srgb,var(--ac2) 65%,var(--tx)));-webkit-background-clip:text;background-clip:text;color:transparent}
 .hero .big small{-webkit-text-fill-color:var(--mu)}
-.hero .mini div{background:color-mix(in srgb,var(--bg) 55%,transparent);backdrop-filter:blur(8px);border-radius:14px;padding:11px 6px;transition:transform .2s,border-color .2s}
+.hero .mini div{background:color-mix(in srgb,var(--bg) 55%,transparent);border-radius:14px;padding:11px 6px;transition:transform .2s,border-color .2s}
 .hero .mini div:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--ac) 40%,var(--line))}
 /* کارت‌های آمار */
 .stat div{border-radius:18px;padding:13px 14px 11px}
@@ -549,15 +546,14 @@ html.desk .dgrid{grid-template-columns:1fr 1fr;gap:14px}
 /* فرم‌ها */
 input,select,textarea{border-radius:13px;background:color-mix(in srgb,var(--bg) 70%,transparent);transition:border-color .18s,box-shadow .18s,background .18s}
 input:hover,select:hover{border-color:color-mix(in srgb,var(--ac) 35%,var(--line))}
-/* ورود نرم و پله‌ای */
-@media (prefers-reduced-motion:no-preference){
-  #view.vin>*{animation:rbup .5s cubic-bezier(.2,.8,.2,1) both}
-  #view.vin>*:nth-child(2){animation-delay:.05s}#view.vin>*:nth-child(3){animation-delay:.1s}#view.vin>*:nth-child(4){animation-delay:.15s}
-  #view.vin>*:nth-child(5){animation-delay:.2s}#view.vin>*:nth-child(n+6){animation-delay:.25s}
-  @keyframes rbup{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
-  .logo{animation:rbglow 4s ease-in-out infinite}
-  @keyframes rbglow{50%{box-shadow:0 6px 30px color-mix(in srgb,var(--ac) 70%,transparent),inset 0 1px 0 #fff5}}
-}
+
+/* آیکون‌های سایدبار داخل کاشی رنگی */
+html.desk nav button svg{width:36px;height:36px;padding:8px;border-radius:11px;background:color-mix(in srgb,var(--fg,#fff) 6%,transparent);transition:background .18s,color .18s}
+html.desk nav button:hover svg{background:color-mix(in srgb,var(--ac) 16%,transparent);color:var(--ac)}
+html.desk nav button.on svg{background:linear-gradient(135deg,var(--ac),var(--ac2));color:var(--ac-ink);filter:none;box-shadow:0 6px 16px color-mix(in srgb,var(--ac) 40%,transparent)}
+html.desk nav button{padding:0 10px;min-height:52px}
+nav button svg{stroke-width:1.7}
+.qa i svg{stroke-width:1.7}
 </style>
 </head>
 <body>
@@ -675,7 +671,7 @@ async function run(btn, fn) {
 }
 /* حالت خالی: آیکون + عنوان + راهنمای کوتاه (فقط متن ثابت داخل innerHTML می‌رود؛ متن‌های متغیر با h() امن درج می‌شوند) */
 const EMPTY_ICONS = {
-  users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M17 11a3 3 0 0 0 0-6M18.5 14.4A5.5 5.5 0 0 1 21 20"/>',
+  users: '<circle cx="9" cy="8" r="3.4" fill="currentColor" fill-opacity=".16"/><path d="M3.2 20c0-3.2 2.6-5.5 5.8-5.5s5.8 2.3 5.8 5.5"/><path d="M16 5.3a3.2 3.2 0 0 1 0 5.6M18.5 14.9c1.5.8 2.5 2.3 2.5 5.1"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
 };
@@ -686,13 +682,13 @@ function empty(kind, title, hint) {
 
 const S = { st: null, panel: null, tab: 'create', users: { q: '', status: '', scope: 'panel', off: 0 }, last: null };
 const ICONS = {   // آیکون‌های خطی (ثابت و داخلی)
-  wallet: '<rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16 14.5h2"/>',
-  create: '<path d="M12 5v14M5 12h14"/>',
+  wallet: '<rect x="3" y="6" width="18" height="13.5" rx="3.5" fill="currentColor" fill-opacity=".16"/><path d="M3 10.2h18M16 14.8h2.2"/><path d="M6.5 6 15 3.6"/>',
+  create: '<rect x="3.5" y="3.5" width="17" height="17" rx="5.5" fill="currentColor" fill-opacity=".16"/><path d="M12 8v8M8 12h8"/>',
   users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.8c1.8.7 3 2.4 3 5.2"/>',
-  home: '<path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/>',
-  shop: '<path d="M4 9l1.5-5h13L20 9"/><path d="M4 9a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"/><path d="M5 12v8h14v-8M10 20v-5h4v5"/>',
-  tpl: '<rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="10" height="6" rx="2"/><path d="M18 14v6M15 17h6"/>',
-  set: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/>'
+  home: '<path d="M4 11.2 12 4l8 7.2V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" fill="currentColor" fill-opacity=".16"/><path d="M9.5 21v-5.5h5V21"/>',
+  shop: '<path d="M5.5 12.5V20h13v-7.5" fill="currentColor" fill-opacity=".16"/><path d="M4 9.5 5.6 4.5h12.8L20 9.5"/><path d="M4 9.5a2.7 2.7 0 0 0 5.3 0 2.7 2.7 0 0 0 5.4 0 2.7 2.7 0 0 0 5.3 0"/><path d="M10 20v-4.5h4V20"/>',
+  tpl: '<rect x="3.5" y="4" width="17" height="6.5" rx="2.4" fill="currentColor" fill-opacity=".16"/><rect x="3.5" y="13.5" width="10" height="6.5" rx="2.4"/><path d="M17 15v4M15 17h4"/>',
+  set: '<circle cx="12" cy="12" r="3" fill="currentColor" fill-opacity=".16"/><circle cx="12" cy="12" r="6.6"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/>'
 };
 const svgIcon = k => { const w = document.createElement('span'); w.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k] || ''}</svg>`; return w.firstChild; };
 // ترتیب نمایش تمپلت‌ها: از آرایه‌ی templates_order (کلیدهای عددیِ شیء در جاوااسکریپت خودکار مرتب می‌شوند و ترتیب ادمین را به‌هم می‌زنند)
@@ -1809,15 +1805,6 @@ function repItem(u) {
 }
 
 /* ───────── خانه ───────── */
-function countUp(root) {                                                                  // انیمیشن شمارش اعداد کارت‌های آمار
-  if (matchMedia('(prefers-reduced-motion:reduce)').matches) return;
-  root.querySelectorAll('strong').forEach(el => {
-    const to = parseInt(String(el.textContent).replace(/[^\d]/g, ''), 10); if (!(to > 0)) return;
-    const t0 = performance.now(), D = 800;
-    const tick = now => { const k = Math.min(1, (now - t0) / D), e = 1 - Math.pow(1 - k, 3); el.textContent = Math.round(to * e).toLocaleString('en-US'); if (k < 1) requestAnimationFrame(tick); };
-    requestAnimationFrame(tick);
-  });
-}
 async function vHome() {
   if (!hasPanel()) return vCreate();
   const res = h('div', { class: 'card' });
@@ -1825,7 +1812,7 @@ async function vHome() {
   const mb = b => { let n = +b || 0; const u = ['B', 'K', 'M', 'G', 'T']; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; }
     return (n >= 10 || i === 0 ? Math.round(n) : +n.toFixed(1)) + u[i]; };                // فشرده: 23M ، 1.5G
   const fa = n => (+n || 0).toLocaleString('fa-IR');
-  const usersBox = h('div', { class: 'stat' }), donutBox = h('div', { class: 'card donut' }), sysBox = h('div', { class: 'card' }), saleBox = h('div'), extraBox = h('div');
+  const usersBox = h('div', { class: 'stat' }), sysBox = h('div', { class: 'card' }), saleBox = h('div'), extraBox = h('div');
   const cell = (t, v, sub, c, cls) => h('div', { class: cls || null, style: c ? `--c:${c}` : null }, h('span', {}, t), h('strong', { dir: 'ltr', style: 'text-align:right' }, v), sub ? h('span', {}, sub) : null);
   const meter = (label, pct, text) => h('div', { style: 'margin-bottom:10px' }, h('div', { style: 'display:flex;justify-content:space-between;font-size:var(--fs-sm)' }, h('span', {}, label), h('span', { dir: 'ltr' }, text)),
     h('div', { class: 'bar' }, h('i', { class: pct > 85 ? 'b' : pct > 65 ? 'w' : '', style: `width:${Math.min(100, Math.max(0, pct))}%` })));
@@ -1836,14 +1823,6 @@ async function vHome() {
         ['⏳ On-Hold', s.users_on_hold, 'var(--info)'], ['🔴 منقضی', s.users_expired, 'var(--bad)'], ['🟠 محدود‌شده', s.users_limited, 'var(--warn)'],
         ['⚫ غیرفعال', s.users_disabled, 'var(--mu)']].filter(([, v]) => v != null);
       usersBox.replaceChildren(...items.map(([t, v, c, w]) => cell(t, sp(v), null, c, w)));
-      countUp(usersBox);
-      const segs = [['فعال', s.users_active, 'var(--ok)'], ['On-Hold', s.users_on_hold, 'var(--info)'], ['منقضی', s.users_expired, 'var(--bad)'], ['محدودشده', s.users_limited, 'var(--warn)'], ['غیرفعال', s.users_disabled, 'var(--mu)']].filter(x => +x[1] > 0);
-      const tot = segs.reduce((a, x) => a + (+x[1]), 0) || 1, C = 2 * Math.PI * 66; let acc = 0;
-      const arcs = segs.map(([, v, c]) => { const len = Math.max(0, C * v / tot - 5), el = `<circle class="sg" cx="84" cy="84" r="66" style="color:${c}" stroke="${c}" stroke-dasharray="0 ${C}" data-d="${len} ${C - len}" stroke-dashoffset="${-acc}"/>`; acc += C * v / tot; return el; }).join('');
-      donutBox.replaceChildren(h('h2', {}, '📊 توزیع وضعیت کاربران'),
-        Object.assign(h('div', { class: 'dn-svg' }), { innerHTML: `<svg viewBox="0 0 168 168" aria-hidden="true"><circle class="bg" cx="84" cy="84" r="66"/>${arcs}</svg><div class="dn-ct"><b dir="ltr">${sp(tot)}</b><small>کاربر</small></div>` }),
-        h('div', { class: 'dn-lg' }, ...segs.map(([n, v, c]) => h('div', { style: `--c:${c}` }, h('i', {}), h('span', {}, n), h('b', { dir: 'ltr' }, sp(v)), h('em', { dir: 'ltr' }, Math.round(v * 100 / tot) + '%')))));
-      requestAnimationFrame(() => requestAnimationFrame(() => donutBox.querySelectorAll('.sg').forEach(c => c.setAttribute('stroke-dasharray', c.dataset.d))));
       const ramP = s.mem_total ? s.mem_used * 100 / s.mem_total : 0;
       sysBox.replaceChildren(h('h2', {}, '🖥 منابع سرور'),
         meter('CPU', s.cpu_usage || 0, Math.round(s.cpu_usage || 0) + '%'),
@@ -1936,7 +1915,7 @@ async function vHome() {
     qaBtn('shop', 'shop', 'فروشگاه', S.shopPend ? `${S.shopPend} مورد در انتظار` : 'سفارش‌ها و پرداخت‌ها', 'var(--ok)'), qaBtn('set', 'set', 'تنظیمات', S.pend ? `${S.pend} درخواست شارژ` : 'پنل‌ها، نماینده‌ها، امنیت', 'var(--warn)'));
   const head = h('div', { class: 'dash-head' }, h('div', {}, h('h2', {}, 'خوش آمدید 👋'), h('p', {}, 'نمای کلی فروش، کاربران و منابع سرور')));
   mount(head, quick, saleBox, h('div', { class: 'sec' }, h('h2', {}, 'وضعیت پنل'), refB),
-    usersBox, h('div', { class: 'dgrid' }, donutBox, sysBox), extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
+    usersBox, sysBox, extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   core.onclick = () => { if (confirm('هسته Xray ریستارت شود؟')) run(core, async () => { await api('/core/restart', 'POST'); toast('ریستارت شد'); }); };
   res.replaceChildren(h('h2', {}, 'عملیات'), h('div', { class: 'btns' }, core));
