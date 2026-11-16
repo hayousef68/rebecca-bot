@@ -371,13 +371,110 @@ html{-webkit-tap-highlight-color:transparent}
 
 .tpo{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}.tpo:last-child{border-bottom:0}.tpo .n{flex:1;min-width:0;overflow-wrap:anywhere}.tpo button{min-width:44px;min-height:40px;flex:none}
 .mhd{font-size:var(--fs-2xl);font-weight:800;color:var(--ac);line-height:1.3;margin:18px 4px 8px}.mhd:first-child{margin-top:4px}
+
+/* ═════════ PRO UI: سایدبار، هدر، دکمه‌ها، داشبورد ═════════ */
+:root{--rad:14px;--ring:0 0 0 3px color-mix(in srgb,var(--ac) 28%,transparent);--sbw:256px}
+/* ── هدر ── */
+header{min-height:60px;padding-block:calc(8px + env(safe-area-inset-top)) 8px}
+header h1{gap:10px}
+header h1 .ttl{display:none}
+header h1 #pgtitle{display:flex;flex-direction:column;line-height:1.25;font-size:var(--fs-lg);font-weight:800}
+header h1 #pgtitle small{font-size:var(--fs-xs);color:var(--mu);font-weight:500}
+.hdr-tools{display:flex;gap:8px;align-items:center}
+header .pill{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 12px;border-radius:11px;font-weight:600;transition:border-color .15s,background .15s,color .15s}
+header button.pill:hover,header select.pill:hover{border-color:color-mix(in srgb,var(--ac) 55%,var(--line));color:var(--tx);background:color-mix(in srgb,var(--ac) 8%,var(--s2))}
+#conn::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px color-mix(in srgb,currentColor 22%,transparent)}
+#out{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 35%,var(--line))}
+#out:hover{background:color-mix(in srgb,var(--bad) 14%,var(--s2))!important;color:var(--bad)!important}
+@media (max-width:640px){#conn{font-size:0;padding:0 11px;gap:0}#conn::before{width:10px;height:10px}.themesel{display:none}}
+header .deskbtn{display:none}
+@media (min-width:900px){header .deskbtn{display:inline-flex}}
+header{flex-wrap:nowrap;gap:8px}header h1{min-width:0}.hdr-tools{flex:none}
+@media (max-width:640px){header{padding-inline:12px}header #pgtitle{font-size:var(--fs-md)}#psel{max-width:110px!important}#out{padding:0 10px}}
+/* ── سایدبار (فقط دسکتاپ) ── */
+#sbbrand,#sbfoot,nav .nv-sec{display:none}
+html.desk body{padding-inline-start:var(--sbw)}
+html.desk header{padding-inline:28px;min-height:68px}
+html.desk header h1 .logo{display:none}
+html.desk nav{inset:0 auto 0 auto;inset-inline-start:0;top:0;bottom:0;width:var(--sbw);max-width:none;margin:0;border-radius:0;border:0;border-inline-end:1px solid var(--line);
+  display:flex;flex-direction:column;gap:3px;padding:84px 14px 84px;overflow-y:auto;background:linear-gradient(180deg,color-mix(in srgb,var(--s1) 96%,transparent),color-mix(in srgb,var(--s0) 96%,transparent));box-shadow:none}
+html.desk #sbbrand{display:flex;position:fixed;z-index:8;top:0;inset-inline-start:0;width:var(--sbw);height:68px;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--line);border-inline-end:1px solid var(--line);background:color-mix(in srgb,var(--s1) 98%,transparent)}
+html.desk #sbbrand .logo{width:38px;height:38px;border-radius:12px;font-size:19px}
+html.desk #sbbrand b{display:block;font-size:var(--fs-md);font-weight:800;line-height:1.2}
+html.desk #sbbrand small{display:block;font-size:var(--fs-xs);color:var(--mu)}
+html.desk nav .nv-sec{display:block;font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--mu);opacity:.8;padding:16px 12px 6px}
+html.desk nav button{flex-direction:row;justify-content:flex-start;gap:12px;padding:0 14px;min-height:46px;border-radius:12px;font-size:var(--fs-md);font-weight:600;text-align:start;white-space:nowrap;position:relative;transition:background .15s,color .15s,transform .1s}
+html.desk nav button svg{width:21px;height:21px}
+html.desk nav button:hover{background:var(--s2);color:var(--tx)}
+html.desk nav button:active{transform:scale(.985)}
+html.desk nav button.on{color:var(--tx);background:linear-gradient(90deg,color-mix(in srgb,var(--ac) 20%,transparent),color-mix(in srgb,var(--ac) 6%,transparent))}
+html.desk nav button.on svg{color:var(--ac);transform:none}
+html.desk nav button.on::after{content:"";position:absolute;inset-inline-start:-14px;inset-inline-end:auto;left:auto;right:auto;bottom:auto;top:9px;width:4px;height:28px;border-radius:0 4px 4px 0;background:linear-gradient(180deg,var(--ac),var(--ac2))}
+html.desk nav .nbadge{position:static;margin-inline-start:auto}
+html.desk #sbfoot{display:flex;position:fixed;z-index:8;bottom:0;inset-inline-start:0;width:var(--sbw);padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:color-mix(in srgb,var(--s1) 98%,transparent);border-top:1px solid var(--line);border-inline-end:1px solid var(--line)}
+html.desk #sbfoot .btn{width:100%}
+html.desk main{max-width:1180px}
+html.desk #alertbar{max-width:1180px}
+html.desk .stat{grid-template-columns:repeat(4,1fr)}
+/* ── نوار پایین موبایل ── */
+html:not(.desk) nav{border-radius:24px;padding:7px}
+html:not(.desk) nav button{border-radius:17px}
+nav .nbadge{position:absolute;top:2px;inset-inline-end:calc(50% - 22px);min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--bad);color:#fff;font-size:10px;font-style:normal;font-weight:800;display:grid;place-items:center;box-shadow:0 0 0 2px var(--s1)}
+/* ── دکمه‌ها ── */
+.btn,.chip,.seg button{-webkit-tap-highlight-color:transparent}
+.btn{position:relative;min-height:46px;border-radius:var(--rad);padding:0 18px;font-size:var(--fs-md);font-weight:700;letter-spacing:0;border:1px solid var(--line);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--fg,#fff) 5%,var(--s2)),var(--s2));box-shadow:0 1px 0 color-mix(in srgb,var(--fg,#fff) 7%,transparent) inset,0 1px 2px #0003;
+  transition:transform .12s,box-shadow .18s,border-color .18s,background .18s,filter .18s}
+.btn:hover{border-color:color-mix(in srgb,var(--ac) 45%,var(--line));box-shadow:0 1px 0 color-mix(in srgb,var(--fg,#fff) 8%,transparent) inset,0 6px 16px #0004;transform:translateY(-1px)}
+.btn:active{transform:translateY(0) scale(.98);box-shadow:none}
+.btn:focus-visible,.chip:focus-visible,nav button:focus-visible,.pill:focus-visible{outline:0;box-shadow:var(--ring)}
+.btn.pri{border:0;background:linear-gradient(135deg,var(--ac),var(--ac2));color:var(--ac-ink);box-shadow:0 1px 0 #fff4 inset,0 8px 20px color-mix(in srgb,var(--ac) 32%,transparent)}
+.btn.pri:hover{filter:brightness(1.08) saturate(1.05);box-shadow:0 1px 0 #fff5 inset,0 12px 26px color-mix(in srgb,var(--ac) 42%,transparent)}
+.btn.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 9%,var(--s2));border-color:color-mix(in srgb,var(--bad) 38%,var(--line))}
+.btn.bad:hover{background:var(--bad);color:#fff;border-color:var(--bad);box-shadow:0 8px 20px color-mix(in srgb,var(--bad) 35%,transparent)}
+.btn.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 10%,var(--s2));border-color:color-mix(in srgb,var(--ok) 38%,var(--line))}
+.btn.ok:hover{background:var(--ok);color:#04150c;border-color:var(--ok)}
+.btn.ghost{background:transparent;box-shadow:none;border-color:transparent;color:var(--mu)}
+.btn.ghost:hover{background:var(--s2);color:var(--tx);transform:none}
+.btn.sm{min-height:36px;border-radius:11px;padding:0 13px;font-size:var(--fs-sm)}
+.btn.lg{min-height:54px;font-size:var(--fs-lg);border-radius:16px}
+.btn:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none;filter:none}
+.btn.busy{cursor:wait;color:transparent!important;pointer-events:none}
+.btn.busy::after{content:"";position:absolute;inset:0;margin:auto;width:18px;height:18px;border-radius:50%;border:2.5px solid color-mix(in srgb,var(--tx) 25%,transparent);border-top-color:var(--tx);animation:rbspin .7s linear infinite}
+.btn.pri.busy::after{border-color:color-mix(in srgb,var(--ac-ink) 25%,transparent);border-top-color:var(--ac-ink)}
+@keyframes rbspin{to{transform:rotate(360deg)}}
+.chip{border-radius:11px;min-height:34px;padding:0 14px;transition:background .15s,border-color .15s,color .15s,transform .1s}
+.chip:active{transform:scale(.96)}
+.seg{border-radius:14px;padding:4px}.seg button{border-radius:11px;transition:background .15s,color .15s}
+.seg button:not(.on):hover{background:var(--s2);color:var(--tx)}
+/* ── داشبورد: خوش‌آمد و دسترسی سریع ── */
+.dash-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 2px 14px;flex-wrap:wrap}
+.dash-head h2{font-size:var(--fs-xl);font-weight:800;line-height:1.3}
+.dash-head p{font-size:var(--fs-sm);color:var(--mu)}
+.qa{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}
+html.desk .qa{grid-template-columns:repeat(4,1fr);gap:14px}
+.qa button{display:flex;align-items:center;gap:12px;text-align:start;font:inherit;color:var(--tx);cursor:pointer;padding:14px;border-radius:16px;border:1px solid var(--line);
+  background:linear-gradient(180deg,var(--s1),var(--s0));transition:transform .14s,border-color .18s,box-shadow .18s}
+.qa button:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--c,var(--ac)) 55%,var(--line));box-shadow:0 10px 24px #0004}
+.qa button:active{transform:scale(.98)}
+.qa button:focus-visible{outline:0;box-shadow:var(--ring)}
+.qa i{flex:none;width:42px;height:42px;border-radius:13px;display:grid;place-items:center;color:var(--c,var(--ac));background:color-mix(in srgb,var(--c,var(--ac)) 14%,transparent)}
+.qa i svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.qa b{display:block;font-size:var(--fs-md);font-weight:700;line-height:1.3}
+.qa small{display:block;font-size:var(--fs-xs);color:var(--mu);line-height:1.4}
+.stat div{border-radius:16px;transition:transform .14s,border-color .18s}
+.stat div:hover{transform:translateY(-2px)}
+html.desk .card{border-radius:18px}
+@media (prefers-reduced-motion:reduce){.btn,.qa button,.stat div,nav button{transition:none}.btn.busy::after{animation-duration:1.6s}}
 </style>
 </head>
 <body>
-<header><h1><span class="logo">R</span><span class="ttl">پنل مدیریت ربکا</span></h1><div style="display:flex;gap:8px;align-items:center"><select id="psel" hidden aria-label="پنل فعال" style="min-height:34px;padding:2px 10px;width:auto;max-width:150px;font-size:var(--fs-sm)"></select><span id="conn" class="pill">…</span><select id="themesel" class="pill themesel" aria-label="قالب"></select><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="خروج">خروج</button></div></header>
+<div id="sbbrand" aria-hidden="true"><span class="logo">R</span><div><b>ربکا</b><small>پنل مدیریت</small></div></div>
+<header><h1><span class="logo">R</span><span class="ttl">پنل مدیریت ربکا</span><span id="pgtitle"><span>پنل مدیریت ربکا</span><small id="pgdate"></small></span></h1><div class="hdr-tools"><select id="psel" hidden aria-label="پنل فعال" style="min-height:36px;padding:2px 10px;width:auto;max-width:150px;font-size:var(--fs-sm);border-radius:11px"></select><span id="conn" class="pill">…</span><select id="themesel" class="pill themesel" aria-label="قالب"></select><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="خروج">خروج</button></div></header>
 <div id="alertbar"></div>
 <main id="view"></main>
 <nav id="nav"></nav>
+<div id="sbfoot"><button id="sbout" class="btn bad" type="button">خروج از پنل</button></div>
 <script>
 (function () {
   var root = document.documentElement, KEY = 'rb_view';
@@ -549,11 +646,21 @@ function tplOptions(entries, mkOpt) {
 }
 const TABS = [['create', 'create', 'ساخت'], ['users', 'users', 'کاربران'], ['home', 'home', 'خانه'], ['tpl', 'tpl', 'تمپلت'], ['shop', 'shop', 'فروشگاه'], ['set', 'set', 'تنظیمات']];
 
+const NAV_SEC = { create: 'عملیات', tpl: 'مدیریت', set: 'سیستم' };                         // عنوان بخش‌ها (فقط در سایدبار دسکتاپ دیده می‌شود)
+const NAV_ORD = { home: 1, create: 2, users: 3, tpl: 5, shop: 6, set: 8 };                    // ترتیب سایدبار: داشبورد اول
 function renderNav() {
-  const nav = $('#nav'); nav.style.setProperty('--n', TABS.length); nav.replaceChildren(...TABS.map(([k, ic, t]) =>
-    h('button', { class: S.tab === k ? 'on' : '', onclick: () => go(k), 'aria-label': t + (k === 'set' && S.pend ? ` (${S.pend} درخواست)` : '') + (k === 'shop' && S.shopPend ? ` (${S.shopPend} مورد)` : '') }, svgIcon(ic), t,
-      k === 'set' && S.pend ? h('i', { class: 'nbadge' }, S.pend > 99 ? '99+' : String(S.pend)) : null,
-      k === 'shop' && S.shopPend ? h('i', { class: 'nbadge' }, S.shopPend > 99 ? '99+' : String(S.shopPend)) : null)));
+  const nav = $('#nav'); nav.style.setProperty('--n', TABS.length);
+  const bd = n => h('i', { class: 'nbadge' }, n > 99 ? '99+' : String(n));
+  const items = TABS.map(([k, ic, t]) => {
+    const b = h('button', { class: S.tab === k ? 'on' : '', type: 'button', 'data-k': k, onclick: () => go(k), 'aria-current': S.tab === k ? 'page' : null,
+      'aria-label': t + (k === 'set' && S.pend ? ` (${S.pend} درخواست)` : '') + (k === 'shop' && S.shopPend ? ` (${S.shopPend} مورد)` : '') },
+      svgIcon(ic), t, k === 'set' && S.pend ? bd(S.pend) : null, k === 'shop' && S.shopPend ? bd(S.shopPend) : null);
+    b.style.order = NAV_ORD[k] || 9; return b;
+  });
+  const secs = [['create', 0], ['tpl', 4], ['set', 7]].map(([k, o]) => { const d = h('div', { class: 'nv-sec' }, NAV_SEC[k]); d.style.order = o; return d; });
+  nav.replaceChildren(...secs, ...items);
+  const cur = TABS.find(x => x[0] === S.tab), pt = $('#pgtitle');
+  if (pt && cur) { const s = pt.querySelector('span'); if (s) s.textContent = cur[2] === 'خانه' ? 'داشبورد' : cur[2]; }
 }
 /* درخواست‌های افزایش موجودی نماینده: اعلان بالای صفحه + عدد روی «تنظیمات» (هر ۳۰ ثانیه و بعد از هر تأیید/رد) */
 S.pend = 0; S.pendItems = []; S.pendHide = '';
@@ -653,6 +760,8 @@ async function setPanel(id) {
   S.panel = id; S.users.off = 0; try { localStorage.setItem('rb.panel', id); } catch {}
   $('#psel').value = id; await go(S.tab);
 }
+try { const d = $('#pgdate'); if (d) d.textContent = new Date().toLocaleDateString('fa-IR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }); } catch {}
+const sbo = $('#sbout'); if (sbo) sbo.onclick = () => $('#out').click();
 $('#out').onclick = async () => { try { await fetch('/api/logout', { method: 'POST', headers: { 'X-Requested-With': 'rebecca' } }); } catch {} location.href = '/login'; };
 const mount = (...n) => $('#view').replaceChildren(...n);
 const field = (label, input) => h('div', {}, h('label', {}, label), input);
@@ -1713,7 +1822,11 @@ async function vHome() {
     h('div', { class: 'row', style: 'margin-bottom:8px;align-items:center' }, dFrom, dTo, h('button', { class: 'btn sm', onclick: pickRange }, 'نمایش بازه')),
     rep, h('div', { class: 'btns' }, sendBtn, detBtn, edBtn), edBox, h('p', { class: 'hint' }, 'گزارش مستقیم از دیتابیس خوانده می‌شود؛ گزارش کامل هر شب ساعت ۰۰:۰۰ هم در تلگرام می‌آید.'));
   loadStats(); loadSales(); loadRep('today');
-  mount(saleBox, h('div', { class: 'sec' }, h('h2', {}, 'وضعیت پنل'), refB),
+  const qaBtn = (k, ic, title, sub, c) => h('button', { type: 'button', style: `--c:${c}`, onclick: () => go(k) }, h('i', {}, svgIcon(ic)), h('span', {}, h('b', {}, title), h('small', {}, sub)));
+  const quick = h('div', { class: 'qa' }, qaBtn('create', 'create', 'ساخت اکانت', 'ساخت تکی و گروهی', 'var(--ac)'), qaBtn('users', 'users', 'کاربران', 'جستجو، تمدید و ویرایش', 'var(--info)'),
+    qaBtn('shop', 'shop', 'فروشگاه', S.shopPend ? `${S.shopPend} مورد در انتظار` : 'سفارش‌ها و پرداخت‌ها', 'var(--ok)'), qaBtn('set', 'set', 'تنظیمات', S.pend ? `${S.pend} درخواست شارژ` : 'پنل‌ها، نماینده‌ها، امنیت', 'var(--warn)'));
+  const head = h('div', { class: 'dash-head' }, h('div', {}, h('h2', {}, 'خوش آمدید 👋'), h('p', {}, 'نمای کلی فروش، کاربران و منابع سرور')));
+  mount(head, quick, saleBox, h('div', { class: 'sec' }, h('h2', {}, 'وضعیت پنل'), refB),
     usersBox, sysBox, extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   core.onclick = () => { if (confirm('هسته Xray ریستارت شود؟')) run(core, async () => { await api('/core/restart', 'POST'); toast('ریستارت شد'); }); };
