@@ -466,6 +466,98 @@ html.desk .qa{grid-template-columns:repeat(4,1fr);gap:14px}
 .stat div:hover{transform:translateY(-2px)}
 html.desk .card{border-radius:18px}
 @media (prefers-reduced-motion:reduce){.btn,.qa button,.stat div,nav button{transition:none}.btn.busy::after{animation-duration:1.6s}}
+
+html.desk .stat{grid-template-columns:repeat(3,1fr)}
+/* ═════════ PRO UI v2: شیشه‌ای، نورانی، نمودار ═════════ */
+body{background:
+  radial-gradient(1100px 520px at 85% -160px,color-mix(in srgb,var(--ac) 20%,transparent),transparent 62%),
+  radial-gradient(900px 480px at -8% 12%,color-mix(in srgb,var(--ac2) 13%,transparent),transparent 60%),
+  radial-gradient(700px 500px at 50% 115%,color-mix(in srgb,var(--ac) 9%,transparent),transparent 65%),
+  var(--bg);background-attachment:fixed}
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.5;
+  background-image:radial-gradient(color-mix(in srgb,var(--fg,#fff) 9%,transparent) 1px,transparent 1.3px);background-size:26px 26px;
+  -webkit-mask-image:linear-gradient(180deg,#000,transparent 70%);mask-image:linear-gradient(180deg,#000,transparent 70%)}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--mu) 35%,transparent);border-radius:10px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--ac) 55%,transparent);background-clip:content-box;border:3px solid transparent}
+::selection{background:color-mix(in srgb,var(--ac) 40%,transparent)}
+/* هدر */
+header{background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);border-bottom:0;position:sticky}
+header::after{content:"";position:absolute;inset:auto 0 0 0;height:1px;background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--ac) 55%,transparent),color-mix(in srgb,var(--ac2) 45%,transparent),transparent)}
+.logo{box-shadow:0 6px 22px color-mix(in srgb,var(--ac) 45%,transparent),inset 0 1px 0 #fff5}
+/* سایدبار */
+html.desk nav{background:linear-gradient(180deg,color-mix(in srgb,var(--s1) 78%,transparent),color-mix(in srgb,var(--s0) 88%,transparent));backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+html.desk #sbbrand,html.desk #sbfoot{background:color-mix(in srgb,var(--s1) 70%,transparent);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+html.desk #sbbrand b{background:linear-gradient(90deg,var(--tx),color-mix(in srgb,var(--ac) 70%,var(--tx)));-webkit-background-clip:text;background-clip:text;color:transparent;font-size:var(--fs-lg)}
+html.desk nav button{border:1px solid transparent}
+html.desk nav button:hover{background:color-mix(in srgb,var(--ac) 7%,var(--s2));border-color:var(--line);transform:translateX(-2px)}
+html.desk nav button.on{border-color:color-mix(in srgb,var(--ac) 30%,transparent);background:linear-gradient(270deg,color-mix(in srgb,var(--ac) 24%,transparent),color-mix(in srgb,var(--ac2) 6%,transparent));box-shadow:0 8px 24px color-mix(in srgb,var(--ac) 14%,transparent),inset 0 1px 0 #ffffff12}
+html.desk nav button.on svg{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--ac) 70%,transparent))}
+html.desk nav .nv-sec{display:flex;align-items:center;gap:10px}
+html.desk nav .nv-sec::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
+/* نوار پایین موبایل */
+html:not(.desk) nav{background:color-mix(in srgb,var(--s1) 78%,transparent);backdrop-filter:blur(22px) saturate(1.5);-webkit-backdrop-filter:blur(22px) saturate(1.5);box-shadow:0 14px 40px #0009,inset 0 1px 0 #ffffff14}
+html:not(.desk) nav button.on{background:linear-gradient(180deg,color-mix(in srgb,var(--ac) 24%,transparent),color-mix(in srgb,var(--ac) 5%,transparent));box-shadow:inset 0 1px 0 #ffffff12}
+/* کارت‌ها: شیشه‌ای + درخشش هنگام هاور */
+.card,.item,.stat div,.hero,.qa button{background:linear-gradient(180deg,color-mix(in srgb,var(--fg,#fff) 6%,transparent),color-mix(in srgb,var(--fg,#fff) 1.5%,transparent)),color-mix(in srgb,var(--s1) 82%,transparent);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-color:color-mix(in srgb,var(--fg,#fff) 9%,var(--line));box-shadow:inset 0 1px 0 color-mix(in srgb,var(--fg,#fff) 8%,transparent),0 10px 30px -12px #000a}
+.card{border-radius:20px;transition:border-color .25s,box-shadow .25s}
+.card:hover{border-color:color-mix(in srgb,var(--ac) 28%,var(--line))}
+.card h2,.sec h2{letter-spacing:0}
+/* هیرو فروش */
+.hero{border-radius:24px;padding:22px 22px 18px;border-color:color-mix(in srgb,var(--ac) 35%,var(--line));
+  background:radial-gradient(520px 220px at 100% 0,color-mix(in srgb,var(--ac) 30%,transparent),transparent 70%),radial-gradient(420px 220px at 0 100%,color-mix(in srgb,var(--ac2) 22%,transparent),transparent 70%),color-mix(in srgb,var(--s1) 85%,transparent)}
+.hero .big{font-size:clamp(30px,6vw,44px);background:linear-gradient(90deg,var(--tx),color-mix(in srgb,var(--ac2) 65%,var(--tx)));-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero .big small{-webkit-text-fill-color:var(--mu)}
+.hero .mini div{background:color-mix(in srgb,var(--bg) 55%,transparent);backdrop-filter:blur(8px);border-radius:14px;padding:11px 6px;transition:transform .2s,border-color .2s}
+.hero .mini div:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--ac) 40%,var(--line))}
+/* کارت‌های آمار */
+.stat div{border-radius:18px;padding:13px 14px 11px}
+.stat div::before{height:2px;background:linear-gradient(90deg,transparent,var(--c,var(--line)),transparent)}
+.stat div:hover{border-color:color-mix(in srgb,var(--c,var(--ac)) 45%,var(--line));box-shadow:0 16px 32px -14px color-mix(in srgb,var(--c,var(--ac)) 45%,#000)}
+.stat strong{font-size:clamp(22px,4vw,28px)}
+/* دسترسی سریع */
+.qa button{position:relative;overflow:hidden;border-radius:18px;padding:16px}
+.qa button::after{content:"";position:absolute;inset:auto auto -40px -40px;width:110px;height:110px;border-radius:50%;background:var(--c,var(--ac));opacity:.08;transition:opacity .25s,transform .35s}
+.qa button:hover::after{opacity:.2;transform:scale(1.4)}
+.qa i{width:46px;height:46px;border-radius:15px;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c,var(--ac)) 30%,transparent)}
+/* عنوان داشبورد */
+.dash-head h2{font-size:clamp(22px,4vw,30px);background:linear-gradient(90deg,var(--tx),color-mix(in srgb,var(--ac) 60%,var(--tx)));-webkit-background-clip:text;background-clip:text;color:transparent}
+/* نمودار دونات */
+.dgrid{display:grid;gap:12px;grid-template-columns:1fr;margin-bottom:12px}
+.dgrid>.card{margin-bottom:0}
+html.desk .dgrid{grid-template-columns:1fr 1fr;gap:14px}
+.donut{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.donut h2{flex-basis:100%;margin-bottom:0}
+.dn-svg{position:relative;width:168px;height:168px;flex:none;margin-inline:auto}
+.dn-svg svg{width:100%;height:100%;transform:rotate(-90deg)}
+.dn-svg circle{fill:none;stroke-width:15;stroke-linecap:round}
+.dn-svg .bg{stroke:color-mix(in srgb,var(--fg,#fff) 7%,transparent)}
+.dn-svg .sg{transition:stroke-dasharray 1s cubic-bezier(.2,.8,.2,1),stroke-dashoffset 1s cubic-bezier(.2,.8,.2,1);filter:drop-shadow(0 0 5px color-mix(in srgb,currentColor 55%,transparent))}
+.dn-ct{position:absolute;inset:0;display:grid;place-content:center;text-align:center}
+.dn-ct b{font-size:30px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+.dn-ct small{font-size:var(--fs-xs);color:var(--mu)}
+.dn-lg{flex:1;min-width:150px;display:grid;gap:8px}
+.dn-lg div{display:flex;align-items:center;gap:9px;font-size:var(--fs-sm);padding:7px 10px;border-radius:11px;background:color-mix(in srgb,var(--fg,#fff) 3.5%,transparent);transition:background .2s}
+.dn-lg div:hover{background:color-mix(in srgb,var(--c) 12%,transparent)}
+.dn-lg i{width:10px;height:10px;border-radius:50%;background:var(--c);box-shadow:0 0 8px var(--c);flex:none}
+.dn-lg span{flex:1;color:var(--mu)}.dn-lg b{font-variant-numeric:tabular-nums}.dn-lg em{font-style:normal;font-size:var(--fs-xs);color:var(--mu);min-width:34px;text-align:end}
+/* مترها */
+.bar{height:9px;border-radius:9px;background:color-mix(in srgb,var(--fg,#fff) 7%,transparent);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:9px;background:linear-gradient(90deg,var(--ok),color-mix(in srgb,var(--ok) 60%,var(--ac2)));box-shadow:0 0 12px color-mix(in srgb,var(--ok) 50%,transparent);transition:width .9s cubic-bezier(.2,.8,.2,1)}
+.bar i.w{background:linear-gradient(90deg,var(--warn),#ff8a3d);box-shadow:0 0 12px color-mix(in srgb,var(--warn) 50%,transparent)}
+.bar i.b{background:linear-gradient(90deg,var(--bad),#ff8aa0);box-shadow:0 0 12px color-mix(in srgb,var(--bad) 50%,transparent)}
+/* فرم‌ها */
+input,select,textarea{border-radius:13px;background:color-mix(in srgb,var(--bg) 70%,transparent);transition:border-color .18s,box-shadow .18s,background .18s}
+input:hover,select:hover{border-color:color-mix(in srgb,var(--ac) 35%,var(--line))}
+/* ورود نرم و پله‌ای */
+@media (prefers-reduced-motion:no-preference){
+  #view.vin>*{animation:rbup .5s cubic-bezier(.2,.8,.2,1) both}
+  #view.vin>*:nth-child(2){animation-delay:.05s}#view.vin>*:nth-child(3){animation-delay:.1s}#view.vin>*:nth-child(4){animation-delay:.15s}
+  #view.vin>*:nth-child(5){animation-delay:.2s}#view.vin>*:nth-child(n+6){animation-delay:.25s}
+  @keyframes rbup{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .logo{animation:rbglow 4s ease-in-out infinite}
+  @keyframes rbglow{50%{box-shadow:0 6px 30px color-mix(in srgb,var(--ac) 70%,transparent),inset 0 1px 0 #fff5}}
+}
 </style>
 </head>
 <body>
@@ -1717,6 +1809,15 @@ function repItem(u) {
 }
 
 /* ───────── خانه ───────── */
+function countUp(root) {                                                                  // انیمیشن شمارش اعداد کارت‌های آمار
+  if (matchMedia('(prefers-reduced-motion:reduce)').matches) return;
+  root.querySelectorAll('strong').forEach(el => {
+    const to = parseInt(String(el.textContent).replace(/[^\d]/g, ''), 10); if (!(to > 0)) return;
+    const t0 = performance.now(), D = 800;
+    const tick = now => { const k = Math.min(1, (now - t0) / D), e = 1 - Math.pow(1 - k, 3); el.textContent = Math.round(to * e).toLocaleString('en-US'); if (k < 1) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+}
 async function vHome() {
   if (!hasPanel()) return vCreate();
   const res = h('div', { class: 'card' });
@@ -1724,7 +1825,7 @@ async function vHome() {
   const mb = b => { let n = +b || 0; const u = ['B', 'K', 'M', 'G', 'T']; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; }
     return (n >= 10 || i === 0 ? Math.round(n) : +n.toFixed(1)) + u[i]; };                // فشرده: 23M ، 1.5G
   const fa = n => (+n || 0).toLocaleString('fa-IR');
-  const usersBox = h('div', { class: 'stat' }), sysBox = h('div', { class: 'card' }), saleBox = h('div'), extraBox = h('div');
+  const usersBox = h('div', { class: 'stat' }), donutBox = h('div', { class: 'card donut' }), sysBox = h('div', { class: 'card' }), saleBox = h('div'), extraBox = h('div');
   const cell = (t, v, sub, c, cls) => h('div', { class: cls || null, style: c ? `--c:${c}` : null }, h('span', {}, t), h('strong', { dir: 'ltr', style: 'text-align:right' }, v), sub ? h('span', {}, sub) : null);
   const meter = (label, pct, text) => h('div', { style: 'margin-bottom:10px' }, h('div', { style: 'display:flex;justify-content:space-between;font-size:var(--fs-sm)' }, h('span', {}, label), h('span', { dir: 'ltr' }, text)),
     h('div', { class: 'bar' }, h('i', { class: pct > 85 ? 'b' : pct > 65 ? 'w' : '', style: `width:${Math.min(100, Math.max(0, pct))}%` })));
@@ -1735,6 +1836,14 @@ async function vHome() {
         ['⏳ On-Hold', s.users_on_hold, 'var(--info)'], ['🔴 منقضی', s.users_expired, 'var(--bad)'], ['🟠 محدود‌شده', s.users_limited, 'var(--warn)'],
         ['⚫ غیرفعال', s.users_disabled, 'var(--mu)']].filter(([, v]) => v != null);
       usersBox.replaceChildren(...items.map(([t, v, c, w]) => cell(t, sp(v), null, c, w)));
+      countUp(usersBox);
+      const segs = [['فعال', s.users_active, 'var(--ok)'], ['On-Hold', s.users_on_hold, 'var(--info)'], ['منقضی', s.users_expired, 'var(--bad)'], ['محدودشده', s.users_limited, 'var(--warn)'], ['غیرفعال', s.users_disabled, 'var(--mu)']].filter(x => +x[1] > 0);
+      const tot = segs.reduce((a, x) => a + (+x[1]), 0) || 1, C = 2 * Math.PI * 66; let acc = 0;
+      const arcs = segs.map(([, v, c]) => { const len = Math.max(0, C * v / tot - 5), el = `<circle class="sg" cx="84" cy="84" r="66" style="color:${c}" stroke="${c}" stroke-dasharray="0 ${C}" data-d="${len} ${C - len}" stroke-dashoffset="${-acc}"/>`; acc += C * v / tot; return el; }).join('');
+      donutBox.replaceChildren(h('h2', {}, '📊 توزیع وضعیت کاربران'),
+        Object.assign(h('div', { class: 'dn-svg' }), { innerHTML: `<svg viewBox="0 0 168 168" aria-hidden="true"><circle class="bg" cx="84" cy="84" r="66"/>${arcs}</svg><div class="dn-ct"><b dir="ltr">${sp(tot)}</b><small>کاربر</small></div>` }),
+        h('div', { class: 'dn-lg' }, ...segs.map(([n, v, c]) => h('div', { style: `--c:${c}` }, h('i', {}), h('span', {}, n), h('b', { dir: 'ltr' }, sp(v)), h('em', { dir: 'ltr' }, Math.round(v * 100 / tot) + '%')))));
+      requestAnimationFrame(() => requestAnimationFrame(() => donutBox.querySelectorAll('.sg').forEach(c => c.setAttribute('stroke-dasharray', c.dataset.d))));
       const ramP = s.mem_total ? s.mem_used * 100 / s.mem_total : 0;
       sysBox.replaceChildren(h('h2', {}, '🖥 منابع سرور'),
         meter('CPU', s.cpu_usage || 0, Math.round(s.cpu_usage || 0) + '%'),
@@ -1827,7 +1936,7 @@ async function vHome() {
     qaBtn('shop', 'shop', 'فروشگاه', S.shopPend ? `${S.shopPend} مورد در انتظار` : 'سفارش‌ها و پرداخت‌ها', 'var(--ok)'), qaBtn('set', 'set', 'تنظیمات', S.pend ? `${S.pend} درخواست شارژ` : 'پنل‌ها، نماینده‌ها، امنیت', 'var(--warn)'));
   const head = h('div', { class: 'dash-head' }, h('div', {}, h('h2', {}, 'خوش آمدید 👋'), h('p', {}, 'نمای کلی فروش، کاربران و منابع سرور')));
   mount(head, quick, saleBox, h('div', { class: 'sec' }, h('h2', {}, 'وضعیت پنل'), refB),
-    usersBox, sysBox, extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
+    usersBox, h('div', { class: 'dgrid' }, donutBox, sysBox), extraBox, repCard, res); res.append(h('p', { class: 'hint' }, 'در حال بارگذاری…'));
   const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   core.onclick = () => { if (confirm('هسته Xray ریستارت شود؟')) run(core, async () => { await api('/core/restart', 'POST'); toast('ریستارت شد'); }); };
   res.replaceChildren(h('h2', {}, 'عملیات'), h('div', { class: 'btns' }, core));
