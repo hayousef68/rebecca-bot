@@ -591,7 +591,8 @@ class CreateReq(BaseModel):
     service_id: int
     template: str | None = None
     telegram: bool = False                                          # قدیمی؛ نادیده گرفته می‌شود (لینک همیشه ارسال می‌شود)
-    send_qr: bool = True                                            # تصویر QR هم همراه لینک ارسال شود؟
+    send_link: bool = False                                         # لینک اشتراک به تلگرام ادمین ارسال شود؟ (پیش‌فرض خاموش)
+    send_qr: bool = False                                           # تصویر QR به تلگرام ادمین ارسال شود؟ (پیش‌فرض خاموش)
     gb: float | None = Field(default=None, ge=0, le=100000)      # جایگزین حجم تمپلت (تکی)
     days: int | None = Field(default=None, ge=0, le=36500)       # جایگزین مدت تمپلت
     mode: str | None = Field(default=None, pattern="^(on_hold|active)$")
@@ -641,11 +642,11 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
         for x in results:
             await asyncio.to_thread(C.unpaid_mark, api.pid, x["username"], req.unpaid_hours)
     tg = "off"
-    if results:
+    if results and (req.send_link or req.send_qr):
         if cfg["bot_token"] and cfg["admin_ids"]:
             svc = next((s["name"] for s in await api.list_services() if s["id"] == req.service_id), req.service_id)
             header = C.build_info(api.name, tpl, svc)
-            t = asyncio.create_task(_safe_send(cfg, results, header, req.send_qr))
+            t = asyncio.create_task(_safe_send(cfg, results, header, req.send_qr, req.send_link))
             _bg.add(t)
             t.add_done_callback(_bg.discard)
             tg = "queued"
@@ -664,9 +665,9 @@ async def create(req: CreateReq, api: RebeccaClient = Depends(P)):
     return {"ok": results, "failed": [{"username": n, "reason": r} for n, r in failed], "telegram": tg, "value": value}
 
 
-async def _safe_send(cfg, results, header, send_qr=True):
+async def _safe_send(cfg, results, header, send_qr=True, send_link=True):
     try:
-        await C.send_results(_tg_bot(cfg["bot_token"]), cfg["admin_ids"][0], results, header, cfg["max_qr"], send_qr)
+        await C.send_results(_tg_bot(cfg["bot_token"]), cfg["admin_ids"][0], results, header, cfg["max_qr"], send_qr, send_link)
     except Exception:  # noqa: BLE001
         log.exception("ارسال به تلگرام ناموفق بود")
 

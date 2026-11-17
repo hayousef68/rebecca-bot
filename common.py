@@ -2550,36 +2550,43 @@ def happ_kb(sub: str):
     return InlineKeyboardMarkup([[InlineKeyboardButton("📲 افزودن به Happ", url=u)]]) if u else None
 
 
-async def send_results(bot, chat_id, results: list[dict], header, max_qr: int = 100, send_qr: bool = True):
-    """QR هر کاربر را با مشخصات مرتب و لینک قابل‌کپی جداگانه می‌فرستد + فایل متنی لینک‌ها."""
+async def send_results(bot, chat_id, results: list[dict], header, max_qr: int = 100, send_qr: bool = True, send_link: bool = True):
+    """هر اشتراک را جداگانه می‌فرستد. send_link: متن لینک (و فایل فهرست)، send_qr: تصویر QR. هر دو خاموش ← چیزی ارسال نمی‌شود."""
     from telegram.constants import ParseMode
     from telegram.error import TelegramError
 
+    if not (send_link or send_qr) or not results:
+        return
     lines = _info_lines(header)
 
     def caption(r):
-        return (f"✅ <b>{esc(r['username'])}</b>\n\n" + "\n".join(lines)
-                + f"\n\n🔗 <b>لینک اشتراک</b> (لمس کنید تا کپی شود):\n<code>{esc(r['sub'])}</code>")
+        txt = f"✅ <b>{esc(r['username'])}</b>\n\n" + "\n".join(lines)
+        if send_link:
+            txt += f"\n\n🔗 <b>لینک اشتراک</b> (لمس کنید تا کپی شود):\n<code>{esc(r['sub'])}</code>"
+        return txt
 
-    if len(results) > 1:   # خلاصه‌ی ساخت گروهی قبل از QRها
+    def kb(r):
+        return happ_kb(r["sub"]) if send_link else None
+
+    if len(results) > 1:   # خلاصه‌ی ساخت گروهی قبل از ارسال‌ها
         rng = f"{results[0]['username']} … {results[-1]['username']}"
         await _retry(lambda: bot.send_message(
             chat_id, f"📦 <b>{len(results)} اکانت ساخته شد</b>\n<code>{esc(rng)}</code>\n\n" + "\n".join(lines), parse_mode=ParseMode.HTML))
 
     with_qr = [r for r in results if r["sub"]][:max_qr]
     pngs = await asyncio.gather(*(asyncio.to_thread(make_qr_png, r["sub"]) for r in with_qr)) if send_qr else [None] * len(with_qr)
-    # لینک همیشه ارسال می‌شود؛ تصویر QR فقط وقتی send_qr روشن است. هر اشتراک جداگانه و پشت‌سرهم (به ترتیب ساخت)
+    # هر اشتراک جداگانه و پشت‌سرهم (به ترتیب ساخت)؛ لینک و QR هرکدام فقط در صورت روشن بودن
     for r, png in zip(with_qr, pngs):
         if png is not None:
             try:
-                await _retry(lambda: bot.send_photo(chat_id, png, caption=caption(r), parse_mode=ParseMode.HTML, reply_markup=happ_kb(r["sub"])))
+                await _retry(lambda: bot.send_photo(chat_id, png, caption=caption(r), parse_mode=ParseMode.HTML, reply_markup=kb(r)))
             except TelegramError as e:
                 log.warning("send_photo failed for %s: %s", r["username"], e)
-                await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML, reply_markup=happ_kb(r["sub"])))
+                await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML, reply_markup=kb(r)))
         else:
-            await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=happ_kb(r["sub"])))
+            await _retry(lambda: bot.send_message(chat_id, caption(r), parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=kb(r)))
         await asyncio.sleep(0.5)  # رعایت محدودیت نرخ تلگرام
-    if len(results) > 1 or len(results) > len(with_qr):
+    if send_link and (len(results) > 1 or len(results) > len(with_qr)):
         txt = "\n".join(f"{r['username']} | {r['sub']}" for r in results)
         bio = io.BytesIO(txt.encode("utf-8"))
         bio.name = f"{results[0]['username']}_to_{results[-1]['username']}.txt"
