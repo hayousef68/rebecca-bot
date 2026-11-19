@@ -1686,16 +1686,25 @@ function openUserModal(u, reloadFn) {
 /* ───────── ویجت سلامت کانفیگ‌ها (Proxy Checker) در داشبورد ───────── */
 function buildCheckerCard() {
   const body = h('div', {}, h('p', { class: 'hint' }, 'در حال بارگذاری…'));
-  const runB = h('button', { class: 'btn sm pri', type: 'button' }, '🔄 بررسی الان');
+  const tgB = h('button', { class: 'btn sm', type: 'button' }, '…');
+  const runB = h('button', { class: 'btn sm pri', type: 'button', hidden: true }, '🔄 بررسی الان');
   const cfgB = h('button', { class: 'btn sm', type: 'button' }, '⚙️ تنظیم منبع');
   const card = h('div', { class: 'card' },
     h('div', { style: 'display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px' },
       h('h2', { style: 'margin:0' }, '🩺 سلامت کانفیگ‌ها'),
-      h('div', { style: 'display:flex;gap:6px' }, runB, cfgB)),
+      h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' }, tgB, runB, cfgB)),
     body);
-  let lastCfg = null;
+  let lastCfg = null, lastView = null, lastHasSrc = false;
 
-  const paint = (v, hasSrc) => {
+  const paint = (v, hasSrc, enabled) => {
+    lastView = v; lastHasSrc = hasSrc;
+    tgB.textContent = enabled ? '🟢 فعال' : '⚪ غیرفعال';
+    tgB.className = 'btn sm ' + (enabled ? 'ok' : '');
+    runB.hidden = !enabled || !hasSrc;
+    if (!enabled) {
+      body.replaceChildren(h('p', { class: 'hint', style: 'margin:0' }, 'تست سلامت کانفیگ‌ها غیرفعال است. هر زمان نیاز داشتید از دکمه‌ی بالا فعال کنید.'));
+      return;
+    }
     if (!hasSrc) {
       body.replaceChildren(h('p', { class: 'hint' }, 'هنوز منبعی تنظیم نشده؛ روی «⚙️ تنظیم منبع» بزنید و نام یک کاربر تست، لینک ساب یا لینک کانفیگ‌ها را وارد کنید.'));
       return;
@@ -1719,18 +1728,27 @@ function buildCheckerCard() {
     try {
       const r = await api('/checker');
       lastCfg = r.cfg;
-      paint(r.view, r.has_source);
+      paint(r.view, r.has_source, !!r.cfg.enabled);
     } catch (e) {
       body.replaceChildren(h('p', { class: 'hint' }, '⚠️ ' + e.message));
     }
   };
+  tgB.onclick = () => run(tgB, async () => {
+    const c = lastCfg || { enabled: false, alerts: true, interval: 300, timeout: 6, fails: 2, panel: S.panel || '', username: '', sub_url: '', links: '', ignore: '' };
+    const next = !c.enabled;
+    const r = await api('/checker/settings', 'POST', { ...c, enabled: next });
+    lastCfg = r.cfg;
+    paint(lastView || { items: [], up: 0, down: 0, total: 0 }, r.has_source, next);
+    toast(next ? '🟢 تست سلامت کانفیگ‌ها فعال شد' : '⚪ تست سلامت کانفیگ‌ها غیرفعال شد');
+  });
   runB.onclick = () => run(runB, async () => {
     const r = await api('/checker/run', 'POST');
-    paint(r.view, true);
+    paint(r.view, true, true);
     toast(r.skipped ? '⚠️ ' + (r.view.error || 'بررسی انجام نشد') : `✅ بررسی انجام شد (${r.view.up} سالم / ${r.view.down} خراب)`, !!r.skipped);
   });
   cfgB.onclick = () => {
-    const c = lastCfg || { enabled: true, alerts: true, interval: 300, timeout: 6, fails: 2, panel: S.panel || '', username: '', sub_url: '', links: '', ignore: '' };
+    const c = lastCfg || { enabled: false, alerts: true, interval: 300, timeout: 6, fails: 2, panel: S.panel || '', username: '', sub_url: '', links: '', ignore: '' };
+    const enC = h('input', { type: 'checkbox', checked: !!c.enabled });
     const pSel = h('select', {}, h('option', { value: '' }, '— بدون پنل —'), ((S.st && S.st.panels) || []).map(p => h('option', { value: p.id, selected: p.id === c.panel }, p.name)));
     const uIn = h('input', { value: c.username || '', placeholder: 'نام کاربری تست در پنل', dir: 'ltr' });
     const sIn = h('input', { value: c.sub_url || '', placeholder: 'https://sub.example.com/...', dir: 'ltr' });
@@ -1740,14 +1758,15 @@ function buildCheckerCard() {
     const alC = h('input', { type: 'checkbox', checked: c.alerts !== false });
     const close = () => { document.removeEventListener('keydown', onK, true); back.remove(); };
     const onK = e => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
-    const svB = h('button', { type: 'button', class: 'btn pri' }, '💾 ذخیره و بررسی');
+    const svB = h('button', { type: 'button', class: 'btn pri' }, '💾 ذخیره');
     svB.onclick = () => run(svB, async () => {
-      await api('/checker/settings', 'POST', { enabled: true, alerts: alC.checked, interval: Math.max(60, +ivIn.value || 300), timeout: c.timeout || 6, fails: c.fails || 2,
+      await api('/checker/settings', 'POST', { enabled: enC.checked, alerts: alC.checked, interval: Math.max(60, +ivIn.value || 300), timeout: c.timeout || 6, fails: c.fails || 2,
         panel: pSel.value, username: uIn.value.trim(), sub_url: sIn.value.trim(), links: lIn.value, ignore: igIn.value.trim() });
       toast('✅ تنظیمات ذخیره شد'); close(); await load();
     });
     const box = h('div', { class: 'm-box', style: 'max-width:480px', role: 'dialog', 'aria-modal': 'true', onclick: e => e.stopPropagation() },
       h('h3', {}, '⚙️ تنظیم منبع سلامت کانفیگ‌ها'),
+      h('label', { class: 'chk' }, enC, 'تست سلامت کانفیگ‌ها فعال باشد'),
       field('پنل کاربر تست', pSel), field('نام کاربری تست', uIn),
       field('یا لینک سابسکریپشن دلخواه', sIn), field('یا لینک‌های خام (هر خط یکی)', lIn),
       h('div', { class: 'row' }, field('بازه بررسی (ثانیه)', ivIn), field('نادیده گرفتن نام‌ها', igIn)),
