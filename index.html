@@ -1734,8 +1734,7 @@ function buildCheckerCard() {
     const pSel = h('select', {}, h('option', { value: '' }, '— بدون پنل —'), ((S.st && S.st.panels) || []).map(p => h('option', { value: p.id, selected: p.id === c.panel }, p.name)));
     const uIn = h('input', { value: c.username || '', placeholder: 'نام کاربری تست در پنل', dir: 'ltr' });
     const sIn = h('input', { value: c.sub_url || '', placeholder: 'https://sub.example.com/...', dir: 'ltr' });
-    const lIn = h('textarea', { rows: 3, placeholder: 'vless://...
-vmess://...', dir: 'ltr' }); lIn.value = c.links || '';
+    const lIn = h('textarea', { rows: 3, placeholder: 'vless://...\nvmess://...', dir: 'ltr' }); lIn.value = c.links || '';
     const igIn = h('input', { value: c.ignore || '', placeholder: 'کلمات نادیده‌گرفتنی (با کاما)' });
     const ivIn = h('input', { type: 'number', min: 60, max: 3600, value: c.interval || 300, dir: 'ltr' });
     const alC = h('input', { type: 'checkbox', checked: c.alerts !== false });
