@@ -19,6 +19,7 @@ from telegram import Bot
 from telegram.error import Forbidden, RetryAfter, TelegramError
 
 import common as C
+import checker
 import ops
 import sales
 import shop
@@ -4655,3 +4656,101 @@ async def mini_qr(r: MiniQrReq):
     await _mini_auth(r.init, allow_closed=True)                 # محدودیت تعداد + چک مسدودی (قبلاً فقط امضا چک می‌شد)
     png = await asyncio.to_thread(C.make_qr_png, r.text)
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+
+# ═════════════════════════════ PWA (Manifest & Icon) ═════════════════════════════
+_ICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+    '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+    '<stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#22d3ee"/>'
+    '</linearGradient></defs>'
+    '<rect width="512" height="512" rx="120" fill="url(#g)"/>'
+    '<text x="256" y="340" text-anchor="middle" font-family="system-ui,sans-serif" '
+    'font-size="290" font-weight="800" fill="#ffffff">R</text></svg>'
+)
+
+
+@app.get("/icon.svg")
+async def pwa_icon():
+    return Response(_ICON_SVG, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/manifest.json")
+async def pwa_manifest():
+    return JSONResponse({
+        "name": "پنل مدیریت ربکا",
+        "short_name": "ربکا",
+        "start_url": "/",
+        "display": "standalone",
+        "dir": "rtl",
+        "lang": "fa",
+        "background_color": "#090d16",
+        "theme_color": "#6366f1",
+        "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}],
+    }, headers={"Cache-Control": "public, max-age=3600"})
+
+
+# ═════════════════════════════ عملیات دسته‌ای کاربران ═════════════════════════════
+class BulkReq(BaseModel):
+    names: list[str] = Field(min_length=1, max_length=100)
+    action: str
+    template: str | None = None
+    service_id: int | None = None
+
+
+@app.post("/api/bulk", dependencies=[Depends(guard)])
+async def bulk_users(req: BulkReq, api: RebeccaClient = Depends(P)):
+    if req.action not in C.BULK_ACTIONS:
+        raise HTTPException(400, "عملیات نامعتبر است.")
+    cfg = load_config()
+    tpl = None
+    if req.action == "renew":
+        if not req.template or req.template not in cfg["templates"]:
+            raise HTTPException(400, "تمپلت معتبر انتخاب کنید.")
+        tpl = cfg["templates"][req.template]
+    if req.action == "service" and req.service_id is None:
+        raise HTTPException(400, "سرویس مقصد را انتخاب کنید.")
+    names = list(dict.fromkeys(str(n).strip() for n in req.names if str(n).strip()))[:100]
+    if not names:
+        raise HTTPException(400, "هیچ کاربری انتخاب نشده است.")
+    ok, failed = await C.bulk_apply(api, names, req.action, service_id=req.service_id, tpl=tpl)
+    if req.action in ("enable", "disable") and ok:
+        await asyncio.to_thread(C.unpaid_clear, api.pid, ok)
+    _aud(f"عملیات دسته‌ای ({C.BULK_ACTIONS[req.action]})", f"{len(ok)} کاربر",
+         f"پنل: {api.name}؛ موفق: {len(ok)}؛ ناموفق: {len(failed)}")
+    return {"ok": ok, "failed": [{"username": n, "reason": r} for n, r in failed]}
+
+
+# ═════════════════════════════ سلامت کانفیگ‌ها (Proxy Checker) ═════════════════════════════
+class CheckerCfgReq(BaseModel):
+    enabled: bool = True
+    alerts: bool = True
+    interval: int = Field(300, ge=60, le=3600)
+    timeout: int = Field(6, ge=2, le=20)
+    fails: int = Field(2, ge=1, le=10)
+    panel: str = ""
+    username: str = ""
+    sub_url: str = ""
+    links: str = ""
+    ignore: str = ""
+
+
+@app.get("/api/checker", dependencies=[Depends(guard)])
+async def checker_get():
+    cfg = checker.get_cfg()
+    return {"cfg": cfg, "view": checker.view(), "has_source": checker.has_source(cfg)}
+
+
+@app.post("/api/checker/run", dependencies=[Depends(guard)])
+async def checker_run():
+    res = await checker.run_check(alerts=False)
+    return {"view": checker.view(), "skipped": res.get("skipped", "")}
+
+
+@app.post("/api/checker/settings", dependencies=[Depends(guard)])
+async def checker_save(req: CheckerCfgReq):
+    data = req.model_dump()
+    update_config(lambda c: c.__setitem__("checker", data))
+    _aud("تنظیمات سلامت کانفیگ‌ها", "checker", f"فعال: {req.enabled}؛ بازه: {req.interval}ثانیه", cat="sys")
+    cfg = checker.get_cfg()
+    return {"ok": True, "cfg": cfg, "has_source": checker.has_source(cfg)}
