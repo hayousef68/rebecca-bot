@@ -1174,6 +1174,7 @@ html.priv .balval,
 html.priv .todayval,
 html.priv .tx .a,
 html.priv .item > summary .nm,
+html.priv .item > summary .u-name,
 html.priv .utbl td:first-child,
 html.priv code,
 html.priv .code,
@@ -1188,6 +1189,7 @@ html.priv .balval:hover,
 html.priv .todayval:hover,
 html.priv .tx .a:hover,
 html.priv .item > summary .nm:hover,
+html.priv .item > summary .u-name:hover,
 html.priv .utbl td:first-child:hover,
 html.priv code:hover,
 html.priv .code:hover,
@@ -1376,11 +1378,109 @@ html.desk .bulkbar { bottom: 20px; inset-inline-start: calc(var(--sbw) + 20px); 
 .chk-row b { font-size: var(--fs-sm); word-break: break-word; }
 .chk-row small { display: block; color: var(--mu); font-size: var(--fs-xs); }
 .chk-ms { font-variant-numeric: tabular-nums; font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; }
+
+/* ───────── بهینه‌سازی هدر موبایل و انتخابگر رنگ تم ───────── */
+header h1 #pgtitle span,
+header h1 #pgtitle small {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.theme-btn {
+  width: 35px;
+  height: 35px;
+  padding: 0 !important;
+  justify-content: center;
+  cursor: pointer;
+}
+.theme-btn .tdot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--ac), var(--ac2));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tx) 18%, transparent);
+  display: block;
+}
+.theme-pop {
+  position: fixed;
+  z-index: 65;
+  top: calc(58px + env(safe-area-inset-top));
+  inset-inline-end: 14px;
+  background: var(--s1);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 8px;
+  display: flex;
+  gap: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  animation: mfade .12s ease-out;
+}
+.theme-sw {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  padding: 0;
+  transition: transform .12s, border-color .12s;
+}
+.theme-sw:hover { transform: scale(1.1); }
+.theme-sw.on { border-color: var(--fg); box-shadow: 0 0 0 2px var(--ac); }
+@media (max-width: 640px) {
+  .hdr-tools { gap: 5px; }
+  .hdr-tools .pill { min-height: 34px; }
+  #cmdbtn, #privbtn, #themebtn { width: 34px; padding: 0; justify-content: center; }
+  #out { padding: 0 9px; }
+}
+
+/* ───────── ردیف کاربر دوخطی (جلوگیری از شکستن عدد اسم اشتراک) ───────── */
+.u-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.u-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+.u-top .dot { flex: none; margin: 0; }
+.u-name {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.u-top .tag { margin-inline-start: 2px; flex: none; padding: 0 7px; font-size: 10.5px; }
+.u-meta {
+  font-size: var(--fs-xs);
+  color: var(--mu);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qact.rn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.qact.rn:hover { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--s2)); color: var(--warn); }
+@media (max-width: 480px) {
+  .item > summary { padding: 10px 11px; gap: 6px; }
+  .qacts { gap: 3px; margin-inline-start: 2px; }
+  .qact { width: 28px; height: 28px; font-size: 12.5px; }
+}
 </style>
 </head>
 <body>
 <div id="sbbrand" aria-hidden="true"><span class="logo">R</span><div><b>ربکا</b><small>پنل مدیریت</small></div></div>
-<header><h1><span class="logo">R</span><span class="ttl">پنل مدیریت ربکا</span><span id="pgtitle"><span>پنل مدیریت ربکا</span><small id="pgdate"></small></span></h1><div class="hdr-tools"><button id="cmdbtn" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" title="جستجو و فرمان سریع (Ctrl+K)" aria-label="فرمان سریع">🔎</button><button id="privbtn" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" title="حالت حریم خصوصی (تار کردن مبالغ)" aria-label="حالت حریم خصوصی">👁</button><select id="psel" hidden aria-label="پنل فعال" style="min-height:36px;padding:2px 10px;width:auto;max-width:150px;font-size:var(--fs-sm);border-radius:11px"></select><span id="conn" class="pill">…</span><select id="themesel" class="pill themesel" aria-label="قالب"></select><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="خروج">خروج</button></div></header>
+<header><h1><span class="logo">R</span><span class="ttl">پنل مدیریت ربکا</span><span id="pgtitle"><span>پنل مدیریت ربکا</span><small id="pgdate"></small></span></h1><div class="hdr-tools"><button id="cmdbtn" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" title="جستجو و فرمان سریع (Ctrl+K)" aria-label="فرمان سریع">🔎</button><button id="privbtn" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" title="حالت حریم خصوصی (تار کردن مبالغ)" aria-label="حالت حریم خصوصی">👁</button><select id="psel" hidden aria-label="پنل فعال" style="min-height:36px;padding:2px 10px;width:auto;max-width:150px;font-size:var(--fs-sm);border-radius:11px"></select><span id="conn" class="pill">…</span><button id="themebtn" class="pill theme-btn" type="button" aria-label="تغییر قالب" title="تغییر تم رنگی"><span class="tdot"></span></button><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="خروج">خروج</button></div></header>
 <div id="alertbar"></div>
 <main id="view"></main>
 <nav id="nav"></nav>
@@ -1978,7 +2078,7 @@ async function setPanel(id) {
   S.panel = id; S.users.off = 0; try { localStorage.setItem('rb.panel', id); } catch {}
   $('#psel').value = id; await go(S.tab);
 }
-try { const d = $('#pgdate'); if (d) d.textContent = new Date().toLocaleDateString('fa-IR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }); } catch {}
+try { const d = $('#pgdate'); if (d) d.textContent = new Date().toLocaleDateString('fa-IR', window.innerWidth < 640 ? { month: 'short', day: 'numeric' } : { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }); } catch {}
 const sbo = $('#sbout'); if (sbo) sbo.onclick = () => $('#out').click();
 $('#out').onclick = async () => { try { await fetch('/api/logout', { method: 'POST', headers: { 'X-Requested-With': 'rebecca' } }); } catch {} location.href = '/login'; };
 const mount = (...n) => $('#view').replaceChildren(...n);
@@ -2109,7 +2209,7 @@ const faDigits = s => String(s).replace(/[۰-۹]/g, c => '۰۱۲۳۴۵۶۷۸۹'.
 const normQ = s => faDigits(s).replace(/^[@\s]+/, '').trim().replace(/\s+/g, ' ');   // اعداد فارسی→انگلیسی، حذف @ و فاصله‌های اضافه
 const STATUS_FA = { active: 'فعال شده', on_hold: '⏳ خام · هنوز وصل نشده', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
 const PAGE = 30;                                                                                  // تعداد کاربر در هر صفحه
-const TAG_FA = { active: 'فعال شده', on_hold: '⏳ خام · وصل نشده', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
+const TAG_FA = { active: 'فعال', on_hold: '⏳ خام', expired: 'منقضی', limited: 'حجم تمام', disabled: 'غیرفعال' };
 const fmtLeftT = ts => { const m = Math.max(0, Math.round((ts * 1000 - Date.now()) / 60000)); return m >= 1440 ? `${Math.floor(m / 1440)} روز و ${Math.floor(m % 1440 / 60)} ساعت` : m >= 60 ? `${Math.floor(m / 60)} ساعت و ${m % 60} دقیقه` : `${m} دقیقه`; };
 const stTag = st => h('em', { class: 'tag t-' + st }, TAG_FA[st] || st);                           // برچسب کوچک کنار نام: «خام» یا «فعال شده»
 function drawPager(box, total, off, go) {                                                         // صفحه‌بندی شماره‌دار
@@ -2122,7 +2222,21 @@ function drawPager(box, total, off, go) {                                       
   box.append(b('بعدی', cur + 1));
 }
 const gbr = b => !b ? '∞' : (b / 1073741824).toFixed(2) + ' GB';
+const gbs = b => { if (!b) return '0'; const v = b / 1073741824; return v >= 100 ? String(Math.round(v)) : String(+v.toFixed(v >= 10 ? 1 : 2)); };
 const usage = u => '\u2066' + gbr(u.used) + ' / ' + gbr(u.limit) + '\u2069';   // «مصرف / کل» همیشه چپ‌به‌راست
+const usageShort = u => !u.limit ? '\u2066' + gbs(u.used) + 'G / ∞\u2069' : '\u2066' + gbs(u.used) + '/' + gbs(u.limit) + 'G\u2069';
+async function quickRenewUser(u, onDone) {
+  const defName = S.st && S.st.active;
+  const tpl = defName && S.st.templates && S.st.templates[defName];
+  if (!tpl) return toast('تمپلت پیش‌فرض تنظیم نشده است.', true);
+  if (!await uiConfirm(`تمدید سریع «${u.username}» با تمپلت پیش‌فرض انجام شود؟\n\n📋 ${defName}\n📦 حجم: ${fmtG(tpl.gb).replace(/[\u2066\u2069]/g, '')}\n📅 مدت: ${fmtD(tpl.days)}\n🔄 مصرف فعلی صفر می‌شود`, { title: '⚡ تمدید سریع', okText: 'اعمال تمدید' })) return;
+  try {
+    const pq = u.pid ? '?panel=' + encodeURIComponent(u.pid) : '';
+    const r = await api(`/user/${encodeURIComponent(u.username)}/renew` + pq, 'POST', { template: defName, reset_usage: true });
+    toast('✅ تمدید سریع انجام شد');
+    if (onDone) onDone(r);
+  } catch (e) { toast(e.message, true); }
+}
 const fmtG = n => (+n || 0) === 0 ? 'نامحدود' : '\u2066' + (+(+n).toFixed(2)) + ' GB\u2069';
 const fmtD = n => (+n || 0) === 0 ? 'نامحدود' : (+n) + ' روز';
 
@@ -2228,6 +2342,7 @@ async function vUsers() {
           h('td', {}, h('div', { class: 'sub' }, usage(u)), h('div', { class: 'bar ubar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` }))),
           h('td', { class: 'sub' }, u.expire_text),
           h('td', { onclick: e => e.stopPropagation() }, h('div', { class: 'qacts' },
+            h('button', { type: 'button', class: 'qact rn', title: 'تمدید سریع', onclick: () => quickRenewUser(u, () => load(false)) }, '⚡'),
             u.sub ? h('button', { type: 'button', class: 'qact', title: 'کپی لینک', onclick: () => copy(u.sub) }, '📋') : null,
             u.sub ? h('button', { type: 'button', class: 'qact', title: 'نمایش QR', onclick: () => openQrModal(u.username, u.sub) }, '🖼') : null,
             h('button', { type: 'button', class: 'qact', title: 'مدیریت کامل', onclick: () => openUserModal(u, () => load(false)) }, '⚙️'))));
@@ -2313,14 +2428,22 @@ function userItem(u, parent, tab) {
   const svcName = ((S.svcs || []).find(s => s.id === u.service_id) || {}).name || (u.service_id != null ? '#' + u.service_id : '—');
   const hq = (S.users && S.users.q || '').toLowerCase(), ix = hq ? u.username.toLowerCase().indexOf(hq) : -1;
   const nm = ix < 0 ? [u.username] : [u.username.slice(0, ix), h('mark', {}, u.username.slice(ix, ix + hq.length)), u.username.slice(ix + hq.length)];
-  const extraSub = [u.panel_name && S.st && S.st.multi_panel ? u.panel_name : '', svcName, usage(u)].filter(Boolean).join(' · ');
-  const qActs = u.sub ? h('span', { class: 'qacts', onclick: e => { e.preventDefault(); e.stopPropagation(); } },
-    h('button', { type: 'button', class: 'qact', title: 'کپی لینک سریع', onclick: e => { e.preventDefault(); e.stopPropagation(); copy(u.sub); } }, '📋'),
-    h('button', { type: 'button', class: 'qact', title: 'نمایش QR', onclick: e => { e.preventDefault(); e.stopPropagation(); openQrModal(u.username, u.sub); } }, '🖼')) : null;
-  d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), nm, stTag(u.status),
-    u.match_via ? h('em', { class: 'tag', style: 'color:var(--ac)' }, u.match_via) : null,
-    u.unpaid_due ? h('em', { class: 'tag unp' }, '💸') : null,
-    u.rep_note ? h('span', { class: 'rnote' }, '📝 ' + u.rep_note) : null), h('span', { class: 'sub' }, extraSub), qActs));
+  const extraSub = [usageShort(u), svcName, u.panel_name && S.st && S.st.multi_panel ? u.panel_name : ''].filter(Boolean).join(' · ');
+  const rnB = h('button', { type: 'button', class: 'qact rn', title: 'تمدید سریع با تمپلت پیش‌فرض', onclick: e => { e.preventDefault(); e.stopPropagation(); quickRenewUser(u, r => { const n = userItem(r, parent); d.replaceWith(n); }); } }, '⚡');
+  const qActs = h('span', { class: 'qacts', onclick: e => { e.preventDefault(); e.stopPropagation(); } },
+    rnB,
+    u.sub ? h('button', { type: 'button', class: 'qact', title: 'کپی لینک سریع', onclick: e => { e.preventDefault(); e.stopPropagation(); copy(u.sub); } }, '📋') : null,
+    u.sub ? h('button', { type: 'button', class: 'qact', title: 'نمایش QR', onclick: e => { e.preventDefault(); e.stopPropagation(); openQrModal(u.username, u.sub); } }, '🖼') : null);
+  const uMain = h('span', { class: 'u-main' },
+    h('span', { class: 'u-top' },
+      h('i', { class: 'dot' }),
+      h('span', { class: 'u-name', dir: 'ltr' }, nm),
+      stTag(u.status),
+      u.unpaid_due ? h('em', { class: 'tag unp' }, '💸') : null,
+      u.match_via ? h('em', { class: 'tag', style: 'color:var(--ac)' }, u.match_via) : null),
+    h('span', { class: 'u-meta' }, extraSub),
+    u.rep_note ? h('span', { class: 'rnote' }, '📝 ' + u.rep_note) : null);
+  d.append(h('summary', {}, uMain, qActs));
   let built = false;
   const buildBody = () => {
     if (built) return;
@@ -4409,13 +4532,58 @@ async function vSet() {
 })();
 </script>
 <script>
-(function(){var T=[["violet","🟣 بنفش"],["light","☀️ روشن"],["ocean","🌊 اقیانوس"],["emerald","🌿 زمرد"],["rose","🌸 رز"],["sunset","🟠 کهربایی"]];
-function apply(t){var r=document.documentElement;if(t==="violet")delete r.dataset.theme;else r.dataset.theme=t;
- var m=document.querySelector('meta[name=color-scheme]');if(m)m.content=t==="light"?"light":"dark"}
-var cur="violet";try{cur=localStorage.getItem("rb-theme")||"violet"}catch(e){}apply(cur);
-var s=document.getElementById("themesel");if(!s)return;
-T.forEach(function(x){var o=document.createElement("option");o.value=x[0];o.textContent=x[1];if(x[0]===cur)o.selected=true;s.appendChild(o)});
-s.onchange=function(){apply(s.value);try{localStorage.setItem("rb-theme",s.value)}catch(e){}}})();
+(function(){
+  var T=[
+    ["violet","#6366f1",""],
+    ["light","#f8fafc","☀️"],
+    ["ocean","#06b6d4",""],
+    ["emerald","#10b981",""],
+    ["rose","#f43f5e",""],
+    ["sunset","#f59e0b",""]
+  ];
+  function apply(t){
+    var r=document.documentElement;
+    if(t==="violet")delete r.dataset.theme;else r.dataset.theme=t;
+    var m=document.querySelector('meta[name=color-scheme]');
+    if(m)m.content=t==="light"?"light":"dark";
+  }
+  var cur="violet";
+  try{cur=localStorage.getItem("rb-theme")||"violet";}catch(e){}
+  apply(cur);
+  var btn=document.getElementById("themebtn");
+  if(!btn)return;
+  var pop=null;
+  function closePop(){
+    if(pop){pop.remove();pop=null;}
+    document.removeEventListener("pointerdown",outClick,true);
+    document.removeEventListener("keydown",escKey,true);
+  }
+  function outClick(e){if(!e.target.closest(".theme-pop")&&!e.target.closest("#themebtn"))closePop();}
+  function escKey(e){if(e.key==="Escape")closePop();}
+  btn.onclick=function(){
+    if(pop)return closePop();
+    pop=document.createElement("div");
+    pop.className="theme-pop";
+    T.forEach(function(x){
+      var sw=document.createElement("button");
+      sw.type="button";
+      sw.className="theme-sw"+(x[0]===cur?" on":"");
+      sw.style.background=x[1];
+      if(x[0]==="light")sw.style.border="1px solid #94a3b8";
+      sw.textContent=x[2];
+      sw.setAttribute("aria-label",x[0]);
+      sw.onclick=function(){
+        cur=x[0];apply(cur);
+        try{localStorage.setItem("rb-theme",cur);}catch(e){}
+        closePop();
+      };
+      pop.appendChild(sw);
+    });
+    document.body.appendChild(pop);
+    document.addEventListener("pointerdown",outClick,true);
+    document.addEventListener("keydown",escKey,true);
+  };
+})();
 </script>
 </body>
 </html>
