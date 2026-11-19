@@ -4,7 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>پنل مدیریت ربکا</title>
+<meta name="theme-color" content="#6366f1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<title>پنل </title>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
 <script>try{var t=localStorage.getItem("rb-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
@@ -1159,11 +1165,222 @@ html.desk .toast { inset: auto 20px 24px 20px; }
 @keyframes mfade { from { opacity: 0; } }
 @keyframes mpop { from { opacity: .6; transform: scale(.96); } }
 @keyframes mup { from { opacity: .6; transform: translateY(28px); } }
+
+/* ───────── حالت حریم خصوصی (Privacy Blur) ───────── */
+html.priv .hero .big,
+html.priv .hero .mini strong,
+html.priv .bigbal b,
+html.priv .balval,
+html.priv .todayval,
+html.priv .tx .a,
+html.priv .item > summary .nm,
+html.priv .utbl td:first-child,
+html.priv code,
+html.priv .code,
+html.priv .au-tg {
+  filter: blur(6px);
+  transition: filter .18s ease;
+}
+html.priv .hero .big:hover,
+html.priv .hero .mini strong:hover,
+html.priv .bigbal b:hover,
+html.priv .balval:hover,
+html.priv .todayval:hover,
+html.priv .tx .a:hover,
+html.priv .item > summary .nm:hover,
+html.priv .utbl td:first-child:hover,
+html.priv code:hover,
+html.priv .code:hover,
+html.priv .au-tg:hover {
+  filter: none;
+}
+#privbtn.on {
+  color: var(--ac);
+  border-color: var(--ac);
+  background: color-mix(in srgb, var(--ac) 16%, var(--s2));
+}
+
+/* ───────── دکمه‌های فوری روی ردیف بسته‌ی کاربر ───────── */
+.qacts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: 6px;
+  flex: none;
+}
+.qact {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--s0);
+  color: var(--mu);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.qact:hover { border-color: var(--ac); color: var(--tx); background: var(--s2); }
+
+/* ───────── انتخاب دسته‌ای کاربران (Bulk Action Bar) ───────── */
+.bchk {
+  width: 18px !important;
+  height: 18px !important;
+  min-height: 0 !important;
+  margin-inline-end: 8px;
+  flex: none;
+  cursor: pointer;
+}
+.bulkbar {
+  position: fixed;
+  z-index: 45;
+  inset: auto 12px calc(88px + env(safe-area-inset-bottom)) 12px;
+  max-width: 720px;
+  margin: 0 auto;
+  background: color-mix(in srgb, var(--s1) 96%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in srgb, var(--ac) 50%, var(--line));
+  border-radius: 16px;
+  padding: 10px 12px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .48);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  animation: mup .18s ease-out;
+}
+html.desk .bulkbar { bottom: 20px; inset-inline-start: calc(var(--sbw) + 20px); inset-inline-end: 20px; }
+.bulkbar .bcnt { font-size: var(--fs-sm); font-weight: 800; color: var(--ac); margin-inline-end: auto; white-space: nowrap; }
+.bulkbar .btn.sm { min-height: 34px; padding: 0 10px; }
+
+/* ───────── نمای جدولی فشرده (دسکتاپ) ───────── */
+.utbl-wrap {
+  width: 100%;
+  overflow-x: auto;
+  background: var(--s1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  margin-bottom: 10px;
+}
+.utbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.utbl th {
+  text-align: start;
+  font-size: var(--fs-xs);
+  color: var(--mu);
+  font-weight: 700;
+  padding: 10px 12px;
+  background: var(--s0);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.utbl td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.utbl tr:last-child td { border-bottom: 0; }
+.utbl tbody tr { transition: background .1s; cursor: pointer; }
+.utbl tbody tr:hover { background: color-mix(in srgb, var(--ac) 7%, var(--s1)); }
+.utbl .ubar { width: 96px; height: 6px; margin: 4px 0 0; }
+
+/* ───────── پالت فرمان سریع (Command Palette: Ctrl+K) ───────── */
+.cmd-box { max-width: 520px; padding: 14px; }
+.cmd-in { margin-bottom: 10px; font-size: var(--fs-md); }
+.cmd-list { display: flex; flex-direction: column; gap: 4px; max-height: 55vh; overflow-y: auto; }
+.cmd-sec { font-size: 11px; font-weight: 700; color: var(--mu); padding: 6px 6px 2px; }
+.cmd-it {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: start;
+  background: var(--s0);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 9px 12px;
+  color: var(--tx);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: border-color .1s, background .1s;
+}
+.cmd-it:hover, .cmd-it.on { border-color: var(--ac); background: color-mix(in srgb, var(--ac) 14%, var(--s1)); }
+.cmd-it small { margin-inline-start: auto; color: var(--mu); font-size: var(--fs-xs); }
+
+/* ───────── لایت‌باکس تمام‌صفحه برای رسیدها (زوم + چرخش) ───────── */
+.lb-back {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(5, 8, 15, .92);
+  backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+  animation: mfade .15s ease-out;
+}
+.lb-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+  background: rgba(15, 23, 42, .85);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.lb-stage {
+  flex: 1;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.lb-stage img {
+  max-width: 94vw;
+  max-height: 76vh;
+  border-radius: 12px;
+  transition: transform .18s ease;
+  transform-origin: center center;
+}
+.lb-bot {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
+  background: rgba(15, 23, 42, .85);
+  border-top: 1px solid var(--line);
+}
+
+/* ───────── ویجت سلامت کانفیگ‌ها (Checker) ───────── */
+.chk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--s0);
+  border: 1px solid var(--line);
+  margin-bottom: 6px;
+  font-size: var(--fs-sm);
+}
+.chk-row.down { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); background: color-mix(in srgb, var(--bad) 8%, var(--s0)); }
+.chk-row b { font-size: var(--fs-sm); word-break: break-word; }
+.chk-row small { display: block; color: var(--mu); font-size: var(--fs-xs); }
+.chk-ms { font-variant-numeric: tabular-nums; font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; }
 </style>
 </head>
 <body>
 <div id="sbbrand" aria-hidden="true"><span class="logo">R</span><div><b>ربکا</b><small>پنل مدیریت</small></div></div>
-<header><h1><span class="logo">R</span><span class="ttl">پنل مدیریت ربکا</span><span id="pgtitle"><span>پنل مدیریت ربکا</span><small id="pgdate"></small></span></h1><div class="hdr-tools"><select id="psel" hidden aria-label="پنل فعال" style="min-height:36px;padding:2px 10px;width:auto;max-width:150px;font-size:var(--fs-sm);border-radius:11px"></select><span id="conn" class="pill">…</span><select id="themesel" class="pill themesel" aria-label="قالب"></select><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="خروج">خروج</button></div></header>
+<header><h1><span class="logo">R</span><span class="ttl">پنل مدیریت ربکا</span><span id="pgtitle"><span>پنل مدیریت ربکا</span><small id="pgdate"></small></span></h1><div class="hdr-tools"><button id="cmdbtn" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" title="جستجو و فرمان سریع (Ctrl+K)" aria-label="فرمان سریع">🔎</button><button id="privbtn" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" title="حالت حریم خصوصی (تار کردن مبالغ)" aria-label="حالت حریم خصوصی">👁</button><select id="psel" hidden aria-label="پنل فعال" style="min-height:36px;padding:2px 10px;width:auto;max-width:150px;font-size:var(--fs-sm);border-radius:11px"></select><span id="conn" class="pill">…</span><select id="themesel" class="pill themesel" aria-label="قالب"></select><button id="deskbtn" class="pill deskbtn" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="حالت نمایش">🖥 دسکتاپ</button><button id="out" class="pill" type="button" style="cursor:pointer;font:inherit;font-size:var(--fs-xs)" aria-label="خروج">خروج</button></div></header>
 <div id="alertbar"></div>
 <main id="view"></main>
 <nav id="nav"></nav>
@@ -1297,6 +1514,253 @@ function uiModal({ title = '', message = '', input = null, okText = 'تأیید'
 const uiConfirm = (message, opts = {}) => uiModal({ title: opts.title || 'تأیید عملیات', message, okText: opts.okText || 'بله، انجام شود', cancelText: opts.cancelText || 'انصراف', danger: !!opts.danger });
 const uiAlert = (message, title = 'اطلاعیه') => uiModal({ title, message, okText: 'متوجه شدم', showCancel: false });
 const uiPrompt = (message, opts = {}) => uiModal({ title: opts.title || 'ورود مقدار', message, input: opts, okText: opts.okText || 'ثبت', cancelText: opts.cancelText || 'انصراف' });
+/* ───────── مودال نمایش QR ───────── */
+function openQrModal(name, sub, path) {
+  const img = h('img', { class: 'qr', alt: 'QR ' + name, src: (path || '/api/qr') + '?text=' + encodeURIComponent(sub) });
+  const close = () => { document.removeEventListener('keydown', onK, true); back.remove(); };
+  const onK = e => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+  const box = h('div', { class: 'm-box', role: 'dialog', 'aria-modal': 'true', onclick: e => e.stopPropagation() },
+    h('h3', {}, '🖼 کد QR — ' + name),
+    img,
+    h('code', { onclick: () => copy(sub) }, sub),
+    h('div', { class: 'm-acts' },
+      h('button', { type: 'button', class: 'btn pri', onclick: () => copy(sub) }, '📋 کپی لینک'),
+      h('button', { type: 'button', class: 'btn', onclick: close }, 'بستن')));
+  const back = h('div', { class: 'm-back', onclick: close }, box);
+  document.body.append(back);
+  document.addEventListener('keydown', onK, true);
+}
+
+/* ───────── حالت حریم خصوصی (Privacy Blur) ───────── */
+(function initPriv() {
+  const apply = on => {
+    document.documentElement.classList.toggle('priv', on);
+    const b = $('#privbtn');
+    if (b) { b.classList.toggle('on', on); b.textContent = on ? '🙈' : '👁'; }
+  };
+  let on = false;
+  try { on = localStorage.getItem('rb-priv') === '1'; } catch {}
+  apply(on);
+  const b = $('#privbtn');
+  if (b) b.onclick = () => {
+    on = !document.documentElement.classList.contains('priv');
+    apply(on);
+    try { localStorage.setItem('rb-priv', on ? '1' : '0'); } catch {}
+    toast(on ? '🙈 حالت حریم خصوصی روشن شد' : '👁 حالت حریم خصوصی خاموش شد');
+  };
+})();
+
+/* ───────── پالت فرمان سریع (Ctrl+K / ⌘K) ───────── */
+function openCmdPalette() {
+  if ($('#cmdpal')) return;
+  const isRep = $('#psel').hidden && $('header h1') && $('header h1').textContent.includes('نماینده');
+  const baseCmds = isRep ? [] : [
+    { ic: '➕', title: 'ساخت اکانت جدید', sub: 'تب ساخت', run: () => go('create') },
+    { ic: '👥', title: 'لیست و جستجوی کاربران', sub: 'تب کاربران', run: () => go('users') },
+    { ic: '📊', title: 'داشبورد و گزارش فروش', sub: 'تب خانه', run: () => go('home') },
+    { ic: '🧩', title: 'مدیریت تمپلت‌ها', sub: 'تب تمپلت', run: () => go('tpl') },
+    { ic: '🛒', title: 'مدیریت فروشگاه و رسیدها', sub: 'تب فروشگاه', run: () => go('shop') },
+    { ic: '🖥', title: 'تنظیمات ← پنل‌های ربکا', sub: 'تنظیمات', run: () => { S.setOpen = 'panels'; go('set'); } },
+    { ic: '👤', title: 'تنظیمات ← نماینده‌ها و درخواست شارژ', sub: 'تنظیمات', run: () => { S.setOpen = 'reps'; go('set'); } },
+    { ic: '💰', title: 'تنظیمات ← قیمت‌ها و لیست فروش', sub: 'تنظیمات', run: () => { S.setOpen = 'price'; go('set'); } },
+    { ic: '💾', title: 'تنظیمات ← بکاپ و بازیابی', sub: 'تنظیمات', run: () => { S.setOpen = 'backup'; go('set'); } },
+    { ic: '🛡', title: 'تنظیمات ← امنیت ورود و 2FA', sub: 'تنظیمات', run: () => { S.setOpen = 'security'; go('set'); } },
+    { ic: '🩺', title: 'تنظیمات ← سلامت سیستم', sub: 'تنظیمات', run: () => { S.setOpen = 'health'; go('set'); } },
+    { ic: '🧾', title: 'تنظیمات ← لاگ فعالیت (Audit)', sub: 'تنظیمات', run: () => { S.setOpen = 'audit'; go('set'); } },
+    { ic: '🔒', title: 'تنظیمات ← SSL و پورت وب‌پنل', sub: 'تنظیمات', run: () => { S.setOpen = 'ssl'; go('set'); } },
+    { ic: '🙈', title: 'تغییر حالت حریم خصوصی (تار کردن مبالغ)', sub: 'میانبر', run: () => { const pb = $('#privbtn'); if (pb) pb.click(); } },
+    { ic: '🔄', title: 'ریستارت هسته Xray', sub: 'عملیات', run: async () => { if (await uiConfirm('هسته Xray ریستارت شود؟', { title: '🔄 ریستارت هسته Xray', okText: 'ریستارت شود', danger: true })) { await api('/core/restart', 'POST'); toast('ریستارت شد'); } } },
+  ];
+  const inp = h('input', { class: 'cmd-in', type: 'search', placeholder: 'جستجوی کاربر، بخش یا دستور… (Esc برای بستن)', autocomplete: 'off' });
+  const list = h('div', { class: 'cmd-list' });
+  let curItems = [], idx = 0, seq = 0;
+
+  const close = () => { document.removeEventListener('keydown', onK, true); back.remove(); };
+  const paint = (users = []) => {
+    const q = inp.value.trim().toLowerCase();
+    const cmds = baseCmds.filter(c => !q || c.title.toLowerCase().includes(q) || c.sub.toLowerCase().includes(q));
+    curItems = [];
+    const nodes = [];
+    if (users.length) {
+      nodes.push(h('div', { class: 'cmd-sec' }, '👤 کاربران یافت‌شده'));
+      users.forEach(u => {
+        const item = { run: () => { S.users.q = u.username; S.users.status = ''; if (u.pid && S.panel !== u.pid) S.panel = u.pid; go('users'); } };
+        const i = curItems.push(item) - 1;
+        nodes.push(h('button', { type: 'button', class: 'cmd-it' + (i === idx ? ' on' : ''), onclick: () => { close(); item.run(); } },
+          h('i', { class: 'dot', style: `background:var(--${u.status === 'active' ? 'ok' : u.status === 'on_hold' ? 'warn' : 'bad'})` }),
+          h('b', { dir: 'ltr' }, u.username),
+          h('small', {}, (u.panel_name ? u.panel_name + ' · ' : '') + usage(u))));
+      });
+    }
+    if (cmds.length) {
+      nodes.push(h('div', { class: 'cmd-sec' }, '⚡ دسترسی سریع'));
+      cmds.slice(0, 10).forEach(c => {
+        const i = curItems.push(c) - 1;
+        nodes.push(h('button', { type: 'button', class: 'cmd-it' + (i === idx ? ' on' : ''), onclick: () => { close(); c.run(); } },
+          h('span', {}, c.ic), h('span', {}, c.title), h('small', {}, c.sub)));
+      });
+    }
+    if (!nodes.length) nodes.push(h('p', { class: 'hint', style: 'text-align:center;padding:12px 0' }, 'موردی پیدا نشد.'));
+    list.replaceChildren(...nodes);
+  };
+  const liveSearch = debounce(async () => {
+    const q = normQ(inp.value);
+    if (isRep || q.length < 2) return paint([]);
+    const my = ++seq;
+    try {
+      const r = await api(`/users?offset=0&limit=6&search=${encodeURIComponent(q)}&scope=global`);
+      if (my === seq) { idx = 0; paint(r.users || []); }
+    } catch {}
+  }, 260);
+  inp.oninput = () => { idx = 0; paint([]); liveSearch(); };
+  const onK = e => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (e.key === 'ArrowDown' && curItems.length) { e.preventDefault(); idx = (idx + 1) % curItems.length; list.querySelectorAll('.cmd-it').forEach((b, i) => b.classList.toggle('on', i === idx)); }
+    else if (e.key === 'ArrowUp' && curItems.length) { e.preventDefault(); idx = (idx - 1 + curItems.length) % curItems.length; list.querySelectorAll('.cmd-it').forEach((b, i) => b.classList.toggle('on', i === idx)); }
+    else if (e.key === 'Enter' && curItems[idx]) { e.preventDefault(); const fn = curItems[idx].run; close(); fn(); }
+  };
+  const box = h('div', { class: 'm-box cmd-box', role: 'dialog', 'aria-modal': 'true', onclick: e => e.stopPropagation() },
+    h('h3', {}, '🔎 فرمان و جستجوی سریع'), inp, list);
+  const back = h('div', { id: 'cmdpal', class: 'm-back', onclick: close }, box);
+  document.body.append(back);
+  document.addEventListener('keydown', onK, true);
+  paint([]);
+  setTimeout(() => inp.focus(), 20);
+}
+if ($('#cmdbtn')) $('#cmdbtn').onclick = openCmdPalette;
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmdPalette(); }
+});
+
+/* ───────── لایت‌باکس تمام‌صفحه برای رسید فروشگاه (زوم + چرخش + تأیید/رد) ───────── */
+function openReceiptLightbox(o, onApprove, onReject) {
+  let zoom = 1, rot = 0;
+  const img = h('img', { alt: 'رسید ' + o.id, src: '/api/shop/orders/' + o.id + '/receipt' });
+  const upd = () => { img.style.transform = `scale(${zoom}) rotate(${rot}deg)`; };
+  const close = () => { document.removeEventListener('keydown', onK, true); back.remove(); };
+  const onK = e => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+  img.onerror = () => stage.replaceChildren(h('p', { class: 'err' }, 'عکس رسید از تلگرام دریافت نشد (ربات فروش متصل است؟).'));
+  const stage = h('div', { class: 'lb-stage', onclick: e => { if (e.target === stage) close(); } }, img);
+  const top = h('div', { class: 'lb-top' },
+    h('b', { style: 'font-size:var(--fs-sm)' }, `🧾 رسید #${o.id} — ${toman(o.amount)}`),
+    h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' },
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { zoom = Math.min(3, +(zoom + 0.35).toFixed(2)); upd(); } }, '🔍+'),
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { zoom = Math.max(0.5, +(zoom - 0.35).toFixed(2)); upd(); } }, '🔍-'),
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { rot = (rot + 90) % 360; upd(); } }, '↻ چرخش'),
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { zoom = 1; rot = 0; upd(); } }, '↺ ریست'),
+      h('button', { type: 'button', class: 'btn sm bad', onclick: close }, '✕ بستن')));
+  const botBtns = [];
+  if (o.status === 'pending' && onApprove) {
+    const okB = h('button', { type: 'button', class: 'btn sm pri' }, '✅ تأیید رسید و انجام سفارش');
+    okB.onclick = async () => { close(); await onApprove(); };
+    botBtns.push(okB);
+  }
+  if (o.status === 'pending' && onReject) {
+    const noB = h('button', { type: 'button', class: 'btn sm bad' }, '❌ رد رسید');
+    noB.onclick = () => { close(); onReject(); };
+    botBtns.push(noB);
+  }
+  const back = h('div', { class: 'lb-back' }, top, stage, botBtns.length ? h('div', { class: 'lb-bot' }, ...botBtns) : null);
+  document.body.append(back);
+  document.addEventListener('keydown', onK, true);
+}
+
+/* ───────── مودال جزئیات کامل کاربر (برای نمای جدولی) ───────── */
+function openUserModal(u, reloadFn) {
+  const close = () => { document.removeEventListener('keydown', onK, true); back.remove(); if (reloadFn) reloadFn(); };
+  const onK = e => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+  const host = h('div');
+  const card = userItem(u, host, 'renew');
+  card.open = true;
+  host.append(card);
+  const box = h('div', { class: 'm-box', style: 'max-width:600px', role: 'dialog', 'aria-modal': 'true', onclick: e => e.stopPropagation() },
+    h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px' },
+      h('h3', { style: 'margin:0' }, '👤 مدیریت ' + u.username),
+      h('button', { type: 'button', class: 'btn sm', onclick: close }, '✕ بستن')),
+    host);
+  const back = h('div', { class: 'm-back', onclick: close }, box);
+  document.body.append(back);
+  document.addEventListener('keydown', onK, true);
+}
+
+/* ───────── ویجت سلامت کانفیگ‌ها (Proxy Checker) در داشبورد ───────── */
+function buildCheckerCard() {
+  const body = h('div', {}, h('p', { class: 'hint' }, 'در حال بارگذاری…'));
+  const runB = h('button', { class: 'btn sm pri', type: 'button' }, '🔄 بررسی الان');
+  const cfgB = h('button', { class: 'btn sm', type: 'button' }, '⚙️ تنظیم منبع');
+  const card = h('div', { class: 'card' },
+    h('div', { style: 'display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px' },
+      h('h2', { style: 'margin:0' }, '🩺 سلامت کانفیگ‌ها'),
+      h('div', { style: 'display:flex;gap:6px' }, runB, cfgB)),
+    body);
+  let lastCfg = null;
+
+  const paint = (v, hasSrc) => {
+    if (!hasSrc) {
+      body.replaceChildren(h('p', { class: 'hint' }, 'هنوز منبعی تنظیم نشده؛ روی «⚙️ تنظیم منبع» بزنید و نام یک کاربر تست، لینک ساب یا لینک کانفیگ‌ها را وارد کنید.'));
+      return;
+    }
+    const pills = h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center' },
+      h('span', { class: 'pill ok' }, `🟢 سالم: ${v.up || 0}`),
+      h('span', { class: 'pill ' + (v.down ? 'bad' : '') }, `🔴 خراب: ${v.down || 0}`),
+      h('span', { class: 'pill' }, `کل: ${v.total || 0}`),
+      v.last_run ? h('span', { class: 'hint', style: 'margin:0;margin-inline-start:auto' }, 'آخرین بررسی: ' + new Date(v.last_run * 1000).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })) : null);
+    const rows = (v.items || []).slice(0, 20).map(r => {
+      const st = r.ok === null ? '⚪ UDP' : (r.ok ? `🟢 ${r.ms}ms` + (r.uptime != null ? ` · ${r.uptime}%` : '') : `🔴 ${r.err || 'قطع'}`);
+      return h('div', { class: 'chk-row' + (r.ok === false ? ' down' : '') },
+        h('div', { style: 'min-width:0' }, h('b', {}, r.name), h('small', { dir: 'ltr' }, `${r.proto} · ${r.host}:${r.port}`)),
+        h('span', { class: 'chk-ms', style: r.ok === false ? 'color:var(--bad)' : r.ok ? 'color:var(--ok)' : 'color:var(--mu)' }, st));
+    });
+    body.replaceChildren(pills, v.error ? h('p', { class: 'err', style: 'margin:0 0 8px' }, '⚠️ ' + v.error) : null,
+      ...(rows.length ? rows : [h('p', { class: 'hint' }, 'برای دریافت وضعیت، «🔄 بررسی الان» را بزنید.')]));
+  };
+
+  const load = async () => {
+    try {
+      const r = await api('/checker');
+      lastCfg = r.cfg;
+      paint(r.view, r.has_source);
+    } catch (e) {
+      body.replaceChildren(h('p', { class: 'hint' }, '⚠️ ' + e.message));
+    }
+  };
+  runB.onclick = () => run(runB, async () => {
+    const r = await api('/checker/run', 'POST');
+    paint(r.view, true);
+    toast(r.skipped ? '⚠️ ' + (r.view.error || 'بررسی انجام نشد') : `✅ بررسی انجام شد (${r.view.up} سالم / ${r.view.down} خراب)`, !!r.skipped);
+  });
+  cfgB.onclick = () => {
+    const c = lastCfg || { enabled: true, alerts: true, interval: 300, timeout: 6, fails: 2, panel: S.panel || '', username: '', sub_url: '', links: '', ignore: '' };
+    const pSel = h('select', {}, h('option', { value: '' }, '— بدون پنل —'), ((S.st && S.st.panels) || []).map(p => h('option', { value: p.id, selected: p.id === c.panel }, p.name)));
+    const uIn = h('input', { value: c.username || '', placeholder: 'نام کاربری تست در پنل', dir: 'ltr' });
+    const sIn = h('input', { value: c.sub_url || '', placeholder: 'https://sub.example.com/...', dir: 'ltr' });
+    const lIn = h('textarea', { rows: 3, placeholder: 'vless://...
+vmess://...', dir: 'ltr' }); lIn.value = c.links || '';
+    const igIn = h('input', { value: c.ignore || '', placeholder: 'کلمات نادیده‌گرفتنی (با کاما)' });
+    const ivIn = h('input', { type: 'number', min: 60, max: 3600, value: c.interval || 300, dir: 'ltr' });
+    const alC = h('input', { type: 'checkbox', checked: c.alerts !== false });
+    const close = () => { document.removeEventListener('keydown', onK, true); back.remove(); };
+    const onK = e => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    const svB = h('button', { type: 'button', class: 'btn pri' }, '💾 ذخیره و بررسی');
+    svB.onclick = () => run(svB, async () => {
+      await api('/checker/settings', 'POST', { enabled: true, alerts: alC.checked, interval: Math.max(60, +ivIn.value || 300), timeout: c.timeout || 6, fails: c.fails || 2,
+        panel: pSel.value, username: uIn.value.trim(), sub_url: sIn.value.trim(), links: lIn.value, ignore: igIn.value.trim() });
+      toast('✅ تنظیمات ذخیره شد'); close(); await load();
+    });
+    const box = h('div', { class: 'm-box', style: 'max-width:480px', role: 'dialog', 'aria-modal': 'true', onclick: e => e.stopPropagation() },
+      h('h3', {}, '⚙️ تنظیم منبع سلامت کانفیگ‌ها'),
+      field('پنل کاربر تست', pSel), field('نام کاربری تست', uIn),
+      field('یا لینک سابسکریپشن دلخواه', sIn), field('یا لینک‌های خام (هر خط یکی)', lIn),
+      h('div', { class: 'row' }, field('بازه بررسی (ثانیه)', ivIn), field('نادیده گرفتن نام‌ها', igIn)),
+      h('label', { class: 'chk' }, alC, 'ارسال هشدار قطعی/برگشت در تلگرام ادمین'),
+      h('div', { class: 'm-acts' }, svB, h('button', { type: 'button', class: 'btn', onclick: close }, 'بستن')));
+    const back = h('div', { class: 'm-back', onclick: close }, box);
+    document.body.append(back);
+    document.addEventListener('keydown', onK, true);
+  };
+  load();
+  return card;
+}
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); }
   catch { const a = h('textarea', { value: text, style: 'position:fixed;opacity:0' }); document.body.append(a); a.select(); document.execCommand('copy'); a.remove(); }
@@ -1448,7 +1912,7 @@ async function pollTopups() {
 const TAB_KEYS = TABS.map(x => x[0]);
 const VIEWS = { create: () => vCreate(), users: () => vUsers(), home: () => vHome(), tpl: () => vTpl(), shop: () => vShop(), set: () => vSet() };
 let _going = false, _next = null;
-const REMEMBER_TAB = true;      // false = مثل قبل: هر بار که پنل باز یا رفرش می‌شود روی «ساخت» می‌آید؛ true = همان تبِ قبلی باز شود
+const REMEMBER_TAB = false;      // false = مثل قبل: هر بار که پنل باز یا رفرش می‌شود روی «ساخت» می‌آید؛ true = همان تبِ قبلی باز شود
 function saveTab(tab) {
   if (!REMEMBER_TAB) return;
   try { history.replaceState(null, '', '#' + tab); } catch {}
@@ -1648,18 +2112,127 @@ async function vUsers() {
   if (!hasPanel()) return vCreate();
   const U = S.users; let seq = 0;
   if (!U.scope) U.scope = 'panel';
+  if (!U.view) { try { U.view = localStorage.getItem('rb-uview') || 'card'; } catch { U.view = 'card'; } }
+  let bulkOn = false, pageUsers = [];
+  const selected = new Set();
   const list = h('div'), pg = h('div', { class: 'pager', hidden: true }), info = h('p', { class: 'hint' });
+  const bulkBar = h('div', { class: 'bulkbar', hidden: true });
   const search = h('input', { type: 'search', placeholder: 'جستجوی هوشمند: نام کاربری، لینک ساب، یادداشت نماینده…', value: U.q, autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'search' });
   const clear = h('button', { class: 'clr', type: 'button', 'aria-label': 'پاک کردن', hidden: !U.q }, '✕');
+
+  const execBulk = async (action, extra = {}) => {
+    const names = [...selected];
+    if (!names.length) return;
+    const labels = { renew: 'تمدید دسته‌ای', service: 'تغییر سرویس دسته‌ای', reset: 'ریست مصرف دسته‌ای', enable: 'فعال‌سازی دسته‌ای', disable: 'غیرفعال‌سازی دسته‌ای' };
+    if (!await uiConfirm(`${labels[action] || action} برای ${names.length} کاربر انتخاب‌شده انجام شود؟`, { title: '⚡ عملیات دسته‌ای', okText: 'بله، اعمال شود', danger: action === 'reset' || action === 'disable' })) return;
+    try {
+      const r = await api('/bulk', 'POST', { names, action, ...extra });
+      toast(`✅ انجام شد: ${r.ok.length} موفق` + (r.failed.length ? ` · ⚠️ ${r.failed.length} ناموفق` : ''), r.failed.length > 0 && !r.ok.length);
+      selected.clear(); bulkOn = false; bulkBtn.classList.remove('on'); updateBulkBar(); load(false);
+    } catch (e) { toast(e.message, true); }
+  };
+
+  const pickBulkModal = (title, options, onPick) => {
+    const sel = h('select', {}, options.map(([v, t]) => h('option', { value: v }, t)));
+    const close = () => { document.removeEventListener('keydown', onK, true); back.remove(); };
+    const onK = e => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    const ok = h('button', { type: 'button', class: 'btn pri', onclick: () => { const v = sel.value; close(); if (v) onPick(v); } }, 'ادامه');
+    const box = h('div', { class: 'm-box', role: 'dialog', 'aria-modal': 'true', onclick: e => e.stopPropagation() },
+      h('h3', {}, title), sel, h('div', { class: 'm-acts' }, ok, h('button', { type: 'button', class: 'btn', onclick: close }, 'انصراف')));
+    const back = h('div', { class: 'm-back', onclick: close }, box);
+    document.body.append(back);
+    document.addEventListener('keydown', onK, true);
+  };
+
+  const updateBulkBar = () => {
+    bulkBar.hidden = !bulkOn;
+    if (!bulkOn) return;
+    const n = selected.size;
+    const allSel = pageUsers.length > 0 && pageUsers.every(u => selected.has(u.username));
+    const selAllB = h('button', { type: 'button', class: 'btn sm', onclick: () => {
+      if (allSel) pageUsers.forEach(u => selected.delete(u.username));
+      else pageUsers.forEach(u => selected.add(u.username));
+      renderList(); updateBulkBar();
+    } }, allSel ? 'لغو انتخاب صفحه' : 'انتخاب همه صفحه');
+    const mkB = (t, cls, fn) => h('button', { type: 'button', class: 'btn sm ' + cls, disabled: !n, onclick: fn }, t);
+    bulkBar.replaceChildren(
+      h('span', { class: 'bcnt' }, `${n.toLocaleString('fa-IR')} کاربر انتخاب‌شده`),
+      selAllB,
+      mkB('⚡ تمدید', 'pri', () => pickBulkModal('⚡ انتخاب تمپلت برای تمدید دسته‌ای', tplEntries(S.st).map(([k, v]) => [k, `${k} (${v.gb || '∞'}GB / ${v.days || '∞'}d)`]), tpl => execBulk('renew', { template: tpl }))),
+      mkB('🔀 سرویس', '', () => pickBulkModal('🔀 انتخاب سرویس مقصد', (S.svcs || []).map(s => [String(s.id), s.name]), sid => execBulk('service', { service_id: +sid }))),
+      mkB('🔄 ریست', 'bad', () => execBulk('reset')),
+      mkB('✅ فعال', 'ok', () => execBulk('enable')),
+      mkB('⛔ غیرفعال', 'bad', () => execBulk('disable')),
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { bulkOn = false; selected.clear(); bulkBtn.classList.remove('on'); updateBulkBar(); renderList(); } }, '✕'));
+  };
+
+  const bulkBtn = h('button', { class: 'chip', type: 'button', onclick: () => {
+    bulkOn = !bulkOn;
+    if (!bulkOn) selected.clear();
+    bulkBtn.classList.toggle('on', bulkOn);
+    updateBulkBar(); renderList();
+  } }, '☑️ انتخاب چندتایی');
+
+  const viewBtn = h('button', { class: 'chip deskbtn' + (U.view === 'table' ? ' on' : ''), type: 'button', onclick: () => {
+    U.view = U.view === 'table' ? 'card' : 'table';
+    try { localStorage.setItem('rb-uview', U.view); } catch {}
+    viewBtn.classList.toggle('on', U.view === 'table');
+    viewBtn.textContent = U.view === 'table' ? '🃏 نمای کارتی' : '📋 نمای جدولی';
+    renderList();
+  } }, U.view === 'table' ? '🃏 نمای کارتی' : '📋 نمای جدولی');
+
   const scopeBtn = S.st.multi_panel ? h('button', {
     class: 'chip' + (U.scope === 'global' ? ' on' : ''),
     type: 'button',
     onclick: () => { U.scope = U.scope === 'global' ? 'panel' : 'global'; vUsers(); },
   }, '🌐 همه پنل‌ها') : null;
+
   const chips = h('div', { class: 'chips' },
-    scopeBtn,
+    bulkBtn, viewBtn, scopeBtn,
     [['', 'همه'], ['active', 'فعال شده'], ['on_hold', 'خام'], ['expired', 'منقضی'], ['limited', 'محدود'], ['disabled', 'غیرفعال'], ['unlimited', '♾ حجم/زمان نامحدود']].map(([k, t]) =>
       h('button', { class: 'chip' + (U.status === k ? ' on' : ''), onclick: () => { U.status = k; vUsers(); } }, t)));
+
+  const renderTable = () => {
+    const tbl = h('table', { class: 'utbl' },
+      h('thead', {}, h('tr', {},
+        bulkOn ? h('th', { style: 'width:34px' }, '☑') : null,
+        h('th', {}, 'کاربر'), h('th', {}, 'وضعیت'), h('th', {}, 'سرویس'),
+        h('th', {}, 'مصرف'), h('th', {}, 'اعتبار'), h('th', {}, 'عملیات فوری'))),
+      h('tbody', {}, pageUsers.map(u => {
+        const svcName = ((S.svcs || []).find(s => s.id === u.service_id) || {}).name || '—';
+        const pct = u.limit ? Math.min(100, u.used * 100 / u.limit) : 0;
+        const cb = bulkOn ? h('input', { type: 'checkbox', class: 'bchk', checked: selected.has(u.username), onclick: e => e.stopPropagation(), onchange: e => { if (e.target.checked) selected.add(u.username); else selected.delete(u.username); updateBulkBar(); } }) : null;
+        return h('tr', { onclick: () => openUserModal(u, () => load(false)) },
+          bulkOn ? h('td', {}, cb) : null,
+          h('td', {}, h('b', { dir: 'ltr' }, u.username), u.unpaid_due ? h('em', { class: 'tag unp' }, '💸') : null, u.rep_note ? h('span', { class: 'rnote' }, '📝 ' + u.rep_note) : null),
+          h('td', {}, stTag(u.status)),
+          h('td', { class: 'sub' }, svcName),
+          h('td', {}, h('div', { class: 'sub' }, usage(u)), h('div', { class: 'bar ubar' }, h('i', { class: pct > 90 ? 'b' : pct > 70 ? 'w' : '', style: `width:${pct}%` }))),
+          h('td', { class: 'sub' }, u.expire_text),
+          h('td', { onclick: e => e.stopPropagation() }, h('div', { class: 'qacts' },
+            u.sub ? h('button', { type: 'button', class: 'qact', title: 'کپی لینک', onclick: () => copy(u.sub) }, '📋') : null,
+            u.sub ? h('button', { type: 'button', class: 'qact', title: 'نمایش QR', onclick: () => openQrModal(u.username, u.sub) }, '🖼') : null,
+            h('button', { type: 'button', class: 'qact', title: 'مدیریت کامل', onclick: () => openUserModal(u, () => load(false)) }, '⚙️'))));
+      })));
+    list.replaceChildren(h('div', { class: 'utbl-wrap' }, tbl));
+  };
+
+  const renderList = () => {
+    if (!pageUsers.length) return;
+    if (U.view === 'table' && document.documentElement.classList.contains('desk')) return renderTable();
+    list.replaceChildren();
+    pageUsers.forEach((u, idx) => {
+      const card = userItem(u, list);
+      if (bulkOn) {
+        const sm = card.querySelector(':scope > summary');
+        const cb = h('input', { type: 'checkbox', class: 'bchk', checked: selected.has(u.username), onclick: e => e.stopPropagation(), onchange: e => { if (e.target.checked) selected.add(u.username); else selected.delete(u.username); updateBulkBar(); } });
+        if (sm) sm.prepend(cb);
+      }
+      if (!bulkOn && pageUsers.length === 1 && U.q && idx === 0) card.open = true;
+      list.append(card);
+    });
+  };
+
   async function load(reset) {
     const my = ++seq;                                           // جلوگیری از نمایش نتیجه‌ی قدیمی وقتی سریع تایپ می‌کنید
     if (reset) U.off = 0;
@@ -1673,13 +2246,10 @@ async function vUsers() {
         const ps = $('#psel'); if (ps) ps.value = r.found_panel;
       }
       if (!r.users.length && r.total && U.off >= r.total) { U.off = (Math.ceil(r.total / PAGE) - 1) * PAGE; return load(false); }   // صفحه‌ی آخر خالی شد (حذف کاربر)
-      list.replaceChildren();
-      r.users.forEach((u, idx) => {
-        const card = userItem(u, list);
-        if (r.users.length === 1 && U.q && idx === 0) card.open = true;
-        list.append(card);
-      });
-      if (!r.users.length) list.append(empty(U.q ? 'search' : 'users', U.q ? 'نتیجه‌ای پیدا نشد' : 'هنوز کاربری نیست', r.match_reason || (U.q ? 'نام کاربری، لینک ساب کامل یا یادداشت نماینده را جستجو کنید.' : 'از بخش «ساخت» اولین کاربر را اضافه کنید.')));
+      pageUsers = r.users || [];
+      if (pageUsers.length) renderList();
+      else list.replaceChildren(empty(U.q ? 'search' : 'users', U.q ? 'نتیجه‌ای پیدا نشد' : 'هنوز کاربری نیست', r.match_reason || (U.q ? 'نام کاربری، لینک ساب کامل یا یادداشت نماینده را جستجو کنید.' : 'از بخش «ساخت» اولین کاربر را اضافه کنید.')));
+      updateBulkBar();
       drawPager(pg, r.total, U.off, o => { U.off = o; load(false); window.scrollTo({ top: 0, behavior: 'smooth' }); });
       const pages = Math.ceil(r.total / PAGE), cur = Math.floor(U.off / PAGE) + 1;
       info.className = 'hint';
@@ -1699,7 +2269,7 @@ async function vUsers() {
   search.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); apply(); search.blur(); } });
   clear.onclick = () => { search.value = ''; U.q = ''; clear.hidden = true; load(true); search.focus(); };
   try { S.svcs = (await api('/services')).services; } catch { S.svcs = []; }
-  mount(h('div', { class: 'sbox' }, search, clear), chips, info, list, pg); load(true);
+  mount(h('div', { class: 'sbox' }, search, clear), chips, info, list, pg, bulkBar); load(true);
 }
 
 /* ───────── تاریخچه‌ی کاربر (ساخت / تمدید، تاریخ شمسی) — با باز شدن بارگذاری می‌شود ───────── */
@@ -1726,10 +2296,13 @@ function userItem(u, parent, tab) {
   const hq = (S.users && S.users.q || '').toLowerCase(), ix = hq ? u.username.toLowerCase().indexOf(hq) : -1;
   const nm = ix < 0 ? [u.username] : [u.username.slice(0, ix), h('mark', {}, u.username.slice(ix, ix + hq.length)), u.username.slice(ix + hq.length)];
   const extraSub = [u.panel_name && S.st && S.st.multi_panel ? u.panel_name : '', svcName, usage(u)].filter(Boolean).join(' · ');
+  const qActs = u.sub ? h('span', { class: 'qacts', onclick: e => { e.preventDefault(); e.stopPropagation(); } },
+    h('button', { type: 'button', class: 'qact', title: 'کپی لینک سریع', onclick: e => { e.preventDefault(); e.stopPropagation(); copy(u.sub); } }, '📋'),
+    h('button', { type: 'button', class: 'qact', title: 'نمایش QR', onclick: e => { e.preventDefault(); e.stopPropagation(); openQrModal(u.username, u.sub); } }, '🖼')) : null;
   d.append(h('summary', {}, h('span', { class: 'nm' }, h('i', { class: 'dot' }), nm, stTag(u.status),
     u.match_via ? h('em', { class: 'tag', style: 'color:var(--ac)' }, u.match_via) : null,
     u.unpaid_due ? h('em', { class: 'tag unp' }, '💸') : null,
-    u.rep_note ? h('span', { class: 'rnote' }, '📝 ' + u.rep_note) : null), h('span', { class: 'sub' }, extraSub)));
+    u.rep_note ? h('span', { class: 'rnote' }, '📝 ' + u.rep_note) : null), h('span', { class: 'sub' }, extraSub), qActs));
   let built = false;
   const buildBody = () => {
     if (built) return;
@@ -2665,8 +3238,9 @@ async function vHome() {
   const quick = h('div', { class: 'qa' }, qaBtn('create', 'create', 'ساخت اکانت', 'ساخت تکی و گروهی', 'var(--ac)'), qaBtn('users', 'users', 'کاربران', 'جستجو، تمدید و ویرایش', 'var(--info)'),
     qaBtn('shop', 'shop', 'فروشگاه', S.shopPend ? `${S.shopPend} مورد در انتظار` : 'سفارش‌ها و پرداخت‌ها', 'var(--ok)'), qaBtn('set', 'set', 'تنظیمات', S.pend ? `${S.pend} درخواست شارژ` : 'پنل‌ها، نماینده‌ها، امنیت', 'var(--warn)'));
   const head = h('div', { class: 'dash-head' }, h('div', {}, h('h2', {}, 'خوش آمدید 👋'), h('p', {}, 'نمای کلی فروش، کاربران و منابع سرور')));
+  const checkerCard = buildCheckerCard();
   mount(head, quick, saleBox, h('div', { class: 'sec' }, h('h2', {}, 'وضعیت پنل و سرور'), refB),
-    usersBox, h('div', { class: 'dgrid' }, chartBox, sysBox), extraBox, repCard, res);
+    usersBox, h('div', { class: 'dgrid' }, chartBox, sysBox), checkerCard, extraBox, repCard, res);
   const core = h('button', { class: 'btn' }, '🔄 ریستارت هسته Xray');
   core.onclick = async () => { if (await uiConfirm('هسته Xray ریستارت شود؟ اتصال کاربران برای چند ثانیه قطع می‌شود.', { title: '🔄 ریستارت هسته Xray', okText: 'ریستارت شود', danger: true })) run(core, async () => { await api('/core/restart', 'POST'); toast('ریستارت شد'); }); };
   res.replaceChildren(h('h2', {}, 'عملیات'), h('div', { class: 'btns' }, core));
@@ -2844,21 +3418,19 @@ function shopOrder(o, openIt, redraw) {
   if (o.reason) rows.push(lgRow('دلیل رد', o.reason));
   if (o.result) rows.push(lgRow('نتیجه', o.result));
   const pic = h('div'); const btns = h('div', { class: 'btns' }); let rejBox = null;
+  let approveFn = null, rejectFn = null;
   if (o.receipt) {
     const rb = h('button', { class: 'btn sm', type: 'button' }, '🖼 دیدن رسید');
-    rb.onclick = () => {
-      if (pic.firstChild) return pic.replaceChildren();
-      const img = h('img', { alt: 'رسید ' + o.id, loading: 'lazy', src: '/api/shop/orders/' + o.id + '/receipt', style: 'max-width:100%;max-height:70vh;border-radius:12px;margin-top:10px;border:1px solid var(--line)' });
-      img.onerror = () => pic.replaceChildren(h('p', { class: 'err' }, 'عکس رسید از تلگرام دریافت نشد (ربات فروش متصل است؟).'));
-      pic.replaceChildren(img);
-    };
+    rb.onclick = () => openReceiptLightbox(o, approveFn, rejectFn);
     btns.append(rb);
   }
   if (o.status === 'pending') {
     const ok = h('button', { class: 'btn sm pri', type: 'button' }, '✅ تأیید');
-    ok.onclick = async () => { if (await uiConfirm(`رسید #${o.id} به مبلغ ${toman(o.amount)} تأیید و سفارش انجام شود؟`, { title: '✅ تأیید رسید', okText: 'تأیید و انجام' })) run(ok, async () => { done(await api(`/shop/orders/${o.id}/approve`, 'POST')); await redraw(); }); };
+    approveFn = async () => { if (await uiConfirm(`رسید #${o.id} به مبلغ ${toman(o.amount)} تأیید و سفارش انجام شود؟`, { title: '✅ تأیید رسید', okText: 'تأیید و انجام' })) run(ok, async () => { done(await api(`/shop/orders/${o.id}/approve`, 'POST')); await redraw(); }); };
+    ok.onclick = approveFn;
     const no = h('button', { class: 'btn sm bad', type: 'button' }, '❌ رد');
     const box = h('div', { hidden: true, style: 'margin-top:10px' });
+    rejectFn = () => { it.open = true; box.hidden = false; box.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
     const sel = h('select', {}, h('option', { value: 'a' }, 'رسید نامعتبر یا ناخوانا است'), h('option', { value: 'b' }, 'مبلغ رسید با مبلغ سفارش یکی نیست'), h('option', { value: 'c' }, 'پرداخت در حساب ما دیده نشد'), h('option', { value: '' }, 'دلیل دلخواه…'));
     const custom = h('input', { placeholder: 'دلیل رد (به مشتری نمایش داده می‌شود)', maxlength: 200, hidden: true });
     sel.onchange = () => { custom.hidden = sel.value !== ''; if (!custom.hidden) custom.focus(); };
