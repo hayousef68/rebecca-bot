@@ -2731,9 +2731,9 @@ async def backup_send():
     cfg = load_config()
     if not (cfg["bot_token"] and cfg["admin_ids"]):
         raise HTTPException(400, "توکن ربات یا ادمین تنظیم نشده")
-    n = await sales.send_backup(sales.backup_bot(_tg_bot(cfg["bot_token"]), cfg), cfg["admin_ids"], "💾 بکاپ تنظیمات — جای امن نگه دارید.")
+    n = await sales.send_backup(sales.backup_bot(_tg_bot(cfg["bot_token"]), cfg), cfg["admin_ids"], "💾 بکاپ تنظیمات — جای امن نگه دارید.", manual=True)
     if not n:
-        raise HTTPException(502, "ارسال به تلگرام ناموفق بود (ربات را در تلگرام Start کرده‌اید؟)")
+        raise HTTPException(502, "ارسال به تلگرام ناموفق بود: " + (sales.LAST_BACKUP_ERR or "ربات را در تلگرام Start کرده‌اید؟"))
     return {"sent": n}
 
 
