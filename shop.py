@@ -1216,8 +1216,9 @@ def auto_match(text: str) -> dict:
             out["res"] = "dup"                                       # فوروارد تکراری همان پیامک
             return
         a["seen"] = ([x for x in a["seen"] if now - int(x.get("ts") or 0) < 14 * 86400][-(C.SHOP_AUTO_SEEN_MAX - 1):]) + [{"h": h, "ts": now}]
-        musts = [sms_norm(m).lower() for m in re.split(r"[,،|\n]", a["must"]) if m.strip()]          # چند عبارت (مثلاً یکی برای هر بانک)؛ وجود هرکدام کافی است
-        if (musts and not any(m in t.lower() for m in musts)) or not sms_is_deposit(t):
+        _ns = lambda x: re.sub(r"\s+", "", x).lower()                                                  # فاصله‌ها نادیده: «bki. ir» با «bki.ir» یکی است
+        musts = [_ns(sms_norm(m)) for m in re.split(r"[,،|\n]", a["must"]) if m.strip()]                # چند عبارت (مثلاً یکی برای هر بانک)؛ وجود هرکدام کافی است
+        if (musts and not any(m in _ns(t) for m in musts)) or not sms_is_deposit(t):
             log("ignored")
             return
         vals = sms_amounts(t, a["unit"])
