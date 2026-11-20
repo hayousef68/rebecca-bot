@@ -1149,9 +1149,10 @@ async def _live_push(bot, targets: list, msgs: dict) -> int:
         key, mid, done = str(chat), msgs.get(str(chat)), False
         if mid:
             try:
-                bio = io.BytesIO(data)
-                bio.name = name
-                await bot.edit_message_media(chat_id=_chat_id(chat), message_id=int(mid), media=InputMediaDocument(bio, caption=cap), read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
+                import json as _json
+                await _tg_curl(bot.token, "editMessageMedia", {"chat_id": str(_chat_id(chat)), "message_id": str(int(mid)),
+                               "media": _json.dumps({"type": "document", "media": "attach://doc", "caption": cap[:1000]}, ensure_ascii=False)},
+                               ("doc", name, data), 90)
                 done = True
             except Exception as e:  # noqa: BLE001
                 m = str(e).lower()
@@ -1165,10 +1166,8 @@ async def _live_push(bot, targets: list, msgs: dict) -> int:
                     continue
         if not done:
             try:
-                bio = io.BytesIO(data)
-                bio.name = name
-                sent = await bot.send_document(_chat_id(chat), bio, caption=cap, disable_notification=True, read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
-                msgs[key] = sent.message_id
+                r = await _tg_curl(bot.token, "sendDocument", {"chat_id": str(_chat_id(chat)), "caption": cap[:1000], "disable_notification": "true"}, ("document", name, data), 90)
+                msgs[key] = r["result"]["message_id"]
                 done = True
             except Exception as e:  # noqa: BLE001
                 log.warning("live backup send %s: %s", chat, e)
@@ -1270,6 +1269,52 @@ async def backup_loop(bot):
                 pass
 
 
+class TgError(Exception):
+    def __init__(self, desc, code=0, retry_after=0):
+        super().__init__(desc)
+        self.code, self.retry_after = code, retry_after
+
+
+async def _tg_curl(token: str, method: str, fields: dict, file=None, timeout: int = 90) -> dict:
+    """تماس مستقیم با Bot API از طریق curl (IPv4). کتابخانه‌ی httpx روی بعضی سرورها آپلود را بی‌پاسخ می‌گذارد؛ curl همان‌جا سالم است.
+    توکن از stdin به curl می‌رسد (در لیست پروسه‌ها دیده نمی‌شود). file = (نام فیلد, نام فایل, bytes)."""
+    import json as _json
+    import tempfile
+    args = ["curl", "-4", "-sS", "--connect-timeout", "15", "-m", str(timeout)]
+    for k, v in fields.items():
+        args += ["--form-string", f"{k}={v}"]
+    path = None
+    try:
+        if file:
+            fk, fname, blob = file
+            fd, path = tempfile.mkstemp(prefix="rbk-")
+            with os.fdopen(fd, "wb") as f:
+                f.write(blob)
+            fname = re.sub(r'[";\\\r\n]', "_", fname)
+            args += ["-F", f"{fk}=@{path};filename={fname}"]
+        args += ["-K", "-"]
+        p = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out, err = await asyncio.wait_for(p.communicate(f'url = "https://api.telegram.org/bot{token}/{method}"\n'.encode()), timeout + 10)
+        except asyncio.TimeoutError:
+            p.kill()
+            raise TgError("Timed out") from None
+        txt = out.decode("utf-8", "replace").strip()
+        try:
+            j = _json.loads(txt)
+        except ValueError:
+            raise TgError((err.decode("utf-8", "replace").strip() or txt or "پاسخ نامعتبر")[:300]) from None
+        if not j.get("ok"):
+            raise TgError(str(j.get("description") or "error"), int(j.get("error_code") or 0), int((j.get("parameters") or {}).get("retry_after") or 0))
+        return j
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
 LAST_BACKUP_ERR = ""
 
 
@@ -1300,32 +1345,31 @@ async def send_backup(bot, admin_ids, caption: str, manual: bool = False) -> int
         pass
     global LAST_BACKUP_ERR
     LAST_BACKUP_ERR = ""
-    tries, rt, wt = (1, 25, 40) if manual else (4, 60, 180)     # دکمه‌ی دستی: سریع شکست بخور تا پنل خطای واقعی را نشان بدهد
+    tries, tmo = (2, 40) if manual else (4, 90)
+    cap = caption[:1000]
     sent = 0
     for uid in admin_ids:
-        from telegram.error import NetworkError, TimedOut, RetryAfter, Forbidden, BadRequest
-        for attempt in range(tries):                               # خطای شبکه/۵۰۲ گذراست؛ با فاصله‌ی فزاینده دوباره تلاش می‌کنیم
+        for attempt in range(tries):
             try:
-                bio = io.BytesIO(data)
-                bio.name = name
-                await bot.send_document(uid, bio, caption=caption, read_timeout=rt, write_timeout=wt, connect_timeout=15, pool_timeout=20)
+                await _tg_curl(bot.token, "sendDocument", {"chat_id": str(uid), "caption": cap}, ("document", name, data), tmo)
                 sent += 1
                 break
-            except RetryAfter as e:
-                LAST_BACKUP_ERR = f"RetryAfter {e.retry_after}s"
-                await asyncio.sleep(min(float(e.retry_after), 30) + 1)
-            except (Forbidden, BadRequest) as e:               # بلاک/Start نشده/chat_id اشتباه: تلاش مجدد بی‌فایده است
+            except TgError as e:
                 LAST_BACKUP_ERR = str(e)
-                log.warning("send backup to %s: %s", uid, e)
-                break
-            except (NetworkError, TimedOut) as e:
-                LAST_BACKUP_ERR = f"{type(e).__name__}: {e}"
                 log.warning("send backup to %s (attempt %d/%d): %s", uid, attempt + 1, tries, e)
+                if e.code in (400, 401, 403, 404):             # بلاک/Start نشده/توکن یا chat_id اشتباه: تلاش مجدد بی‌فایده است
+                    break
                 if attempt < tries - 1:
-                    await asyncio.sleep((5, 15, 30)[attempt])
-            except Exception as e:  # noqa: BLE001
-                LAST_BACKUP_ERR = f"{type(e).__name__}: {e}"
-                log.warning("send backup to %s: %s", uid, e)
+                    await asyncio.sleep(min(e.retry_after, 30) + 1 if e.retry_after else (5, 15, 30)[attempt])
+            except FileNotFoundError:                          # curl نصب نیست: مسیر قدیمی کتابخانه
+                try:
+                    bio = io.BytesIO(data)
+                    bio.name = name
+                    await bot.send_document(uid, bio, caption=cap, read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
+                    sent += 1
+                except Exception as e:  # noqa: BLE001
+                    LAST_BACKUP_ERR = f"{type(e).__name__}: {e}"
+                    log.warning("send backup to %s: %s", uid, e)
                 break
     if sent:                                                   # آخرین بکاپِ واقعاً ارسال‌شده؛ صفحه‌ی «سلامت سیستم» از آن می‌خواند
         st = _load_backup_state()
