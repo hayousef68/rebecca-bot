@@ -3200,8 +3200,9 @@ def shop_overview():
     s = cfg["shop"]
     cnt = _shop_counts(s)
     day0 = int(time.time()) - 86400
-    sales_total = sum(o["amount"] for o in s["orders"] if o["status"] == "done" and o["kind"] in ("buy", "renew"))
-    sales_24h = sum(o["amount"] for o in s["orders"] if o["status"] == "done" and o["kind"] in ("buy", "renew") and int(o.get("dts") or 0) >= day0)
+    sold = [o for o in s["orders"] if o["status"] == "done" and o["kind"] in ("buy", "renew", "reserve")]      # رزرو اشتراک هم فروش است
+    sales_total = sum(int(o.get("amount") or 0) for o in sold)
+    sales_24h = sum(int(o.get("amount") or 0) for o in sold if int(o.get("dts") or o.get("cts") or o.get("ts") or 0) >= day0)
     tok = s["token"]
     return {"enabled": s["enabled"], "panel": shop.shop_panel(cfg), "panels": [{"id": p["id"], "name": p["name"]} for p in cfg["panels"]],
             "cards": s["cards"], "welcome": s["welcome"], "support": s["support"], "min_topup": s["min_topup"], "max_topup": s["max_topup"],
@@ -3850,7 +3851,7 @@ async def shop_customer_wallet(uid: str, r: ShopWalletReq, request: Request):
         raise HTTPException(400, "نوع عملیات نامعتبر است.")
     if not uid.lstrip("-").isdigit():
         raise HTTPException(400, "شناسه نامعتبر است.")
-    await _gate_code(request, r.code, r.amount)
+    await _gate_code(request, r.code, r.amount, "این شارژ/کسر کیف پول مشتری")
     key = (request.headers.get("idempotency-key") or "").strip()[:40]
     txid = ("web:" + key) if re.fullmatch(r"[A-Za-z0-9_-]{8,40}", key) else None
     note = (r.note.strip() or "توسط ادمین وب‌پنل")
