@@ -1270,7 +1270,10 @@ async def backup_loop(bot):
                 pass
 
 
-async def send_backup(bot, admin_ids, caption: str) -> int:
+LAST_BACKUP_ERR = ""
+
+
+async def send_backup(bot, admin_ids, caption: str, manual: bool = False) -> int:
     """بکاپ اصلی را به ادمین‌ها می‌فرستد؛ تعداد ارسال موفق را برمی‌گرداند."""
     import io
     try:
@@ -1295,26 +1298,33 @@ async def send_backup(bot, admin_ids, caption: str) -> int:
         caption += f"\n🛒 فروشگاه: {b['shop_customers']} مشتری · {b['shop_services']} سرویس · {b['shop_orders']} سفارش · مجموع موجودی مشتری‌ها {b['shop_balance']:,} تومان"
     except Exception:  # noqa: BLE001
         pass
+    global LAST_BACKUP_ERR
+    LAST_BACKUP_ERR = ""
+    tries, rt, wt = (1, 25, 40) if manual else (4, 60, 180)     # دکمه‌ی دستی: سریع شکست بخور تا پنل خطای واقعی را نشان بدهد
     sent = 0
     for uid in admin_ids:
         from telegram.error import NetworkError, TimedOut, RetryAfter, Forbidden, BadRequest
-        for attempt in range(4):                               # خطای شبکه/۵۰۲ گذراست؛ با فاصله‌ی فزاینده دوباره تلاش می‌کنیم
+        for attempt in range(tries):                               # خطای شبکه/۵۰۲ گذراست؛ با فاصله‌ی فزاینده دوباره تلاش می‌کنیم
             try:
                 bio = io.BytesIO(data)
                 bio.name = name
-                await bot.send_document(uid, bio, caption=caption, read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
+                await bot.send_document(uid, bio, caption=caption, read_timeout=rt, write_timeout=wt, connect_timeout=15, pool_timeout=20)
                 sent += 1
                 break
             except RetryAfter as e:
-                await asyncio.sleep(float(e.retry_after) + 1)
+                LAST_BACKUP_ERR = f"RetryAfter {e.retry_after}s"
+                await asyncio.sleep(min(float(e.retry_after), 30) + 1)
             except (Forbidden, BadRequest) as e:               # بلاک/Start نشده/chat_id اشتباه: تلاش مجدد بی‌فایده است
+                LAST_BACKUP_ERR = str(e)
                 log.warning("send backup to %s: %s", uid, e)
                 break
             except (NetworkError, TimedOut) as e:
-                log.warning("send backup to %s (attempt %d/4): %s", uid, attempt + 1, e)
-                if attempt < 3:
+                LAST_BACKUP_ERR = f"{type(e).__name__}: {e}"
+                log.warning("send backup to %s (attempt %d/%d): %s", uid, attempt + 1, tries, e)
+                if attempt < tries - 1:
                     await asyncio.sleep((5, 15, 30)[attempt])
             except Exception as e:  # noqa: BLE001
+                LAST_BACKUP_ERR = f"{type(e).__name__}: {e}"
                 log.warning("send backup to %s: %s", uid, e)
                 break
     if sent:                                                   # آخرین بکاپِ واقعاً ارسال‌شده؛ صفحه‌ی «سلامت سیستم» از آن می‌خواند
