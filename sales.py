@@ -1297,13 +1297,26 @@ async def send_backup(bot, admin_ids, caption: str) -> int:
         pass
     sent = 0
     for uid in admin_ids:
-        try:
-            bio = io.BytesIO(data)
-            bio.name = name
-            await bot.send_document(uid, bio, caption=caption, read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
-            sent += 1
-        except Exception as e:  # noqa: BLE001
-            log.warning("send backup to %s: %s", uid, e)
+        from telegram.error import NetworkError, TimedOut, RetryAfter, Forbidden, BadRequest
+        for attempt in range(4):                               # خطای شبکه/۵۰۲ گذراست؛ با فاصله‌ی فزاینده دوباره تلاش می‌کنیم
+            try:
+                bio = io.BytesIO(data)
+                bio.name = name
+                await bot.send_document(uid, bio, caption=caption, read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
+                sent += 1
+                break
+            except RetryAfter as e:
+                await asyncio.sleep(float(e.retry_after) + 1)
+            except (Forbidden, BadRequest) as e:               # بلاک/Start نشده/chat_id اشتباه: تلاش مجدد بی‌فایده است
+                log.warning("send backup to %s: %s", uid, e)
+                break
+            except (NetworkError, TimedOut) as e:
+                log.warning("send backup to %s (attempt %d/4): %s", uid, attempt + 1, e)
+                if attempt < 3:
+                    await asyncio.sleep((5, 15, 30)[attempt])
+            except Exception as e:  # noqa: BLE001
+                log.warning("send backup to %s: %s", uid, e)
+                break
     if sent:                                                   # آخرین بکاپِ واقعاً ارسال‌شده؛ صفحه‌ی «سلامت سیستم» از آن می‌خواند
         st = _load_backup_state()
         _save_backup_state(int(st.get("iv") or 0), int(st.get("slot") or 0), last_ok=_time.time())
