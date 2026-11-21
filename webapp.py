@@ -129,11 +129,18 @@ class _SlowLog:
 
 
 app.add_middleware(_SlowLog)
+from secheaders import SecurityHeaders          # noqa: E402
+app.add_middleware(SecurityHeaders)
 _fails: dict[str, list[float]] = {}
 
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "?"
+
+
+def _is_https(request: Request) -> bool:
+    """کوکی Secure حتی وقتی TLS جلوی برنامه خاتمه می‌یابد (run_web با SSL فعال این متغیر را می‌گذارد)."""
+    return request.url.scheme == "https" or os.environ.get("REBECCA_SSL_ACTIVE") == "1"
 
 
 def _basic_ok(request: Request) -> bool:
@@ -302,8 +309,8 @@ async def login(r: LoginReq, request: Request):
     if len(recent) >= 5:
         raise HTTPException(429, "تلاش ناموفق زیاد؛ چند دقیقه بعد دوباره امتحان کنید.")
     user = r.user.strip()
-    secure = request.url.scheme == "https"
-    if not C.check_web_login(user, r.password):
+    secure = _is_https(request)
+    if not await asyncio.to_thread(C.check_web_login, user, r.password):      # PBKDF2 سنگین است؛ حلقه‌ی رویداد را نمی‌بندد
         st, rid = await asyncio.to_thread(C.rep_login, user, r.password)      # شاید نماینده باشد
         if st in ("locked", "locked_now"):
             if st == "locked_now":
@@ -359,7 +366,7 @@ async def login_2fa(r: Login2Req, request: Request):
     _fails.pop(ip, None)
     await _log_login(ip, user, True, "admin")
     tok, ttl = C.make_session(user, remember)
-    return _admin_cookie(JSONResponse({"ok": True, "role": "admin"}), tok, ttl, request.url.scheme == "https")
+    return _admin_cookie(JSONResponse({"ok": True, "role": "admin"}), tok, ttl, _is_https(request))
 
 
 @app.post("/api/logout")
@@ -1569,7 +1576,7 @@ async def security_get(request: Request):
     cfg = C.load_config_ro()
     now = time.time()
     lg = cfg.get("login_log", [])
-    return {"totp": C.totp_enabled(), "threshold": C.wallet_code_threshold(), "https": request.url.scheme == "https",
+    return {"totp": C.totp_enabled(), "threshold": C.wallet_code_threshold(), "https": _is_https(request),
             "known_ips": len(cfg["web"].get("known_ips", [])), "recovery_left": len(cfg["web"].get("recovery", [])),
             "fails_24h": sum(1 for x in lg if not x.get("ok") and now - float(x.get("ts") or 0) < 86400),
             "log": list(reversed(lg[-40:]))}
@@ -1593,7 +1600,7 @@ async def twofa_confirm(r: TwoFaConfirmReq, request: Request):
     _bg_notify("🛡 ورود دومرحله‌ای (2FA) برای وب‌پنل فعال شد.")
     user = str(C.load_config_ro()["web"].get("user", "admin"))
     tok, ttl = C.make_session(user)                       # کلید نشست عوض شده؛ همین مرورگر وارد بماند
-    return _admin_cookie(JSONResponse({"ok": True, "codes": codes}), tok, ttl, request.url.scheme == "https")
+    return _admin_cookie(JSONResponse({"ok": True, "codes": codes}), tok, ttl, _is_https(request))
 
 
 @app.post("/api/security/2fa/disable", dependencies=[Depends(guard)])
@@ -2540,7 +2547,7 @@ async def health(request: Request):
     now = time.time()
     fails = sum(1 for x in cfg.get("login_log", []) if not x.get("ok") and now - float(x.get("ts") or 0) < 86400)
     add("2fa", "ورود دومرحله‌ای", "ok" if C.totp_enabled() else "warn", "روشن است" if C.totp_enabled() else "خاموش است؛ برای محافظت از کیف پول در «امنیت ورود» روشنش کنید")
-    add("https", "اتصال امن", "ok" if request.url.scheme == "https" else "warn", "HTTPS فعال" if request.url.scheme == "https" else "HTTP ساده؛ رمز و کوکی بدون رمزنگاری می‌رود (SSL را فعال کنید)")
+    add("https", "اتصال امن", "ok" if _is_https(request) else "warn", "HTTPS فعال" if _is_https(request) else "HTTP ساده؛ رمز و کوکی بدون رمزنگاری می‌رود (SSL را فعال کنید)")
     add("fails", "تلاش‌های ناموفق ورود (۲۴ ساعت)", "ok" if fails < 10 else ("warn" if fails < 30 else "bad"), f"{fails} مورد")
 
     overall = max((i["level"] for i in items), key=lambda x: _LV[x])
@@ -2687,8 +2694,8 @@ async def backup_download():
 @app.post("/api/backup/settings", dependencies=[Depends(guard)])
 async def backup_settings(r: BackupSettingsReq, request: Request):
     if r.password is not None:
-        if r.password and len(r.password) < 6:
-            raise HTTPException(400, "رمز بکاپ حداقل ۶ کاراکتر باشد.")
+        if r.password and len(r.password) < 8:
+            raise HTTPException(400, "رمز بکاپ حداقل ۸ کاراکتر باشد.")
         if r.password != (load_config()["backup"].get("password") or ""):
             await _gate_code(request, r.code, None, "تغییر رمز بکاپ", always=True)
 
@@ -4513,7 +4520,7 @@ async def mini_order_receipt(oid: str, r: MiniReceiptReq):
             raise HTTPException(400, "فرمت تصویر نامعتبر است.")
         if len(img_bytes) < 64 or len(img_bytes) > 1_900_000:
             raise HTTPException(400, "حجم تصویر باید کمتر از ۱.۸ مگابایت باشد.")
-        if not (img_bytes.startswith(b"\xff\xd8\xff") or img_bytes.startswith(b"\x89PNG") or img_bytes[:4] == b"RIFF" or img_bytes[:3] == b"GIF"):
+        if not (img_bytes.startswith(b"\xff\xd8\xff") or img_bytes.startswith(b"\x89PNG") or (img_bytes[:4] == b"RIFF" and img_bytes[8:12] == b"WEBP") or img_bytes[:4] == b"GIF8"):
             raise HTTPException(400, "فقط تصویر (JPG/PNG/WEBP) مجاز است.")
 
     cfg = C.load_config_ro()

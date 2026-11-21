@@ -122,6 +122,10 @@ Restart=always
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
@@ -139,7 +143,12 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=$DIR/venv/bin/python $DIR/run_web.py
 Restart=always
 RestartSec=3
+NoNewPrivileges=true
 PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

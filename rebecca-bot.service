@@ -9,6 +9,12 @@ WorkingDirectory=/opt/rebecca-bot
 ExecStart=/opt/rebecca-bot/venv/bin/python3 /opt/rebecca-bot/bot.py
 Restart=always
 RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

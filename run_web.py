@@ -39,7 +39,7 @@ def main():
     if (ss.get("error") or "") != err:
         C.update_config(mark)
 
-    uvicorn.run("webapp:app", host="0.0.0.0", port=port, access_log=False, proxy_headers=True,
+    uvicorn.run("webapp:app", host="0.0.0.0", port=port, access_log=False, server_header=False, proxy_headers=True,
                 forwarded_allow_ips="127.0.0.1", **kw)
 
 

@@ -2540,7 +2540,7 @@ function _userItemFull(u, parent, tab, d) {
     const c = [];
     if (gI.value !== '' && +gI.value !== +u.limit_gb) c.push(`📦 حجم: ${fmtG(u.limit_gb)} ← <b>${fmtG(gI.value)}</b>` + (+gI.value && +u.limit_gb ? ` (${+gI.value > +u.limit_gb ? '+' : ''}${+(+gI.value - +u.limit_gb).toFixed(2)})` : ''));
     if (dI.value !== '' && +dI.value !== +u.days_left) c.push(`📅 ${u.status === 'on_hold' ? 'مدت' : 'اعتبار'}: ${u.unlimited_days ? 'نامحدود' : fmtD(u.days_left)} ← <b>${fmtD(dI.value)}</b>`);
-    if (svcSel.value && +svcSel.value !== u.service_id) c.push(`📂 سرویس: ${svcName} ← <b>${svcSel.selectedOptions[0].textContent}</b>`);
+    if (svcSel.value && +svcSel.value !== u.service_id) c.push(`📂 سرویس: ${_esc(svcName)} ← <b>${_esc(svcSel.selectedOptions[0].textContent)}</b>`);
     if (noteI.value !== (u.note || '')) c.push('📝 یادداشت تغییر کرد');
     return c;
   };
@@ -4276,7 +4276,7 @@ async function vSet() {
   const bkPw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: c.backup_has_password ? 'رمز فعلی تنظیم است — برای تغییر، رمز جدید را بنویسید' : 'رمز بکاپ (حداقل ۶ کاراکتر)' });
   const svPw = h('button', { class: 'btn', type: 'button' }, '🔐 ذخیره رمز بکاپ');
   svPw.onclick = () => run(svPw, async () => {
-    if (bkPw.value.length < 6) throw new Error('رمز بکاپ حداقل ۶ کاراکتر باشد.');
+    if (bkPw.value.length < 8) throw new Error('رمز بکاپ حداقل ۸ کاراکتر باشد.');
     await withCode(code => api('/backup/settings', 'POST', { enabled: autoB.checked, interval_min: +ivSel.value, password: bkPw.value, code }));
     bkPw.value = ''; toast('✅ رمز ذخیره شد؛ از این به بعد بکاپ‌ها رمزنگاری‌شده ارسال می‌شوند'); setTimeout(() => location.reload(), 900);
   });
@@ -4465,7 +4465,7 @@ async function vSet() {
           h('div', { class: 'btns', style: 'margin-top:8px' }, act('🔓 فعال‌سازی مجدد', 'pri', async () => { await api(`/reps/${r.id}/unlock`, 'POST'); await done('حساب نماینده دوباره فعال شد'); }))) : null,
         h('label', {}, 'تغییر رمز به‌صورت دستی'), pwI,
         h('div', { class: 'btns' },
-          act('💾 ثبت رمز دستی', 'pri', async () => { const v = pwI.value; if (v.length < 6) throw new Error('رمز حداقل ۶ کاراکتر باشد.'); const x = await api(`/reps/${r.id}/password`, 'POST', { password: v }); S.repNew = { name: r.name, password: x.password, title: `رمز «${r.name}» تغییر کرد` }; await done('رمز نماینده تغییر کرد'); })),
+          act('💾 ثبت رمز دستی', 'pri', async () => { const v = pwI.value; if (v.length < 8) throw new Error('رمز حداقل ۸ کاراکتر باشد.'); const x = await api(`/reps/${r.id}/password`, 'POST', { password: v }); S.repNew = { name: r.name, password: x.password, title: `رمز «${r.name}» تغییر کرد` }; await done('رمز نماینده تغییر کرد'); })),
         h('div', { class: 'btns', style: 'margin-top:0' },
           act('🎲 رمز تصادفی', '', async () => { const x = await api(`/reps/${r.id}/password`, 'POST', { password: '' }); S.repNew = { name: r.name, password: x.password, title: `رمز جدید برای «${r.name}»` }; await done('رمز تصادفی ساخته شد'); }),
           act(r.blocked ? '✅ رفع مسدودی' : '⛔ مسدود کردن', r.blocked ? '' : 'bad', async () => { await api(`/reps/${r.id}/block`, 'POST', { blocked: !r.blocked }); await done(r.blocked ? 'مسدودی برداشته شد' : 'نماینده مسدود شد'); }),

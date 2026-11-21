@@ -543,7 +543,7 @@ def _normalize(data: dict) -> dict:
     reps = {}
     for rid, r in (cfg.get("reps") if isinstance(cfg.get("reps"), dict) else {}).items():
         if isinstance(r, dict) and r.get("name") and r.get("salt") and r.get("hash"):
-            reps[str(rid)] = {"name": str(r["name"]), "label": str(r.get("label") or "")[:60], "salt": str(r["salt"]), "hash": str(r["hash"]),
+            reps[str(rid)] = {"name": str(r["name"]), "label": str(r.get("label") or "")[:60], "salt": str(r["salt"]), "hash": str(r["hash"]), "iter": max(0, int(r.get("iter") or 0)),
                               "blocked": bool(r.get("blocked")), "created": int(r.get("created") or 0),
                               "locked": bool(r.get("locked")), "fails": max(0, int(r.get("fails") or 0)), "locked_at": int(r.get("locked_at") or 0),
                               "balance": int(r.get("balance") or 0), "panel": str(r.get("panel") or ""), "next_plan": bool(r.get("next_plan")),
@@ -826,10 +826,32 @@ def is_admin(uid: int) -> bool:
 
 
 # ─────────────────────── رمز وب‌پنل (PBKDF2 + کش) ───────────────────────
-def hash_password(pw: str, salt: str | None = None) -> dict:
+PBKDF2_ITERS = 600_000          # توصیه‌ی OWASP برای PBKDF2-HMAC-SHA256
+_LEGACY_ITERS = 200_000          # رکوردهای قدیمی فیلد iter ندارند
+
+
+def hash_password(pw: str, salt: str | None = None, iters: int | None = None) -> dict:
     salt = salt or secrets.token_hex(16)
-    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 200_000).hex()
-    return {"salt": salt, "hash": h}
+    iters = int(iters or PBKDF2_ITERS)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), iters).hex()
+    return {"salt": salt, "hash": h, "iter": iters}
+
+
+def verify_password(pw: str, rec: dict) -> bool:
+    """مقایسه‌ی زمان‌ثابت با همان تعداد تکراری که رکورد با آن ساخته شده (رکورد قدیمی = ۲۰۰هزار)."""
+    try:
+        iters = int(rec.get("iter") or _LEGACY_ITERS)
+        got = hash_password(pw, rec["salt"], iters)["hash"]
+    except (KeyError, ValueError, TypeError):
+        return False
+    return secrets.compare_digest(got, str(rec.get("hash") or ""))
+
+
+def needs_rehash(rec: dict) -> bool:
+    try:
+        return int(rec.get("iter") or _LEGACY_ITERS) < PBKDF2_ITERS
+    except (TypeError, ValueError):
+        return True
 
 
 def prune_attempts(d: dict, now: float, window: float, cap: int = 2000) -> None:
@@ -861,8 +883,13 @@ def check_web_login(user: str, pw: str) -> bool:
     if _auth_ok.get(key, 0) > now:
         return True
     ok_user = secrets.compare_digest(user.encode(), str(w.get("user", "admin")).encode())
-    ok_pass = secrets.compare_digest(hash_password(pw, w["salt"])["hash"], w["hash"])
+    ok_pass = verify_password(pw, w)
     if ok_user and ok_pass:
+        if needs_rehash(w):                      # ارتقای بی‌صدای هش قدیمی (۲۰۰هزار) به ۶۰۰هزار با اولین ورود موفق
+            def _up(c):
+                if c["web"].get("hash") == w["hash"]:
+                    c["web"].update(hash_password(pw))
+            update_config(_up)
         if len(_auth_ok) > 50:
             _auth_ok.clear()
         _auth_ok[key] = now + 300
@@ -1155,8 +1182,8 @@ def create_rep(name: str, password: str = "", label: str = "") -> dict:
     if not REP_NAME_RE.fullmatch(name):
         raise ValueError("نام کاربری نماینده: ۳ تا ۳۲ حرف انگلیسی، عدد، _ . -")
     password = password or secrets.token_urlsafe(9)
-    if len(password) < 6:
-        raise ValueError("رمز نماینده حداقل ۶ کاراکتر باشد.")
+    if len(password) < 8:
+        raise ValueError("رمز نماینده حداقل ۸ کاراکتر باشد.")
     out = {}
 
     def mut(c):
@@ -1173,8 +1200,8 @@ def create_rep(name: str, password: str = "", label: str = "") -> dict:
 
 def reset_rep_password(rid: str, password: str = "") -> str:
     password = password or secrets.token_urlsafe(9)
-    if len(password) < 6:
-        raise ValueError("رمز نماینده حداقل ۶ کاراکتر باشد.")
+    if len(password) < 8:
+        raise ValueError("رمز نماینده حداقل ۸ کاراکتر باشد.")
 
     def mut(c):
         if rid not in c["reps"]:
@@ -1210,7 +1237,7 @@ def check_rep_login(name: str, pw: str) -> tuple[str, bool] | None:
         hash_password(pw or "x", "00" * 16)          # زمان پاسخ برای نام ناموجود هم مشابه باشد
         return None
     rid, r = f
-    if secrets.compare_digest(hash_password(pw, r["salt"])["hash"], r["hash"]):
+    if verify_password(pw, r):
         return rid, r["blocked"]
     return None
 
@@ -1231,11 +1258,14 @@ def rep_login(name: str, pw: str) -> tuple[str, str | None]:
     rid, r = f
     if r.get("locked"):
         return "locked", rid                          # رمز بررسی نمی‌شود تا حدس‌زدن روی حساب قفل‌شده ممکن نباشد
-    if secrets.compare_digest(hash_password(pw, r["salt"])["hash"], r["hash"]):
-        if r.get("fails"):
+    if verify_password(pw, r):
+        if r.get("fails") or needs_rehash(r):
             def ok(c):
-                if rid in c["reps"]:
-                    c["reps"][rid]["fails"] = 0
+                rr = c["reps"].get(rid)
+                if rr:
+                    rr["fails"] = 0
+                    if needs_rehash(rr):         # ارتقای بی‌صدای هش قدیمی نماینده
+                        rr.update(hash_password(pw))
             update_config(ok)
         return ("blocked" if r["blocked"] else "ok"), rid
     state = {"v": "bad"}
