@@ -1050,11 +1050,17 @@ def parse_backup(text: str) -> tuple[dict, list | None]:
     return data, None
 
 
+_FP_SKIP_KEYS = ("login_log", "audit_log")      # فقط لاگ‌ها؛ هر ورود/عملیات نباید یک بکاپ جدید بسازد
+
+
 def _backup_fingerprint() -> str:
-    """اثر انگشت محتوای بکاپ (بدون زمان ساخت)؛ برای ارسال نکردنِ بکاپ تکراری وقتی چیزی عوض نشده."""
+    """اثر انگشت محتوای بکاپ (بدون زمان ساخت و لاگ‌های پرنوسان)؛ برای ارسال نکردنِ بکاپ تکراری وقتی چیزی عوض نشده."""
     import hashlib
     d = json.loads(full_backup_bytes().decode("utf-8"))
     d.pop("created", None)
+    if isinstance(d.get("config"), dict):
+        for k in _FP_SKIP_KEYS:
+            d["config"].pop(k, None)
     return hashlib.sha256(json.dumps(d, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
@@ -1072,17 +1078,50 @@ def _load_backup_state() -> dict:
         return {}
 
 
-def _save_backup_state(iv: int, slot: int, **extra) -> None:
+_STATE_TLOCK = threading.Lock()
+
+
+def _patch_backup_state(**kw) -> None:
+    """فقط کلیدهای داده‌شده را در backup_state.json عوض می‌کند. امن در برابر دو پروسه (ربات + وب‌پنل) و چند نخ:
+    قفل فایل + فایل موقتِ یکتا + خواندنِ تازه زیر قفل (قبلاً دو پروسه روی یک .tmp می‌نوشتند و داده‌ی هم را می‌پراندند)."""
+    import tempfile
+    path = _backup_state_file()
     try:
-        path = _backup_state_file()
-        tmp = path + ".tmp"
-        st = _load_backup_state()
-        st.update({"iv": iv, "slot": slot}, **extra)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(st, f)
-        os.replace(tmp, path)
+        with _STATE_TLOCK:
+            lockf = None
+            try:
+                import fcntl
+                lockf = open(path + ".lock", "a")
+                fcntl.flock(lockf, fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                lockf = None
+            try:
+                st = _load_backup_state()
+                st.update(kw)
+                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".bks-")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(st, f)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.chmod(tmp, 0o600)
+                    os.replace(tmp, path)
+                finally:
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+            finally:
+                if lockf:
+                    lockf.close()
     except OSError as e:
         log.warning("backup state save: %s", e)
+
+
+def _save_backup_state(iv: int, slot: int, **extra) -> None:
+    _patch_backup_state(iv=iv, slot=slot, **extra)
+
+
+def backup_state_info() -> dict:
+    return _load_backup_state()
 
 
 def _backup_slot(iv: int) -> int:
@@ -1118,15 +1157,15 @@ def _chat_id(v):
     return int(v) if v.lstrip("-").isdigit() else v
 
 
-async def _live_push(bot, targets: list, msgs: dict) -> int:
-    """فایل بکاپ را «داخل همان پیام قبلی» جایگزین می‌کند (ویرایش بی‌صدا)؛ فقط اگر پیام وجود نداشت پیام تازه می‌فرستد."""
-    import io
-    from telegram import InputMediaDocument
+async def _live_push(bot, targets: list, msgs: dict) -> set:
+    """فایل بکاپ را «داخل همان پیام قبلی» جایگزین می‌کند (ویرایش بی‌صدا)؛ فقط اگر پیام وجود نداشت پیام تازه می‌فرستد.
+    مجموعه‌ی مقصدهایی را برمی‌گرداند که موفق شدند (تا مقصد خراب باعث ارسال دوباره به بقیه نشود)."""
+    import json as _json
     try:
         data = await asyncio.to_thread(full_backup_bytes)
     except (OSError, ValueError) as e:
         log.warning("live backup read: %s", e)
-        return 0
+        return set()
     name = "rebecca-live-backup.json"
     pw = load_config()["backup"].get("password") or ""
     cap = f"🟢 بکاپ آنلاین — آخرین به‌روزرسانی: {datetime.now(TEHRAN).strftime('%Y-%m-%d %H:%M')} (تهران)"
@@ -1135,21 +1174,24 @@ async def _live_push(bot, targets: list, msgs: dict) -> int:
             data = await asyncio.to_thread(encrypt_backup, data, pw)
         except Exception as e:  # noqa: BLE001
             log.warning("live backup encrypt: %s", e)           # هرگز بدون رمز نمی‌فرستیم
-            return 0
+            return set()
         name, cap = name[:-5] + ".enc", cap + "\n🔐 رمزنگاری‌شده؛ برای ریستور رمز بکاپ لازم است."
+    if len(data) > BACKUP_MAX_BYTES:
+        log.warning("live backup too large: %d bytes", len(data))
+        return set()
     try:
-        b = backup_summary()
+        cfg_now = load_config()
+        b = backup_summary(cfg_now)
         cap += f"\n👥 {b['reps']} نماینده · {b['rep_users']} کاربر"
-        cap += f"\n💰 جمع موجودی نماینده‌ها: {sum(r['balance'] for r in load_config()['reps'].values()):,} تومان"
+        cap += f"\n💰 جمع موجودی نماینده‌ها: {sum(r['balance'] for r in cfg_now['reps'].values()):,} تومان"
         cap += f"\n🛒 فروشگاه: {b['shop_customers']} مشتری · {b['shop_services']} سرویس · {b['shop_orders']} سفارش · جمع موجودی مشتری‌ها {b['shop_balance']:,} تومان"
     except Exception:  # noqa: BLE001
         pass
-    ok = 0
+    ok: set = set()
     for chat in targets:
         key, mid, done = str(chat), msgs.get(str(chat)), False
         if mid:
             try:
-                import json as _json
                 await _tg_curl(bot.token, "editMessageMedia", {"chat_id": str(_chat_id(chat)), "message_id": str(int(mid)),
                                "media": _json.dumps({"type": "document", "media": "attach://doc", "caption": cap[:1000]}, ensure_ascii=False)},
                                ("doc", name, data), 90)
@@ -1171,12 +1213,14 @@ async def _live_push(bot, targets: list, msgs: dict) -> int:
                 done = True
             except Exception as e:  # noqa: BLE001
                 log.warning("live backup send %s: %s", chat, e)
-        ok += 1 if done else 0
+        if done:
+            ok.add(str(chat))
     return ok
 
 
 async def _live_step(bot, cfg: dict) -> None:
-    """«بکاپ آنلاین»: هر بار محتوا عوض شد (حداکثر هر LIVE_MIN_GAP ثانیه) همان یک پیام در تلگرام به‌روز می‌شود."""
+    """«بکاپ آنلاین»: هر بار محتوا عوض شد (حداکثر هر LIVE_MIN_GAP ثانیه) همان یک پیام در تلگرام به‌روز می‌شود.
+    وضعیت هر مقصد جدا نگه داشته می‌شود؛ اگر یکی از مقصدها خطا داد فقط همان با تأخیرِ فزاینده دوباره امتحان می‌شود."""
     bc = cfg["backup"]
     targets = [bc["live_chat"]] if bc.get("live_chat") else list(cfg["admin_ids"])
     if not targets:
@@ -1185,32 +1229,65 @@ async def _live_step(bot, cfg: dict) -> None:
     lv = st.get("live") if isinstance(st.get("live"), dict) else {}
     import hashlib
     tk = hashlib.sha256((bc.get("bot_token") or "").encode()).hexdigest()[:10]
-    msgs = lv.get("msgs") if isinstance(lv.get("msgs"), dict) else {}
+    msgs = dict(lv.get("msgs")) if isinstance(lv.get("msgs"), dict) else {}
+    tfp = dict(lv.get("tfp")) if isinstance(lv.get("tfp"), dict) else {}
     if lv.get("tk") != tk:                                       # فرستنده عوض شده: پیام‌های ربات قبلی قابل ویرایش نیستند
-        msgs = {}
-        lv = {}
+        msgs, tfp, lv = {}, {}, {}
     now = _time.time()
     if now < float(lv.get("retry") or 0):
         return
     fp = await asyncio.to_thread(_backup_fingerprint)
-    missing = any(str(t) not in msgs for t in targets)
-    if fp == lv.get("fp") and not missing:
+    todo = [t for t in targets if str(t) not in msgs or tfp.get(str(t)) != fp]
+    if not todo:
         return
+    missing = any(str(t) not in msgs for t in targets)
     if not missing and now - float(lv.get("ts") or 0) < LIVE_MIN_GAP:
         return
-    ok = await _live_push(bot, targets, msgs)
-    extra = {"live": {"fp": fp if ok else lv.get("fp"), "ts": now if ok else lv.get("ts", 0), "msgs": msgs, "retry": 0 if ok else now + 120, "tk": tk}}
-    if ok:
+    okset = await _live_push(bot, todo, msgs)
+    for t in okset:
+        tfp[t] = fp
+    failed = len(okset) < len(todo)
+    fails = (int(lv.get("fails") or 0) + 1) if failed else 0
+    retry = now + min(120 * 2 ** (fails - 1), 1800) if failed else 0
+    live = {"tfp": tfp, "ts": now if okset else lv.get("ts", 0), "msgs": msgs, "retry": retry, "fails": fails, "tk": tk}
+    extra = {"live": live}
+    if okset:
         extra["last_ok"] = now
-    await asyncio.to_thread(_save_backup_state, int(st.get("iv") or 0), int(st.get("slot") or 0), **extra)
+        extra["last_err"] = ""
+    await asyncio.to_thread(_patch_backup_state, **extra)
+
+
+BACKUP_ALERT_GAP = 6 * 3600     # تا وقتی مشکل هست، هر چند ساعت یک‌بار به ادمین یادآوری می‌شود (نه هر ۲ دقیقه)
+BACKUP_MAX_BYTES = 49_000_000   # سقف آپلود ربات‌ها در تلگرام ۵۰MB است
 
 
 async def backup_loop(bot):
     """بکاپ اصلی را طبق زمان‌بندی ثابت به ادمین‌ها می‌فرستد (چه تغییری شده باشد چه نه).
     interval_min = ۱۴۴۰ ← روزانه ساعت ۱۲:۰۰ تهران؛ کمتر ← سر ساعتِ مضرب N دقیقه (مثلاً ۶۰ دقیقه: ۱۰:۰۰، ۱۱:۰۰، ...).
     آخرین بازه‌ی ارسال‌شده روی دیسک ذخیره می‌شود؛ پس ریستارت ربات زمان‌بندی را به‌هم نمی‌زند و اگر ربات
-    موقع بکاپ خاموش بود، بعد از روشن شدن همان بکاپ جا‌مانده فرستاده می‌شود."""
+    موقع بکاپ خاموش بود، بعد از روشن شدن همان بکاپ جا‌مانده فرستاده می‌شود.
+    اولین بار که بکاپ فعال می‌شود یک بکاپ فوری فرستاده می‌شود تا کارکردش دیده شود.
+    در خطا: تلاش مجدد با تأخیر فزاینده (۲، ۴، ۸ … تا ۶۰ دقیقه) و هشدار فقط یک‌بار و سپس هر ۶ ساعت."""
     retry_after = 0.0
+    fails = 0
+    last_alert = 0.0
+
+    async def alert(text: str, cfg: dict) -> None:
+        nonlocal last_alert
+        if not (cfg.get("smart_alerts", {}).get("backup_failed", True) and cfg.get("admin_ids")):
+            return
+        if _time.time() - last_alert < BACKUP_ALERT_GAP:
+            return
+        last_alert = _time.time()
+        for uid in cfg["admin_ids"]:
+            try:
+                await bot.send_message(uid, text)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def backoff() -> float:
+        return min(120 * 2 ** (fails - 1), 3600)
+
     while True:
         await asyncio.sleep(20)
         try:
@@ -1229,8 +1306,12 @@ async def backup_loop(bot):
                     log.warning("live backup: %s", e)
             cur = _backup_slot(iv)
             st = await asyncio.to_thread(_load_backup_state)
-            if st.get("iv") != iv or not isinstance(st.get("slot"), int):
-                # اولین اجرا یا تغییر زمان‌بندی: از بازه‌ی بعدی شروع می‌شود (بدون ارسال فوری)
+            if st.get("iv") is None or not isinstance(st.get("slot"), int):
+                # اولین اجرا: همین حالا یک بکاپ بفرست (بازه‌ی قبلی را «انجام‌نشده» ثبت کن)
+                await asyncio.to_thread(_save_backup_state, iv, cur - 1)
+                st = {"iv": iv, "slot": cur - 1}
+            elif st.get("iv") != iv:
+                # تغییر زمان‌بندی: از بازه‌ی بعدی شروع می‌شود (بدون ارسال فوری)
                 await asyncio.to_thread(_save_backup_state, iv, cur)
                 continue
             if cur <= st["slot"] or _time.time() < retry_after:
@@ -1245,27 +1326,20 @@ async def backup_loop(bot):
                 " — شامل همه‌ی تنظیمات، نماینده‌ها، موجودی‌ها و تراکنش‌ها؛ شامل توکن و رمزهاست، جای امن نگه دارید."
             if await send_backup(bbot, cfg["admin_ids"], cap):
                 await asyncio.to_thread(_save_backup_state, iv, cur, **({"sent_fp": fp_now} if fp_now else {}))
-                retry_after = 0.0
+                fails, retry_after, last_alert = 0, 0.0, 0.0
             else:
-                if cfg.get("smart_alerts", {}).get("backup_failed", True):
-                    for uid in cfg["admin_ids"]:
-                        try:
-                            await bot.send_message(uid, "⚠️ ارسال بکاپ ربکا ناموفق بود؛ ربات تا ۲ دقیقه دیگر دوباره تلاش می‌کند." + ("\nربات بکاپ را با حساب ادمین Start کرده‌اید؟ (بدون Start تلگرام اجازه‌ی پیام نمی‌دهد)" if bbot is not bot else ""))
-                        except Exception:
-                            pass
-                retry_after = _time.time() + 120           # ارسال ناموفق: ۲ دقیقه بعد دوباره
+                fails += 1
+                retry_after = _time.time() + backoff()
+                hint = "\nربات بکاپ را با حساب ادمین Start کرده‌اید؟ (بدون Start تلگرام اجازه‌ی پیام نمی‌دهد)" if bbot is not bot else ""
+                await alert(f"⚠️ ارسال بکاپ ربکا ناموفق بود؛ ربات دوباره تلاش می‌کند (حدود {int(backoff() // 60)} دقیقه‌ی دیگر)."
+                            + (f"\nعلت: {esc(LAST_BACKUP_ERR[:300])}" if LAST_BACKUP_ERR else "") + hint, cfg)
         except Exception as e:  # noqa: BLE001
             log.warning("backup loop: %s", e)
+            fails += 1
+            retry_after = _time.time() + backoff()
             try:
-                cfg = load_config()
-                if cfg.get("smart_alerts", {}).get("backup_failed", True) and cfg.get("admin_ids") and _time.time() >= retry_after:
-                    for uid in cfg["admin_ids"]:
-                        try:
-                            await bot.send_message(uid, f"⚠️ خطا در فرایند بکاپ ربکا: {esc(str(e)[:500])}")
-                        except Exception:
-                            pass
-                    retry_after = _time.time() + 120
-            except Exception:
+                await alert(f"⚠️ خطا در فرایند بکاپ ربکا: {esc(str(e)[:500])}", load_config())
+            except Exception:  # noqa: BLE001
                 pass
 
 
@@ -1318,62 +1392,79 @@ async def _tg_curl(token: str, method: str, fields: dict, file=None, timeout: in
 LAST_BACKUP_ERR = ""
 
 
+def _backup_fail(msg: str) -> int:
+    global LAST_BACKUP_ERR
+    LAST_BACKUP_ERR = msg
+    log.warning("backup: %s", msg)
+    _patch_backup_state(last_err=msg[:300], err_ts=_time.time())
+    return 0
+
+
 async def send_backup(bot, admin_ids, caption: str, manual: bool = False) -> int:
-    """بکاپ اصلی را به ادمین‌ها می‌فرستد؛ تعداد ارسال موفق را برمی‌گرداند."""
+    """بکاپ اصلی را به ادمین‌ها می‌فرستد؛ تعداد ارسال موفق را برمی‌گرداند. علت خطا در LAST_BACKUP_ERR و backup_state.json می‌ماند."""
     import io
+    global LAST_BACKUP_ERR
+    LAST_BACKUP_ERR = ""
     try:
         data = await asyncio.to_thread(full_backup_bytes)
     except (OSError, ValueError) as e:
-        log.warning("backup read: %s", e)
-        return 0
+        return _backup_fail(f"خواندن فایل تنظیمات ناموفق: {e}")
     name = f"rebecca-full-backup-{tehran_day()}.json"
     pw = load_config()["backup"].get("password") or ""
     if pw:                                                     # رمز تنظیم شده: فایل رمزنگاری‌شده فرستاده می‌شود
         try:
             data = await asyncio.to_thread(encrypt_backup, data, pw)
         except Exception as e:  # noqa: BLE001
-            log.warning("backup encrypt: %s", e)               # هرگز بکاپ بدون رمز نمی‌فرستیم
-            return 0
+            return _backup_fail(f"رمزنگاری بکاپ ناموفق: {e}")   # هرگز بکاپ بدون رمز نمی‌فرستیم
         name = name[:-5] + ".enc"
         caption += "\n🔐 این فایل رمزنگاری شده است؛ برای ریستور رمز بکاپ را لازم دارید."
+    if len(data) > BACKUP_MAX_BYTES:
+        return _backup_fail(f"حجم بکاپ ({len(data) // 1024 // 1024}MB) از سقف ۵۰MB تلگرام بیشتر است؛ لاگ‌های قدیمی را پاک کنید.")
     try:
-        b = backup_summary()
+        cfg_now = load_config()
+        b = backup_summary(cfg_now)
         caption += f"\n👥 {b['reps']} نماینده · {b['rep_users']} کاربر تخصیص‌یافته در این بکاپ است."
-        caption += f"\n💰 مجموع موجودی نماینده‌ها: {sum(r['balance'] for r in load_config()['reps'].values()):,} تومان"
+        caption += f"\n💰 مجموع موجودی نماینده‌ها: {sum(r['balance'] for r in cfg_now['reps'].values()):,} تومان"
         caption += f"\n🛒 فروشگاه: {b['shop_customers']} مشتری · {b['shop_services']} سرویس · {b['shop_orders']} سفارش · مجموع موجودی مشتری‌ها {b['shop_balance']:,} تومان"
     except Exception:  # noqa: BLE001
         pass
-    global LAST_BACKUP_ERR
-    LAST_BACKUP_ERR = ""
     tries, tmo = (2, 40) if manual else (4, 90)
     cap = caption[:1000]
-    sent = 0
-    for uid in admin_ids:
+    sent, failed = 0, []
+    for uid in dict.fromkeys(str(x) for x in admin_ids):
+        ok = False
         for attempt in range(tries):
             try:
-                await _tg_curl(bot.token, "sendDocument", {"chat_id": str(uid), "caption": cap}, ("document", name, data), tmo)
-                sent += 1
+                await _tg_curl(bot.token, "sendDocument", {"chat_id": uid, "caption": cap}, ("document", name, data), tmo)
+                ok = True
                 break
             except TgError as e:
-                LAST_BACKUP_ERR = str(e)
+                LAST_BACKUP_ERR = f"{uid}: {e}"
                 log.warning("send backup to %s (attempt %d/%d): %s", uid, attempt + 1, tries, e)
                 if e.code in (400, 401, 403, 404):             # بلاک/Start نشده/توکن یا chat_id اشتباه: تلاش مجدد بی‌فایده است
                     break
                 if attempt < tries - 1:
-                    await asyncio.sleep(min(e.retry_after, 30) + 1 if e.retry_after else (5, 15, 30)[attempt])
+                    await asyncio.sleep(min(e.retry_after, 30) + 1 if e.retry_after else (5, 15, 30)[min(attempt, 2)])
             except FileNotFoundError:                          # curl نصب نیست: مسیر قدیمی کتابخانه
                 try:
                     bio = io.BytesIO(data)
                     bio.name = name
-                    await bot.send_document(uid, bio, caption=cap, read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
-                    sent += 1
+                    await bot.send_document(int(uid) if uid.lstrip("-").isdigit() else uid, bio, caption=cap, read_timeout=60, write_timeout=180, connect_timeout=20, pool_timeout=20)
+                    ok = True
                 except Exception as e:  # noqa: BLE001
-                    LAST_BACKUP_ERR = f"{type(e).__name__}: {e}"
+                    LAST_BACKUP_ERR = f"{uid}: {type(e).__name__}: {e}"
                     log.warning("send backup to %s: %s", uid, e)
                 break
+        if ok:
+            sent += 1
+        else:
+            failed.append(uid)
     if sent:                                                   # آخرین بکاپِ واقعاً ارسال‌شده؛ صفحه‌ی «سلامت سیستم» از آن می‌خواند
-        st = _load_backup_state()
-        _save_backup_state(int(st.get("iv") or 0), int(st.get("slot") or 0), last_ok=_time.time())
+        _patch_backup_state(last_ok=_time.time(), last_err=(f"ارسال به {len(failed)} ادمین ناموفق بود: {', '.join(failed)} ({LAST_BACKUP_ERR[-120:]})" if failed else ""),
+                            err_ts=_time.time() if failed else 0, failed=failed)
+        LAST_BACKUP_ERR = ""
+    else:
+        _patch_backup_state(last_err=(LAST_BACKUP_ERR or "ارسال ناموفق")[:300], err_ts=_time.time(), failed=failed)
     return sent
 
 
