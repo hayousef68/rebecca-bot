@@ -2494,18 +2494,26 @@ async def health(request: Request):
         add("cfgfile", "فایل تنظیمات", "bad", "فایل پیدا نشد")
 
     bk = cfg["backup"]
-    last = sales.backup_last_ok()
+    bst = sales.backup_state_info()
+    last = float(bst.get("last_ok") or 0)
+    berr = str(bst.get("last_err") or "")
     iv = int(bk.get("interval_min") or 1440)
     if not bk.get("enabled"):
         add("backup", "بکاپ خودکار", "warn", "خاموش است؛ بدون بکاپ، خرابیِ دیسک یعنی از دست رفتن موجودی‌ها")
     elif not last:
-        add("backup", "بکاپ خودکار", "warn", "روشن است ولی هنوز بکاپ موفقی ثبت نشده")
+        if berr:
+            add("backup", "بکاپ خودکار", "bad", "هنوز بکاپ موفقی ثبت نشده؛ آخرین خطا: " + berr)
+        else:
+            add("backup", "بکاپ خودکار", "warn", "روشن است ولی هنوز بکاپ موفقی ثبت نشده (اگر ربات روشن باشد تا چند ثانیه‌ی دیگر اولین بکاپ ارسال می‌شود)")
     else:
         age = time.time() - last
         lim = 26 * 3600
         late = age > lim and (iv >= 1440)
-        add("backup", "آخرین بکاپ", "bad" if late else ("warn" if age > lim else "ok"),
-            f"{_fmt_dur(age)} پیش ارسال شد" + ("" if age <= lim else (" ← بکاپ روزانه عقب افتاده؛ تلگرام/ربات را بررسی کنید" if iv >= 1440 else " (در بازه‌های کوتاه فقط با تغییر تنظیمات بکاپ می‌آید؛ اگر تغییری نبوده طبیعی است)")))
+        lvl = "bad" if late else ("warn" if age > lim else "ok")
+        det = f"{_fmt_dur(age)} پیش ارسال شد" + ("" if age <= lim else (" ← بکاپ روزانه عقب افتاده؛ تلگرام/ربات را بررسی کنید" if iv >= 1440 else " (در بازه‌های کوتاه فقط با تغییر تنظیمات بکاپ می‌آید؛ اگر تغییری نبوده طبیعی است)"))
+        if berr:
+            lvl, det = ("bad" if lvl == "bad" else "warn"), det + " · خطا: " + berr
+        add("backup", "آخرین بکاپ", lvl, det)
 
     pend = [t for t in cfg["wallet_tx"] if t["state"] == "pending" and t["kind"] == "purchase"]
     stale = [t for t in pend if time.time() - t["ts"] > 600]
