@@ -31,7 +31,7 @@ DEFAULT_SCHEMA = {
     "resets": "user_usage_logs", "r_user": "user_id", "r_at": "reset_at",
     "services": "services", "s_id": "id", "s_name": "name",
     # مصرف واقعی پنل (ردیف‌های ساعتی مصرف هر کاربر)
-    "usage": "node_user_usages", "uu_user": "user_id", "uu_at": "created_at", "uu_bytes": "used_traffic",
+    "u_used": "used_traffic", "usage": "node_user_usages", "uu_user": "user_id", "uu_at": "created_at", "uu_bytes": "used_traffic",
 }
 GB = 1024 ** 3
 
@@ -774,17 +774,63 @@ def panel_usage_bytes(d1: str, d2: str, partial: bool):
         return None
 
 
+def unused_gb(rows: list[dict]):
+    """حجمِ فروخته‌شده ولی مصرف‌نشده (گیگ، بر مبنای ترافیک واقعی) برای کاربرانی که در این بازه «ساخت/تمدید» شده‌اند.
+    برای هر کاربر: min(حجم آخرین فروش، max(0, سقف فعلی − مصرف فعلی))؛ مثلاً ۳۰ گیگ فروخته و ۲۰ مصرف → ۱۰ گیگ.
+    همکاری بر ضریب مصرف تقسیم می‌شود. پیوست/پلن بعدی و تست حساب نمی‌شوند. خطا → None."""
+    try:
+        cfg = load_config()["sales"]
+        mult = ham_mult(cfg)
+        last: dict[str, tuple[float, bool]] = {}
+        for r in rows:                                   # rows به ترتیب زمان‌اند؛ آخرین فروش هر کاربر می‌ماند
+            if r["kind"] not in ("new", "renew") or _is_ignored(r, cfg):
+                continue
+            gb = (r.get("data_limit") or 0) / GB
+            if gb > 0:
+                last[str(r["username"])] = (gb, _is_hamkari(r, cfg))
+        if not last:
+            return 0.0
+        s = _schema()
+        U = _ident(s["users"])
+        cur: dict[str, tuple[float, float]] = {}
+        conn = _connect()
+        try:
+            with conn.cursor() as c:
+                names = list(last)
+                for i in range(0, len(names), 500):
+                    part = names[i:i + 500]
+                    c.execute(f"SELECT {_ident(s['u_name'])} AS n, {_ident(s['u_limit'])} AS lim, {_ident(s['u_used'])} AS used FROM {U} "
+                              f"WHERE {_ident(s['u_name'])} IN ({','.join(['%s'] * len(part))})", tuple(part))
+                    for x in c.fetchall():
+                        cur[str(x["n"])] = (float(x["lim"] or 0) / GB, float(x["used"] or 0) / GB)
+        finally:
+            conn.close()
+        total = 0.0
+        for u, (gb, ham) in last.items():
+            if u not in cur:
+                continue
+            lim, used = cur[u]
+            left = min(gb, max(0.0, lim - used))
+            total += left / mult if ham else left
+        return total
+    except Exception:  # noqa: BLE001
+        log.exception("unused gb")
+        return None
+
+
 def compute(day: str, partial: bool) -> dict:
     w, n = wallet_income(day, day, partial)
-    return compute_rows(fetch_events(day, partial), w, n, panel_usage_bytes(day, day, partial))
+    rows = fetch_events(day, partial)
+    return compute_rows(rows, w, n, panel_usage_bytes(day, day, partial), unused_gb(rows))
 
 
 def compute_range(d1: str, d2: str, partial: bool) -> dict:
     w, n = wallet_income(d1, d2, partial)
-    return compute_rows(fetch_events_range(d1, d2, partial), w, n, panel_usage_bytes(d1, d2, partial))
+    rows = fetch_events_range(d1, d2, partial)
+    return compute_rows(rows, w, n, panel_usage_bytes(d1, d2, partial), unused_gb(rows))
 
 
-def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0, usage_bytes: float | None = None) -> dict:
+def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0, usage_bytes: float | None = None, unused: float | None = None) -> dict:
     """wallet = جمع خالص شارژ کیف پول نماینده‌ها (تومان). به گیگ همکاری تبدیل می‌شود (مبلغ ÷ قیمت هر گیگ همکاری، مثلاً ۳٬۰۰۰)
     و مثل فروش همکاری هم در درآمد و هم در هزینه‌ی خرید حجم حساب می‌شود."""
     cfg = load_config()["sales"]
@@ -809,8 +855,7 @@ def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0, usage_byt
     tb_gb = float(cfg.get("tb_gb", 1000)) or 1000.0
     sold_gb = ham_gb + single_gb + extra_gb                    # حجم اسمی فروخته‌شده به مشتری‌ها (سهمیه‌ی ثبت‌شده)
     panel_gb = (usage_bytes / GB) if usage_bytes is not None else None
-    # حجمی که مشتری‌ها نخریده‌اند/مصرف نکرده‌اند و از خرید ما برگشته = حجم واقعیِ فروخته‌شده − مصرف واقعی پنل (منفی = مصرف بیش از فروش)
-    returned_gb = (real_gb - panel_gb) if panel_gb is not None else None
+    returned_gb = unused                                       # فروخته‌شده ولی مصرف‌نشده (از روی مصرف فعلی اکانت‌ها)
     return {"tb_gb": tb_gb, "sold_gb": sold_gb, "sold_tb": sold_gb / tb_gb, "real_gb": real_gb, "panel_gb": panel_gb,
             "panel_tb": (panel_gb / tb_gb) if panel_gb is not None else None, "returned_gb": returned_gb,
             "usage_cost": (panel_gb * per_gb_cost) if panel_gb is not None else None, **{"cl": cl, "wallet": wallet, "wallet_n": wallet_n, "wallet_gb": wallet_gb, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
@@ -871,11 +916,11 @@ def _render(title: str, d: dict, html: bool) -> str:
         L.append("  📊 مصرف پنل: نامشخص (جدول مصرف در دیتابیس خوانده نشد؛ /dbcheck)")
     else:
         L.append(f"  📊 مصرف پنل: {d['panel_tb']:,.2f} ترابایت ({_t(d['panel_gb'])} گیگ)")
-        rg = d["returned_gb"]
-        if rg >= 0:
-            L.append(f"  ↩️ مصرف‌نشده و برگشتی به حساب: {_t(rg)} گیگ ({rg / d['tb_gb']:,.2f} ترابایت)")
-        else:
-            L.append(f"  ⚠️ مصرف بیش از فروش: {_t(-rg)} گیگ ({-rg / d['tb_gb']:,.2f} ترابایت)")
+    rg = d["returned_gb"]
+    if rg is None:
+        L.append("  ↩️ مصرف‌نشده: نامشخص (خواندن مصرف اکانت‌ها از دیتابیس ناموفق بود)")
+    else:
+        L.append(f"  ↩️ فروخته‌شده ولی مصرف‌نشده (برگشتی به حساب): {_t(rg)} گیگ ({rg / d['tb_gb']:,.2f} ترابایت)")
     text = "\n".join(L)
     return _html.escape(text) if html else text
 

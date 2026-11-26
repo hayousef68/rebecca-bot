@@ -3286,7 +3286,7 @@ async function vHome() {
           mini('👛 کیف پول نماینده', fa(r.wallet || 0), 'var(--info)'),
           mini('🛒 فروخته‌شده (TB)', r.sold_tb == null ? '—' : r.sold_tb.toFixed(2)),
           mini('📊 مصرف پنل (TB)', r.panel_tb == null ? '—' : r.panel_tb.toFixed(2), 'var(--info)'),
-          mini(r.returned_gb != null && r.returned_gb < 0 ? '⚠️ مصرف بیش از فروش (GB)' : '↩️ مصرف‌نشده/برگشتی (GB)', r.returned_gb == null ? '—' : fa(Math.abs(r.returned_gb)), r.returned_gb != null && r.returned_gb < 0 ? 'var(--warn)' : 'var(--ok)'))));
+          mini('↩️ فروخته‌شده ولی مصرف‌نشده (GB)', r.returned_gb == null ? '—' : fa(r.returned_gb), 'var(--ok)'))));
       extraBox.replaceChildren(...(r.extra.length ? [h('div', { class: 'card' }, h('h2', {}, '📐 حجم‌های خارج از لیست قیمت'),
         h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'با ثبت قیمت، از گزارش بعدی جزو فروش‌های لیست حساب می‌شود.'),
         ...r.extra.map(x => {
