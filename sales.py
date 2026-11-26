@@ -30,6 +30,8 @@ DEFAULT_SCHEMA = {
     "u_limit": "data_limit", "u_expire": "expire", "u_hold": "on_hold_expire_duration", "u_service": "service_id",
     "resets": "user_usage_logs", "r_user": "user_id", "r_at": "reset_at",
     "services": "services", "s_id": "id", "s_name": "name",
+    # مصرف واقعی پنل (ردیف‌های ساعتی مصرف هر کاربر)
+    "usage": "node_user_usages", "uu_user": "user_id", "uu_at": "created_at", "uu_bytes": "used_traffic",
 }
 GB = 1024 ** 3
 
@@ -748,17 +750,41 @@ def rep_daily_sales(rid: str, days: int = 7) -> list[dict]:
     return out
 
 
+def panel_usage_bytes(d1: str, d2: str, partial: bool):
+    """مصرف واقعی پنل (بایت) در بازه‌ی روزهای تهران: جمع ردیف‌های مصرف کاربران (node_user_usages).
+    همان فیلتر ادمینِ گزارش فروش اعمال می‌شود. اگر جدول/ستون در دسترس نباشد None برمی‌گردد (گزارش خراب نمی‌شود).
+    نام جدول/ستون‌ها در config.json > sales.schema (usage, uu_user, uu_at, uu_bytes) قابل تغییر است."""
+    try:
+        s = _schema()
+        a, b = _bounds_days(d1, d2, partial)
+        U, T = _ident(s["users"]), _ident(s["usage"])
+        conn = _connect()
+        try:
+            with conn.cursor() as c:
+                fsql, fpar = _admin_filter(conn, s)
+                c.execute(f"SELECT COALESCE(SUM(t.{_ident(s['uu_bytes'])}), 0) AS v FROM {T} t "
+                          f"JOIN {U} u ON u.{_ident(s['u_id'])} = t.{_ident(s['uu_user'])} "
+                          f"WHERE t.{_ident(s['uu_at'])} >= %s AND t.{_ident(s['uu_at'])} < %s" + fsql, (a, b) + fpar)
+                row = c.fetchone() or {}
+        finally:
+            conn.close()
+        return float(row.get("v") or 0)
+    except Exception:  # noqa: BLE001
+        log.exception("panel usage")
+        return None
+
+
 def compute(day: str, partial: bool) -> dict:
     w, n = wallet_income(day, day, partial)
-    return compute_rows(fetch_events(day, partial), w, n)
+    return compute_rows(fetch_events(day, partial), w, n, panel_usage_bytes(day, day, partial))
 
 
 def compute_range(d1: str, d2: str, partial: bool) -> dict:
     w, n = wallet_income(d1, d2, partial)
-    return compute_rows(fetch_events_range(d1, d2, partial), w, n)
+    return compute_rows(fetch_events_range(d1, d2, partial), w, n, panel_usage_bytes(d1, d2, partial))
 
 
-def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0) -> dict:
+def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0, usage_bytes: float | None = None) -> dict:
     """wallet = جمع خالص شارژ کیف پول نماینده‌ها (تومان). به گیگ همکاری تبدیل می‌شود (مبلغ ÷ قیمت هر گیگ همکاری، مثلاً ۳٬۰۰۰)
     و مثل فروش همکاری هم در درآمد و هم در هزینه‌ی خرید حجم حساب می‌شود."""
     cfg = load_config()["sales"]
@@ -778,10 +804,18 @@ def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0) -> dict:
     mult = ham_mult(cfg)
     per_gb_cost = int(cfg.get("buy_per_tb", 750000)) / float(cfg.get("tb_gb", 1000))
     ham_real_gb = ham_gb / mult
-    cost = (ham_real_gb + single_gb + extra_gb) * per_gb_cost
-    return {"cl": cl, "wallet": wallet, "wallet_n": wallet_n, "wallet_gb": wallet_gb, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
+    real_gb = ham_real_gb + single_gb + extra_gb              # حجمِ واقعی فروخته‌شده (مبنای هزینه‌ی خرید)
+    cost = real_gb * per_gb_cost
+    tb_gb = float(cfg.get("tb_gb", 1000)) or 1000.0
+    sold_gb = ham_gb + single_gb + extra_gb                    # حجم اسمی فروخته‌شده به مشتری‌ها (سهمیه‌ی ثبت‌شده)
+    panel_gb = (usage_bytes / GB) if usage_bytes is not None else None
+    # حجمی که مشتری‌ها نخریده‌اند/مصرف نکرده‌اند و از خرید ما برگشته = حجم واقعیِ فروخته‌شده − مصرف واقعی پنل (منفی = مصرف بیش از فروش)
+    returned_gb = (real_gb - panel_gb) if panel_gb is not None else None
+    return {"tb_gb": tb_gb, "sold_gb": sold_gb, "sold_tb": sold_gb / tb_gb, "real_gb": real_gb, "panel_gb": panel_gb,
+            "panel_tb": (panel_gb / tb_gb) if panel_gb is not None else None, "returned_gb": returned_gb,
+            "usage_cost": (panel_gb * per_gb_cost) if panel_gb is not None else None, **{"cl": cl, "wallet": wallet, "wallet_n": wallet_n, "wallet_gb": wallet_gb, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
             "single_gb": single_gb, "extra_gb": extra_gb, "ham_real_gb": ham_real_gb, "mult": mult, "extra_income": extra_income, "rate": rate, "cost": cost,
-            "income": ham_income + single_income + extra_income}
+            "income": ham_income + single_income + extra_income}}
 
 
 def _t(n) -> str:
@@ -830,6 +864,18 @@ def _render(title: str, d: dict, html: bool) -> str:
         L.append(f"🔢 ترافیک واقعی همکاری: {_t(d['ham_real_gb'])} گیگ (÷ ضریب {d['mult']:g})")
     L.append(f"🧾 هزینه‌ی خرید حجم: {_t(d['cost'])} تومان")
     L.append(f"✅ سود تخمینی: {_t(d['income'] - d['cost'])} تومان")
+    L.append("")
+    L.append("📡 ترافیک و مصرف پنل")
+    L.append(f"  🛒 فروخته‌شده به مشتری: {d['sold_tb']:,.2f} ترابایت ({_t(d['sold_gb'])} گیگ)")
+    if d.get("panel_tb") is None:
+        L.append("  📊 مصرف پنل: نامشخص (جدول مصرف در دیتابیس خوانده نشد؛ /dbcheck)")
+    else:
+        L.append(f"  📊 مصرف پنل: {d['panel_tb']:,.2f} ترابایت ({_t(d['panel_gb'])} گیگ)")
+        rg = d["returned_gb"]
+        if rg >= 0:
+            L.append(f"  ↩️ مصرف‌نشده و برگشتی به حساب: {_t(rg)} گیگ ({rg / d['tb_gb']:,.2f} ترابایت)")
+        else:
+            L.append(f"  ⚠️ مصرف بیش از فروش: {_t(-rg)} گیگ ({-rg / d['tb_gb']:,.2f} ترابایت)")
     text = "\n".join(L)
     return _html.escape(text) if html else text
 
@@ -914,7 +960,8 @@ def summary(kind: str = "today") -> dict:
     extra = [{"gb": gb, "months": m, "count": n, "suggest": int(round(gb * d["rate"]))} for (gb, m), n in sorted(agg.items())]
     att = sum(n for c, i in ((cl["ham"], 1), (cl["single"], 2), (cl["extra"], 2)) for k, n in c.items() if k[i] in ("attach", "next"))
     return {"wallet": int(d.get("wallet", 0)), "income": int(round(d["income"])), "cost": int(round(d["cost"])), "profit": int(round(d["income"] - d["cost"])),
-            "new": news, "renew": total - news, "attach": att, "skipped": sum(cl["skipped"].values()), "ham_gb": d["ham_gb"], "wallet_gb": d.get("wallet_gb", 0), "ignored": sum(cl["ignored"].values()), "extra": extra}
+            "new": news, "renew": total - news, "attach": att, "skipped": sum(cl["skipped"].values()), "sold_tb": round(d["sold_tb"], 3), "panel_tb": None if d["panel_tb"] is None else round(d["panel_tb"], 3),
+            "returned_gb": None if d["returned_gb"] is None else int(round(d["returned_gb"])), "ham_gb": d["ham_gb"], "wallet_gb": d.get("wallet_gb", 0), "ignored": sum(cl["ignored"].values()), "extra": extra}
 
 
 def set_plan(gb: int, months: int, price: int) -> None:
@@ -1479,7 +1526,7 @@ def db_check() -> str:
     conn = _connect()
     try:
         with conn.cursor() as c:
-            for t in (s["users"], s["resets"], s["services"]):
+            for t in (s["users"], s["resets"], s["services"], s["usage"]):
                 try:
                     c.execute(f"SHOW COLUMNS FROM {_ident(t)}")
                     out.append(f"✅ {t}: " + ", ".join(r["Field"] for r in c.fetchall()))
