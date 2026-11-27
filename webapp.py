@@ -408,8 +408,10 @@ async def state():
 
 
 class DefaultsReq(BaseModel):
-    create_send_link: bool | None = None
-    create_send_qr: bool | None = None
+    create_send_link_single: bool | None = None
+    create_send_qr_single: bool | None = None
+    create_send_link_group: bool | None = None
+    create_send_qr_group: bool | None = None
     create_unpaid: bool | None = None
     renew_reset_usage: bool | None = None
     renew_unpaid: bool | None = None

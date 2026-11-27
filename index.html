@@ -2121,7 +2121,9 @@ async function vCreate() {
   };
   let svcTouched = false; svc.addEventListener('change', () => { svcTouched = true; });
   // ارسال به تلگرام: هر دو تیک پیش‌فرض خاموش‌اند و ذخیره نمی‌شوند (هر بار که صفحه باز شود خاموش)
-  const tgL = h('input', { type: 'checkbox', id: 'tgl', checked: !!st.defaults?.create_send_link }), tg = h('input', { type: 'checkbox', id: 'tg', checked: !!st.defaults?.create_send_qr });
+  const tgL = h('input', { type: 'checkbox', id: 'tgl' }), tg = h('input', { type: 'checkbox', id: 'tg' });
+  const applyTgDefaults = m => { tgL.checked = !!st.defaults?.['create_send_link_' + m]; tg.checked = !!st.defaults?.['create_send_qr_' + m]; };
+  applyTgDefaults('single');
   const cuId = 'cu' + Math.random().toString(36).slice(2, 8);                       // «واریز نشده» برای ساخت تکی (پیش‌فرض: خاموش)
   const cuC = h('input', { type: 'checkbox', id: cuId, checked: !!st.defaults?.create_unpaid });
   const cuH = h('input', { type: 'number', min: 1, max: 8760, value: st.unpaid_hours || 24, dir: 'ltr', inputmode: 'numeric' });
@@ -2156,7 +2158,7 @@ async function vCreate() {
     } catch (e) { if (my === seq) last.textContent = 'تشخیص خودکار ممکن نشد: ' + e.message; }
     upd();
   };
-  const setMode = m => { mode = S.cmode = m; cuBox.hidden = m !== 'single'; fillTplOpts(m); fillTpl(); svcTouched = false; autoSvc(m); upd(); };
+  const setMode = m => { mode = S.cmode = m; applyTgDefaults(m); cuBox.hidden = m !== 'single'; fillTplOpts(m); fillTpl(); svcTouched = false; autoSvc(m); upd(); };
   chipS.onclick = () => setMode('single'); chipG.onclick = () => setMode('group');
   base.addEventListener('input', debounce(() => { upd(); if (/^[A-Za-z0-9_]{1,28}$/.test(base.value.trim())) detect(base.value.trim(), true); }, 450));
   [start, count, one].forEach(i => i.addEventListener('input', upd));
@@ -4044,7 +4046,8 @@ async function vSet() {
     h('p', { class: 'hint' }, 'هشدار موجودی کم بعد از عملیات کیف پول/خرید بررسی می‌شود. هشدارهای پنل و بکاپ فقط در تغییر وضعیت/تلاش ناموفق ارسال می‌شوند.'),
     h('div', { class: 'btns' }, saveAlerts));
   const DF_ITEMS = [
-    ['🆕 ساخت اکانت', [['create_send_link', '🔗 ارسال لینک اشتراک به تلگرام ادمین'], ['create_send_qr', '🖼 ارسال QR (بارکد) به تلگرام ادمین'], ['create_unpaid', '💸 «واریز نشده» (غیرفعال‌سازی خودکار اگر پرداخت نشد)']]],
+    ['🆕 ساخت اکانت', [['create_send_link_single', '🔗 ساخت تکی: ارسال لینک اشتراک به تلگرام'], ['create_send_qr_single', '🖼 ساخت تکی: ارسال QR (بارکد) به تلگرام'], ['create_unpaid', '💸 ساخت تکی: «واریز نشده» (غیرفعال‌سازی خودکار اگر پرداخت نشد)'],
+      ['create_send_link_group', '🔗 ساخت گروهی: ارسال لینک‌ها به تلگرام'], ['create_send_qr_group', '🖼 ساخت گروهی: ارسال QR (بارکد) به تلگرام']]],
     ['⚡ تمدید', [['renew_reset_usage', '🔄 صفر کردن مصرف موقع تمدید'], ['renew_unpaid', '💸 «واریز نشده» هنگام تمدید']]],
     ['🔁 پلن بعدی', [['next_add_remaining', 'منتقل شدن حجم باقی‌مانده فعلی']]],
     ['✅ فعال‌سازی کاربر', [['activate_unpaid', '💸 «واریز نشده» هنگام فعال‌سازی']]],

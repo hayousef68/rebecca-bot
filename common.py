@@ -92,7 +92,7 @@ DEFAULT_CFG = {
     "smart_alerts": {"low_rep_wallet": True, "panel_down": True, "backup_failed": True, "topup_request": True, "low_wallet_threshold": 100000},
     "audit_log": [],
     # پیش‌فرضِ تیک‌های فرم‌های وب‌پنل (قابل تغییر از تنظیمات ← پیش‌فرض‌ها)
-    "defaults": {"create_send_link": False, "create_send_qr": False, "create_unpaid": False,
+    "defaults": {"create_send_link_single": False, "create_send_qr_single": False, "create_send_link_group": False, "create_send_qr_group": False, "create_unpaid": False,
                  "renew_reset_usage": True, "renew_unpaid": False, "next_add_remaining": False,
                  "activate_unpaid": False, "rep_buy_paid": False},
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
@@ -501,6 +501,10 @@ def _normalize(data: dict) -> dict:
     cfg["smart_alerts"] = alerts
     dfl = copy.deepcopy(DEFAULT_CFG["defaults"])
     if isinstance(cfg.get("defaults"), dict):
+        for old in ("create_send_link", "create_send_qr"):        # مهاجرت: قبلاً مشترک بود؛ حالا برای تکی و گروهی جدا
+            if old in cfg["defaults"]:
+                for m in ("single", "group"):
+                    cfg["defaults"].setdefault(f"{old}_{m}", cfg["defaults"][old])
         dfl.update({k: bool(v) for k, v in cfg["defaults"].items() if k in dfl})
     cfg["defaults"] = dfl
     cfg["audit_log"] = [x for x in cfg.get("audit_log", []) if isinstance(x, dict)][-AUDIT_MAX:] if isinstance(cfg.get("audit_log"), list) else []
