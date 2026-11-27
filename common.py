@@ -91,6 +91,10 @@ DEFAULT_CFG = {
     "monitor": {"enabled": True, "interval": 300},
     "smart_alerts": {"low_rep_wallet": True, "panel_down": True, "backup_failed": True, "topup_request": True, "low_wallet_threshold": 100000},
     "audit_log": [],
+    # پیش‌فرضِ تیک‌های فرم‌های وب‌پنل (قابل تغییر از تنظیمات ← پیش‌فرض‌ها)
+    "defaults": {"create_send_link": False, "create_send_qr": False, "create_unpaid": False,
+                 "renew_reset_usage": True, "renew_unpaid": False, "next_add_remaining": False,
+                 "activate_unpaid": False, "rep_buy_paid": False},
     "reminders": {"enabled": True, "hour": 10, "days": 3, "low_pct": 10},
     "unpaid": {"hours": 24, "pending": {}},   # تمدیدهای «واریز نشده»: pending = {panel_id: {username: {"due": ts, "set": ts}}}
     "web": {"user": "admin", "salt": "", "hash": "", "secret": "", "totp": "", "totp_pending": "", "totp_last": 0, "recovery": [], "known_ips": []},
@@ -495,6 +499,10 @@ def _normalize(data: dict) -> dict:
     except (TypeError, ValueError):
         alerts["low_wallet_threshold"] = DEFAULT_CFG["smart_alerts"]["low_wallet_threshold"]
     cfg["smart_alerts"] = alerts
+    dfl = copy.deepcopy(DEFAULT_CFG["defaults"])
+    if isinstance(cfg.get("defaults"), dict):
+        dfl.update({k: bool(v) for k, v in cfg["defaults"].items() if k in dfl})
+    cfg["defaults"] = dfl
     cfg["audit_log"] = [x for x in cfg.get("audit_log", []) if isinstance(x, dict)][-AUDIT_MAX:] if isinstance(cfg.get("audit_log"), list) else []
     for key in ("monitor", "reminders", "backup"):
         sec = copy.deepcopy(DEFAULT_CFG[key])

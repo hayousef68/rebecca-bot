@@ -2121,11 +2121,11 @@ async function vCreate() {
   };
   let svcTouched = false; svc.addEventListener('change', () => { svcTouched = true; });
   // ارسال به تلگرام: هر دو تیک پیش‌فرض خاموش‌اند و ذخیره نمی‌شوند (هر بار که صفحه باز شود خاموش)
-  const tgL = h('input', { type: 'checkbox', id: 'tgl' }), tg = h('input', { type: 'checkbox', id: 'tg' });
+  const tgL = h('input', { type: 'checkbox', id: 'tgl', checked: !!st.defaults?.create_send_link }), tg = h('input', { type: 'checkbox', id: 'tg', checked: !!st.defaults?.create_send_qr });
   const cuId = 'cu' + Math.random().toString(36).slice(2, 8);                       // «واریز نشده» برای ساخت تکی (پیش‌فرض: خاموش)
-  const cuC = h('input', { type: 'checkbox', id: cuId });
+  const cuC = h('input', { type: 'checkbox', id: cuId, checked: !!st.defaults?.create_unpaid });
   const cuH = h('input', { type: 'number', min: 1, max: 8760, value: st.unpaid_hours || 24, dir: 'ltr', inputmode: 'numeric' });
-  const cuRow = h('div', { class: 'uh', hidden: true }, 'غیرفعال شدن خودکار بعد از', cuH, 'ساعت');
+  const cuRow = h('div', { class: 'uh', hidden: !cuC.checked }, 'غیرفعال شدن خودکار بعد از', cuH, 'ساعت');
   cuC.addEventListener('change', () => { cuRow.hidden = !cuC.checked; });
   const cuBox = h('div', { class: 'unpaid-opt' }, h('label', { class: 'chk', for: cuId }, cuC, '💸 واریز نشده (اگر پرداخت نشد، خودکار غیرفعال شود)'), cuRow);
   const prev = h('p', { class: 'hint' }), last = h('p', { class: 'hint' });
@@ -2485,11 +2485,11 @@ function _userItemFull(u, parent, tab, d) {
   const cG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
   const cD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
   const rid = 'rs' + Math.random().toString(36).slice(2, 8);
-  const rst = h('input', { type: 'checkbox', id: rid, checked: true });
+  const rst = h('input', { type: 'checkbox', id: rid, checked: S.st?.defaults?.renew_reset_usage !== false });
   const uid_ = 'up' + Math.random().toString(36).slice(2, 8);
-  const upC = h('input', { type: 'checkbox', id: uid_ });
+  const upC = h('input', { type: 'checkbox', id: uid_, checked: !!S.st?.defaults?.renew_unpaid });
   const upH = h('input', { type: 'number', min: 1, max: 8760, value: S.st.unpaid_hours || 24, dir: 'ltr', inputmode: 'numeric' });
-  const upRow = h('div', { class: 'uh', hidden: true }, 'غیرفعال شدن خودکار بعد از', upH, 'ساعت');
+  const upRow = h('div', { class: 'uh', hidden: !upC.checked }, 'غیرفعال شدن خودکار بعد از', upH, 'ساعت');
   upC.addEventListener('change', () => { upRow.hidden = !upC.checked; updR(); }); upH.addEventListener('input', () => updR());
   const upBox = h('div', { class: 'unpaid-opt' }, h('label', { class: 'chk', for: uid_ }, upC, '💸 واریز نشده (اگر پرداخت نشد، خودکار غیرفعال شود)'), upRow);
   let rmode = 'tpl';
@@ -2565,7 +2565,7 @@ function _userItemFull(u, parent, tab, d) {
   const nG = h('input', { type: 'number', min: 0, step: 'any', placeholder: 'GB', dir: 'ltr', inputmode: 'decimal' });
   const nD = h('input', { type: 'number', min: 0, placeholder: 'روز', dir: 'ltr', inputmode: 'numeric' });
   const nrid = 'nr' + Math.random().toString(36).slice(2, 8);
-  const nRem = h('input', { type: 'checkbox', id: nrid });
+  const nRem = h('input', { type: 'checkbox', id: nrid, checked: !!S.st?.defaults?.next_add_remaining });
   const nTpl = h('select', {}, h('option', { value: '' }, 'پر کردن از تمپلت…'), entries.map(([n, t]) => h('option', { value: n }, `${n} — ${t.gb || '∞'}GB / ${t.days || '∞'}d`)));
   nTpl.onchange = () => { const t = S.st.templates[nTpl.value]; if (t) { nG.value = t.gb; nD.value = t.days; } };
   const nAdd = h('button', { class: 'btn sm pri', type: 'button' }, '➕ افزودن پلن');
@@ -2618,12 +2618,12 @@ function _userItemFull(u, parent, tab, d) {
     if (u.status !== 'disabled') return act('⛔ غیرفعال‌سازی', P + 'toggle', 'وضعیت تغییر کرد');
     const idc = 'ac' + Math.random().toString(36).slice(2, 8), idu = 'au' + Math.random().toString(36).slice(2, 8);
     const okC = h('input', { type: 'checkbox', id: idc });
-    const unC = h('input', { type: 'checkbox', id: idu }), unH = hoursInp();
-    const unRow = h('div', { class: 'uh', hidden: true }, 'غیرفعال شدن خودکار بعد از', unH, 'ساعت');
+    const unC = h('input', { type: 'checkbox', id: idu, checked: !!S.st?.defaults?.activate_unpaid }), unH = hoursInp();
+    const unRow = h('div', { class: 'uh', hidden: !unC.checked }, 'غیرفعال شدن خودکار بعد از', unH, 'ساعت');
     unC.addEventListener('change', () => { unRow.hidden = !unC.checked; });
     const unBox = h('div', { class: 'unpaid-opt', hidden: true }, h('label', { class: 'chk', for: idu }, unC, '💸 واریز نشده (اگر پرداخت نشد، خودکار غیرفعال شود)'), unRow);
     const go = h('button', { class: 'btn sm pri', type: 'button', disabled: true }, '✅ فعال‌سازی');
-    okC.addEventListener('change', () => { unBox.hidden = !okC.checked; go.disabled = !okC.checked; if (!okC.checked) { unC.checked = false; unRow.hidden = true; } });
+    okC.addEventListener('change', () => { unBox.hidden = !okC.checked; go.disabled = !okC.checked; if (!okC.checked) { unC.checked = false; unRow.hidden = true; } else { unC.checked = !!S.st?.defaults?.activate_unpaid; unRow.hidden = !unC.checked; } });
     go.onclick = () => run(go, async () => {
       const hrs = Math.max(1, Math.round(+unH.value) || defH());
       const r = await uApi('toggle', 'POST', unC.checked ? { unpaid: true, unpaid_hours: hrs } : undefined);
@@ -2665,7 +2665,7 @@ function _userItemFull(u, parent, tab, d) {
   const panes = { renew: paneRenew, edit: paneEdit, next: paneNext, more: paneMore };
   const TABS = [['renew', '⚡ تمدید'], ['edit', '✏️ ویرایش'], ['next', '🔁 پلن بعدی'], ['more', '⋯ بیشتر']];
   const tabBar = h('div', { class: 'seg' }, TABS.map(([k, t]) => h('button', { type: 'button', 'data-k': k, class: k === curTab ? 'on' : '', onclick: () => showTab(k) }, t + (k === 'next' && (u.next_plans || []).length ? ' •' : ''))));
-  const showTab = k => { curTab = k; tabBar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); Object.entries(panes).forEach(([n, p]) => { p.hidden = n !== k; }); };
+  const showTab = k => { curTab = k; tabBar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === k)); Object.entries(panes).forEach(([n, p]) => { p.hidden = n !== k; }); if (k === 'more') loadReps(); };
   Object.values(panes).forEach(p => p.classList.add('pane'));
 
   body.append(
@@ -2901,7 +2901,7 @@ async function repApp(me) {
       const row = h('label', { class: 'tplopt' + (t.name === pick ? ' on' : '') }, r, h('div', { class: 'tn' }, t.name, h('div', { class: 'tp' }, `${t.gb ? t.gb + ' GB' : 'نامحدود'} · ${t.days ? t.days + ' روز' : 'نامحدود'}`)), h('b', {}, toman(t.price)));
       r.onchange = () => { pick = t.name; opts.forEach(o => o.classList.toggle('on', o === row)); upd(); }; return row; });
     const note = h('input', { placeholder: 'اسم مشتری (اختیاری)', maxlength: 100 });
-    const paidNew = h('input', { type: 'checkbox', id: 'paidnew' });
+    const paidNew = h('input', { type: 'checkbox', id: 'paidnew', checked: !!w.defaults?.paid_new });
     const uname = h('input', { value: '…', readonly: true, dir: 'ltr', style: 'opacity:.85;cursor:not-allowed' });
     const loadName = () => api('/rep/next-name').then(r => { uname.value = r.name; }).catch(() => { uname.value = 'خودکار'; });
     loadName();
@@ -3286,7 +3286,7 @@ async function vHome() {
           mini('👛 کیف پول نماینده', fa(r.wallet || 0), 'var(--info)'),
           mini('🛒 فروخته‌شده (TB)', r.sold_tb == null ? '—' : r.sold_tb.toFixed(2)),
           mini('📊 مصرف پنل (TB)', r.panel_tb == null ? '—' : r.panel_tb.toFixed(2), 'var(--info)'),
-          mini('↩️ فروخته‌شده ولی مصرف‌نشده (GB)', r.returned_gb == null ? '—' : fa(r.returned_gb), 'var(--ok)'))));
+          mini('↩️ مصرف‌نشده‌ی تمدیدها (GB)', r.returned_gb == null ? '—' : fa(r.returned_gb), 'var(--ok)'))));
       extraBox.replaceChildren(...(r.extra.length ? [h('div', { class: 'card' }, h('h2', {}, '📐 حجم‌های خارج از لیست قیمت'),
         h('p', { class: 'hint', style: 'margin:0 0 8px' }, 'با ثبت قیمت، از گزارش بعدی جزو فروش‌های لیست حساب می‌شود.'),
         ...r.extra.map(x => {
@@ -4043,6 +4043,22 @@ async function vSet() {
     alLabel(alTopup, 'درخواست افزایش موجودی جدید'),
     h('p', { class: 'hint' }, 'هشدار موجودی کم بعد از عملیات کیف پول/خرید بررسی می‌شود. هشدارهای پنل و بکاپ فقط در تغییر وضعیت/تلاش ناموفق ارسال می‌شوند.'),
     h('div', { class: 'btns' }, saveAlerts));
+  const DF_ITEMS = [
+    ['🆕 ساخت اکانت', [['create_send_link', '🔗 ارسال لینک اشتراک به تلگرام ادمین'], ['create_send_qr', '🖼 ارسال QR (بارکد) به تلگرام ادمین'], ['create_unpaid', '💸 «واریز نشده» (غیرفعال‌سازی خودکار اگر پرداخت نشد)']]],
+    ['⚡ تمدید', [['renew_reset_usage', '🔄 صفر کردن مصرف موقع تمدید'], ['renew_unpaid', '💸 «واریز نشده» هنگام تمدید']]],
+    ['🔁 پلن بعدی', [['next_add_remaining', 'منتقل شدن حجم باقی‌مانده فعلی']]],
+    ['✅ فعال‌سازی کاربر', [['activate_unpaid', '💸 «واریز نشده» هنگام فعال‌سازی']]],
+    ['👤 پنل نماینده', [['rep_buy_paid', '✔️ «پرداخت شد» هنگام ساخت اکانت']]]];
+  const dfd = (S.st && S.st.defaults) || {};
+  const dfBoxes = {};
+  const dfCard = h('div', { class: 'card' }, h('h2', {}, '⚙️ پیش‌فرض‌ها'),
+    h('p', { class: 'hint' }, 'وضعیت اولیه‌ی تیک‌ها در فرم‌ها. هر کدام را روشن یا خاموش کنید؛ در هر بار استفاده هم می‌توان دستی عوض کرد.'),
+    ...DF_ITEMS.flatMap(([title, rows]) => [h('div', { class: 'psec' }, h('b', {}, title)), ...rows.map(([k, label]) => {
+      dfBoxes[k] = h('input', { type: 'checkbox', checked: !!dfd[k] });
+      return alLabel(dfBoxes[k], label); })]),
+    h('div', { class: 'btns' }, (() => { const b = h('button', { class: 'btn pri' }, 'ذخیره پیش‌فرض‌ها');
+      b.onclick = () => run(b, async () => { const body = {}; for (const k in dfBoxes) body[k] = dfBoxes[k].checked;
+        await api('/defaults', 'POST', body); toast('✅ پیش‌فرض‌ها ذخیره شد'); S.setOpen = 'defaults'; await refreshState(); await vSet(); }); return b; })()));
   const AU = { cat: 'all', q: '', off: 0, total: 0, day: '' };
   const AU_CATS = [['all', 'همه'], ['wallet', '💰 کیف پول'], ['rep', '🤝 نماینده‌ها'], ['user', '👥 کاربران'], ['del', '🗑 حذف‌ها'], ['sys', '⚙️ تنظیمات']];
   const AU_ICON = { wallet: '💰', rep: '🤝', user: '👥', del: '🗑', sys: '⚙️' };
@@ -4508,6 +4524,7 @@ async function vSet() {
     drawer('price', '💰', 'قیمت‌ها و فروش', 'لیست · هزینه', strip(priceCard)),
     drawer('newuser', '🆕', 'کاربر جدید', `پیش‌فرض: ${c.default_prefix}`, strip(h('div', { class: 'card' }, h('h2', {}, 'کاربر جدید'), field('اسم پیش‌فرض (پیشوند نام کاربری)', dpre),
       h('p', { class: 'hint' }, 'در فرم «ساخت اکانت» همین اسم از قبل پر می‌شود و شماره‌ی بعدی خودکار پیدا می‌شود. فقط حرف انگلیسی، عدد و _ (مثلاً MS_).'), h('div', { class: 'btns' }, saveDp)))),
+    drawer('defaults', '⚙️', 'پیش‌فرض‌ها', 'ارسال به تلگرام · تمدید · …', strip(dfCard)),
     drawer('unpaid', '💸', 'تمدید واریز نشده', `${c.unpaid_hours} ساعت${c.unpaid_count ? ` · ${c.unpaid_count} در انتظار` : ''}`, strip(h('div', { class: 'card' }, h('h2', {}, 'تمدید واریز نشده'), field('مهلت پیش‌فرض تا غیرفعال‌سازی خودکار (ساعت)', upHrs),
       h('p', { class: 'hint' }, 'موقع تمدید گزینه‌ی «واریز نشده» را بزنید؛ اگر تا پایان مهلت «✅ واریز شد» نزنید، کاربر خودکار غیرفعال می‌شود (چک هر ۱ دقیقه توسط ربات، و پیام به ادمین‌ها). مهلت را موقع هر تمدید هم می‌توانید جداگانه تغییر دهید.'), h('div', { class: 'btns' }, saveUp)))),
     h('div', { class: 'grp' }, '🛡 امنیت'),

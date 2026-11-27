@@ -31,7 +31,7 @@ DEFAULT_SCHEMA = {
     "resets": "user_usage_logs", "r_user": "user_id", "r_at": "reset_at",
     "services": "services", "s_id": "id", "s_name": "name",
     # مصرف واقعی پنل (ردیف‌های ساعتی مصرف هر کاربر)
-    "u_used": "used_traffic", "usage": "node_user_usages", "uu_user": "user_id", "uu_at": "created_at", "uu_bytes": "used_traffic",
+    "r_used": "used_traffic_at_reset", "usage": "node_user_usages", "uu_user": "user_id", "uu_at": "created_at", "uu_bytes": "used_traffic",
 }
 GB = 1024 ** 3
 
@@ -775,43 +775,51 @@ def panel_usage_bytes(d1: str, d2: str, partial: bool):
 
 
 def unused_gb(rows: list[dict]):
-    """حجمِ فروخته‌شده ولی مصرف‌نشده (گیگ، بر مبنای ترافیک واقعی) برای کاربرانی که در این بازه «ساخت/تمدید» شده‌اند.
-    برای هر کاربر: min(حجم آخرین فروش، max(0, سقف فعلی − مصرف فعلی))؛ مثلاً ۳۰ گیگ فروخته و ۲۰ مصرف → ۱۰ گیگ.
-    همکاری بر ضریب مصرف تقسیم می‌شود. پیوست/پلن بعدی و تست حساب نمی‌شوند. خطا → None."""
+    """سودِ مصرف‌نشده: حجمی که مشتری خریده ولی تا لحظه‌ی «تمدید/ریست» مصرف نکرده و با ریست از بین رفته.
+    برای هر تمدید/ریستِ این بازه:  حجم دوره‌ی قبل − مصرف لحظه‌ی ریست (user_usage_logs.used_traffic_at_reset)؛ مثلاً ۳۰ گیگ خریده، ۲۰ مصرف → ۱۰ گیگ.
+    حجم دوره‌ی قبل: اگر اسنپ‌شات «قبل از تمدید» ربات (undo) موجود باشد همان، وگرنه حجم پلن فعلی (فرض: همان پلن تمدید شده).
+    همکاری بر ضریب مصرف تقسیم می‌شود (مبنای ترافیک واقعی). خطا → None."""
     try:
         cfg = load_config()["sales"]
+        off = int(cfg.get("db_tz_offset_minutes", 0))
         mult = ham_mult(cfg)
-        last: dict[str, tuple[float, bool]] = {}
-        for r in rows:                                   # rows به ترتیب زمان‌اند؛ آخرین فروش هر کاربر می‌ماند
-            if r["kind"] not in ("new", "renew") or _is_ignored(r, cfg):
-                continue
-            gb = (r.get("data_limit") or 0) / GB
-            if gb > 0:
-                last[str(r["username"])] = (gb, _is_hamkari(r, cfg))
-        if not last:
+        ren = [r for r in rows if r["kind"] == "renew" and isinstance(r.get("at"), datetime) and not _is_ignored(r, cfg)]
+        if not ren:
             return 0.0
         s = _schema()
-        U = _ident(s["users"])
-        cur: dict[str, tuple[float, float]] = {}
+        names = sorted({str(r["username"]) for r in ren})
+        lo = min(r["at"] for r in ren) - timedelta(seconds=1)
+        hi = max(r["at"] for r in ren) + timedelta(seconds=1)
+        U, R = _ident(s["users"]), _ident(s["resets"])
+        used: dict[tuple[str, datetime], float] = {}
         conn = _connect()
         try:
             with conn.cursor() as c:
-                names = list(last)
                 for i in range(0, len(names), 500):
                     part = names[i:i + 500]
-                    c.execute(f"SELECT {_ident(s['u_name'])} AS n, {_ident(s['u_limit'])} AS lim, {_ident(s['u_used'])} AS used FROM {U} "
-                              f"WHERE {_ident(s['u_name'])} IN ({','.join(['%s'] * len(part))})", tuple(part))
+                    c.execute(f"SELECT u.{_ident(s['u_name'])} AS n, r.{_ident(s['r_at'])} AS at, r.{_ident(s['r_used'])} AS used FROM {R} r "
+                              f"JOIN {U} u ON u.{_ident(s['u_id'])} = r.{_ident(s['r_user'])} "
+                              f"WHERE u.{_ident(s['u_name'])} IN ({','.join(['%s'] * len(part))}) AND r.{_ident(s['r_at'])} >= %s AND r.{_ident(s['r_at'])} <= %s",
+                              tuple(part) + (lo, hi))
                     for x in c.fetchall():
-                        cur[str(x["n"])] = (float(x["lim"] or 0) / GB, float(x["used"] or 0) / GB)
+                        used[(str(x["n"]), x["at"])] = float(x["used"] or 0) / GB
         finally:
             conn.close()
+        try:
+            from common import _undo_read
+            snaps = [x for x in _undo_read() if x.get("act") == "renew"]
+        except Exception:  # noqa: BLE001
+            snaps = []
         total = 0.0
-        for u, (gb, ham) in last.items():
-            if u not in cur:
+        for r in ren:
+            u = used.get((str(r["username"]), r["at"]))
+            if u is None:
                 continue
-            lim, used = cur[u]
-            left = min(gb, max(0.0, lim - used))
-            total += left / mult if ham else left
+            ts = _ts_of(r, off)
+            sn = [x for x in snaps if x.get("u") == r["username"] and abs(float(x.get("ts", 0)) - ts) <= 120]
+            prev = (int(sn[0].get("limit") or 0) / GB) if sn and int(sn[0].get("limit") or 0) > 0 else (r.get("data_limit") or 0) / GB
+            left = max(0.0, prev - u)
+            total += left / mult if _is_hamkari(r, cfg) else left
         return total
     except Exception:  # noqa: BLE001
         log.exception("unused gb")
@@ -855,7 +863,7 @@ def compute_rows(rows: list[dict], wallet: int = 0, wallet_n: int = 0, usage_byt
     tb_gb = float(cfg.get("tb_gb", 1000)) or 1000.0
     sold_gb = ham_gb + single_gb + extra_gb                    # حجم اسمی فروخته‌شده به مشتری‌ها (سهمیه‌ی ثبت‌شده)
     panel_gb = (usage_bytes / GB) if usage_bytes is not None else None
-    returned_gb = unused                                       # فروخته‌شده ولی مصرف‌نشده (از روی مصرف فعلی اکانت‌ها)
+    returned_gb = unused                                       # حجمِ خریده‌شده ولی مصرف‌نشده که با ریست/تمدید سوخته (سود اضافه)
     return {"tb_gb": tb_gb, "sold_gb": sold_gb, "sold_tb": sold_gb / tb_gb, "real_gb": real_gb, "panel_gb": panel_gb,
             "panel_tb": (panel_gb / tb_gb) if panel_gb is not None else None, "returned_gb": returned_gb,
             "usage_cost": (panel_gb * per_gb_cost) if panel_gb is not None else None, **{"cl": cl, "wallet": wallet, "wallet_n": wallet_n, "wallet_gb": wallet_gb, "ham_gb": ham_gb, "ham_income": ham_income, "single_income": single_income,
@@ -918,9 +926,10 @@ def _render(title: str, d: dict, html: bool) -> str:
         L.append(f"  📊 مصرف پنل: {d['panel_tb']:,.2f} ترابایت ({_t(d['panel_gb'])} گیگ)")
     rg = d["returned_gb"]
     if rg is None:
-        L.append("  ↩️ مصرف‌نشده: نامشخص (خواندن مصرف اکانت‌ها از دیتابیس ناموفق بود)")
+        L.append("  ↩️ مصرف‌نشده‌ی تمدیدها: نامشخص (ستون used_traffic_at_reset در دیتابیس خوانده نشد؛ /dbcheck)")
     else:
-        L.append(f"  ↩️ فروخته‌شده ولی مصرف‌نشده (برگشتی به حساب): {_t(rg)} گیگ ({rg / d['tb_gb']:,.2f} ترابایت)")
+        L.append(f"  ↩️ مصرف‌نشده‌ی تمدیدها (خریده ولی با ریست سوخت): {_t(rg)} گیگ ({rg / d['tb_gb']:,.2f} ترابایت)")
+        L.append(f"  💵 سود اضافه از مصرف‌نشده: {_t(rg * d['cost'] / d['real_gb']) if d['real_gb'] else 0} تومان (جدا از «سود تخمینی» بالا)")
     text = "\n".join(L)
     return _html.escape(text) if html else text
 

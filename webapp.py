@@ -403,7 +403,35 @@ async def state():
         "default_prefix": cfg["default_prefix"], "multi_panel": len(cfg["panels"]) > 1, "unpaid_hours": cfg["unpaid"]["hours"],
         "ham_names": cfg.get("sales", {}).get("hamkari_service_names", ["hamkari"]),
         "next_plan_mode": cfg.get("next_plan_mode", "duration"), "undo": cfg["undo"]["enabled"],
+        "defaults": cfg["defaults"],
     }
+
+
+class DefaultsReq(BaseModel):
+    create_send_link: bool | None = None
+    create_send_qr: bool | None = None
+    create_unpaid: bool | None = None
+    renew_reset_usage: bool | None = None
+    renew_unpaid: bool | None = None
+    next_add_remaining: bool | None = None
+    activate_unpaid: bool | None = None
+    rep_buy_paid: bool | None = None
+
+
+@app.get("/api/defaults", dependencies=[Depends(guard)])
+async def defaults_get():
+    return C.load_config_ro()["defaults"]
+
+
+@app.post("/api/defaults", dependencies=[Depends(guard)])
+async def defaults_save(r: DefaultsReq):
+    vals = {k: v for k, v in r.model_dump().items() if v is not None}
+
+    def mut(c):
+        c.setdefault("defaults", {}).update(vals)
+    update_config(mut)
+    _aud("تغییر پیش‌فرض‌های فرم‌ها", "", "، ".join(f"{k}={'روشن' if v else 'خاموش'}" for k, v in vals.items()), "sys")
+    return {"ok": True, "defaults": C.load_config_ro()["defaults"]}
 
 
 @app.get("/api/services", dependencies=[Depends(guard)])
@@ -938,7 +966,7 @@ async def rep_wallet(rep=Depends(rep_guard)):
             "log": list(reversed(rp["log"]))[:30],
             "topups": [t for t in reversed(cfg["topups"]) if t["rid"] == rid][:15],
             "auto_ok": bool(cfg["shop"]["auto"]["enabled"] and cfg["shop"]["cards"]), "auto_cards": [dict(x) for x in cfg["shop"]["cards"]], "now": int(time.time()),
-            "zp": _rep_zp_view(cfg, rid)}
+            "zp": _rep_zp_view(cfg, rid), "defaults": {"paid_new": bool(cfg["defaults"].get("rep_buy_paid"))}}
 
 
 class RepTopupReq(BaseModel):
